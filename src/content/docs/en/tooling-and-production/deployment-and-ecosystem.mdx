@@ -1,0 +1,110 @@
+---
+title: 'Deployment & Ecosystem'
+description: 'Building for production, deploying static vs on-demand sites, setting site and base correctly, and the Astro ecosystem including Starlight.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The production build
+
+`astro build` produces your deployable output in `dist/`. What ends up there depends on your rendering mode:
+
+- **Static** — `dist/` is a folder of `.html` files, CSS, and island JavaScript. It's just files.
+- **On-demand / hybrid** — `dist/` also contains a **server entry** in the format your adapter targets (a Cloudflare Worker, a Node server, a serverless function), plus the static assets.
+
+Wire type-checking into the build so a type error stops a bad deploy: `astro check && astro build`.
+
+## Two deploy targets
+
+The single biggest deploy decision is static vs on-demand — it determines *where* you can host:
+
+| | Static | On-demand (SSR) |
+|---|--------|-----------------|
+| Output | HTML files | Server entry + assets |
+| Needs | Any static host / CDN | A runtime (via an adapter) |
+| Hosts | Cloudflare Pages, Netlify, GitHub Pages, S3, any CDN | Cloudflare Workers, Node server, Vercel, Netlify Functions |
+| Best for | Content that's the same for everyone | Per-request data: auth, forms, live data |
+| Adapter | Not required | **Required** |
+
+A purely static site deploys anywhere that serves files. The moment any route is on-demand (or uses server islands or Actions), you need the matching **adapter** configured — deploying without it is the classic "an adapter is required" error.
+
+<Mermaid title="Where a build can go" code={deployDiagram} />
+
+export const deployDiagram = `flowchart TB
+  build["astro build"] --> static["Static: HTML files"]
+  build --> ssr["On-demand: server entry + assets"]
+  static --> cdn["any CDN / static host"]
+  ssr --> runtime["adapter runtime: Workers, Node, serverless"]`;
+
+## Set site and base correctly
+
+Two config values bite people at deploy time:
+
+- **`site`** must be your real deployed URL (e.g. `https://example.com`). Sitemaps, canonical tags, and RSS all build absolute URLs from it — wrong `site`, wrong links.
+- **`base`** must match the subpath you're served from. Deploy to `example.com/docs/` and you set `base: '/docs'`, then reference internal links with the base prefix. Serve at the domain root and you omit it. A mismatched `base` is the usual cause of "the deployed site's CSS and links are all 404" — the assets are looked up at the wrong path.
+
+## The ecosystem
+
+Astro is content-first, and its ecosystem reflects that:
+
+- **Starlight** — an official documentation-site framework built on Astro (it's what this course is built with): sidebars, search, i18n, and dark mode out of the box.
+- **Integrations directory** — a large catalog of official and community integrations: UI frameworks, CMS connectors, image services, analytics, and adapters for every major host.
+- **Content-focused patterns** — combined with content collections, Astro is a natural fit for blogs, docs, marketing sites, and headless-CMS front-ends, where you get a fast static (or hybrid) site with typed content.
+
+Reach for a framework like **Starlight** when it matches your use case rather than rebuilding docs infrastructure by hand — the same "compose, don't reinvent" instinct that runs through Astro.
+
+<Callout title="The one-line takeaway">
+`astro build` writes `dist/`: just **HTML files** for a static site (deployable to any CDN — Cloudflare Pages, Netlify, S3), or a **server entry + assets** for on-demand, which needs the matching **adapter** and a runtime. Set **`site`** to your real deployed URL (absolute URLs depend on it) and **`base`** to the subpath you're served from (a mismatch 404s your assets). The ecosystem is content-first: **Starlight** for docs, plus a large integrations directory — compose with it rather than rebuilding.
+</Callout>
+
+export const quizDeploy = [
+  {
+    q: 'A fully static Astro site can be deployed where?',
+    options: [
+      'Only on servers with Node installed',
+      'Any static host or CDN — it is just HTML files',
+      'Only Cloudflare',
+      'Only with an adapter',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When is an adapter required for deployment?',
+    options: [
+      'Always',
+      'When any route is rendered on demand (or uses server islands / Actions)',
+      'Only for static sites',
+      'Never',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Your deployed site under example.com/docs/ has all its CSS and links returning 404. What is the likely cause?',
+    options: [
+      'The adapter is missing',
+      'The `base` config does not match the subpath (should be `/docs`), so assets resolve to the wrong path',
+      'TypeScript errors',
+      'The build failed silently',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is Starlight?',
+    options: [
+      'A testing framework',
+      'An official documentation-site framework built on Astro (sidebars, search, i18n, dark mode)',
+      'A CSS library',
+      'An Astro adapter',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/deployment-and-ecosystem" questions={quizDeploy} />
+
+<ProgressTracker client:visible id="tooling-and-production/deployment-and-ecosystem" />

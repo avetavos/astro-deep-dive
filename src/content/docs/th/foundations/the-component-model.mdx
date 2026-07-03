@@ -1,0 +1,151 @@
+---
+title: 'The Component Model'
+description: 'Astro components, การส่งและกำหนด type ให้ props, slots สำหรับ composition และ scoped styles — building block ที่ reuse ได้ซึ่ง render บน server'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Component คือ function ที่ render บน server
+
+Astro component คือไฟล์ `.astro` ที่คุณ import และใช้ในอีกไฟล์ได้ มันรับ **props** และคืน HTML เพราะมัน render บน server component จึงเป็น function จาก props ไปเป็น markup — ไม่มี lifecycle ฝั่ง client
+
+```astro
+---
+// src/components/Card.astro
+interface Props {
+  title: string;
+  href: string;
+}
+const { title, href } = Astro.props;   // props มาที่ Astro.props
+---
+<a class="card" href={href}>
+  <h3>{title}</h3>
+</a>
+```
+
+การใช้งาน:
+
+```astro
+---
+import Card from '../components/Card.astro';
+---
+<Card title="Hello" href="/hello" />
+```
+
+props เข้ามาผ่าน **`Astro.props`** และคุณกำหนด type ให้มันด้วยการประกาศ interface `Props` ใน frontmatter — Astro ใช้มัน type-check การใช้งาน ที่นี่ไม่มี `useState` component รันครั้งเดียวเพื่อผลิต HTML
+
+## Slots: composition ด้วยการส่ง markup
+
+บ่อยครั้ง component ต้องห่อ *content ที่มันไม่รู้ล่วงหน้า* นั่นคือหน้าที่ของ **slots** — markup ลูกที่คุณวางไว้ระหว่าง tag ของ component จะถูก render ตรงที่ `<slot />` ปรากฏ
+
+```astro
+---
+// src/components/Panel.astro
+const { heading } = Astro.props;
+---
+<section class="panel">
+  <h2>{heading}</h2>
+  <slot />          <!-- children มาตรงนี้ -->
+</section>
+```
+
+```astro
+<Panel heading="Notes">
+  <p>markup ตรงนี้จะไปลงใน slot</p>
+</Panel>
+```
+
+ถ้าต้องการจุดแทรกมากกว่าหนึ่งจุด ใช้ **named slots**:
+
+```astro
+<!-- Layout.astro -->
+<header><slot name="header" /></header>
+<main><slot /></main>            <!-- default slot -->
+<footer><slot name="footer" /></footer>
+```
+
+```astro
+<Layout>
+  <h1 slot="header">Title</h1>
+  <p>Body ไปลงใน default slot</p>
+  <small slot="footer">© 2026</small>
+</Layout>
+```
+
+<Mermaid title="Slots ให้ parent แทรก markup เข้าไปใน component" code={slotDiagram} />
+
+export const slotDiagram = `flowchart LR
+  parent["Parent ส่ง markup\nระหว่าง tag"] --> slot["component render มัน\nที่ <slot />"]
+  slot --> out["HTML ที่ประกอบแล้ว"]`;
+
+Slots คือกระดูกสันหลังของ **layouts**: `Layout.astro` นิยามเชลล์ของหน้า (head, nav, footer) พร้อม `<slot />` สำหรับ body ของหน้า และทุกหน้าก็ห่อ content ของตัวเองไว้ใน layout นั้น
+
+## Scoped styles
+
+tag `<style>` ภายใน `.astro` component เป็น **scoped ให้ component นั้นโดย default** — Astro เขียน selector ใหม่เพื่อไม่ให้มันรั่วออกไปหรือชนกับ component อื่น
+
+```astro
+<h1>Title</h1>
+<style>
+  /* rule h1 นี้ใช้เฉพาะกับ h1 ของ component นี้ ไม่ใช่ตัวอื่นบนหน้า */
+  h1 { color: rebeccapurple; }
+</style>
+```
+
+คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา — ไม่มี CSS-in-JS ไม่ต้องมีพิธีตั้งชื่อแบบ BEM เมื่อคุณ *อยาก* ให้ rule ใช้แบบ global คุณ opt out ด้วย `<style is:global>` (พูดถึงในบท styles)
+
+<Callout title="สรุปบรรทัดเดียว">
+Astro component คือ **function ของ props ที่ render บน server** — props มาผ่าน `Astro.props` และกำหนด type ด้วย interface `Props` ไม่มี state หรือ lifecycle ฝั่ง client **Slots** เปิดทางให้ composition: markup ที่ส่งระหว่าง tag ของ component จะ render ที่ `<slot />` (พร้อม named slots สำหรับหลายจุดแทรก) ซึ่งเป็นวิธีที่ layout ห่อหน้า และ `<style>` ของ component เป็น **scoped โดย default** ให้คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา
+</Callout>
+
+export const quizComponents = [
+  {
+    q: 'Astro component รับ props ของมันยังไง?',
+    options: [
+      'ผ่าน argument ของ function',
+      'ผ่าน `Astro.props` กำหนด type ด้วย interface `Props` ใน frontmatter',
+      'ผ่าน global variable',
+      'ผ่าน URL',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'slot ใช้ทำอะไร?',
+    options: [
+      'ดึงข้อมูล',
+      'ให้ parent แทรก markup เข้าไปใน component โดย render ตรงที่ `<slot />` ปรากฏ (พื้นฐานของ layouts)',
+      'scope CSS',
+      'routing ฝั่ง client',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โดย default block `<style>` ใน .astro component มีผลที่ไหน?',
+    options: [
+      'Global ทั้งเว็บ',
+      'Scoped เฉพาะ component นั้น — Astro เขียน selector ใหม่เพื่อไม่ให้รั่ว',
+      'เฉพาะตอน development',
+      'ไม่มีผลจนกว่าจะถูก import',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณจะมีจุดแทรกหลายจุดใน component เดียวยังไง?',
+    options: [
+      'ใช้หลาย component',
+      'Named slots — `<slot name="header" />` เติมด้วย `<el slot="header">`',
+      'CSS grid',
+      'ทำไม่ได้',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/the-component-model" questions={quizComponents} />
+
+<ProgressTracker client:visible id="foundations/the-component-model" />

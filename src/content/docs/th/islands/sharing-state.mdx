@@ -1,0 +1,140 @@
+---
+title: 'แชร์ State ข้าม Islands'
+description: 'island แยกตัวจากกันโดยดีไซน์ state จึงไม่แชร์กันอัตโนมัติ — วิธีส่ง serializable props จาก server, ใช้ nanostores สำหรับ state ข้าม island และส่ง children ที่ render บน server ผ่าน slot.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาเรื่องการแยกตัว
+
+island hydrate อย่างเป็นอิสระ — นั่นแหละที่ทำให้มันถูก แต่มันมีผลข้างเคียงที่คนมาจาก SPA มักสะดุด: **island สองตัวไม่แชร์ state กันอัตโนมัติ** `useState` ของ React ใน island หนึ่งมองไม่เห็นจากอีก island หนึ่ง แม้จะสร้างจาก framework เดียวกันก็ตาม ไม่มี app tree ร่วมกัน แต่ละ island เป็น root เล็ก ๆ ของตัวเอง
+
+แล้ว island "add to cart" กับ island "cart count" ที่ header จะ sync กันได้ยังไง? คุณมีเครื่องมือสามอย่าง เรียงจากง่ายที่สุดไปทรงพลังที่สุด
+
+## 1. ส่ง serializable props จาก server
+
+ถ้าข้อมูลรู้อยู่แล้วตอนหน้า render คำตอบที่ง่ายที่สุดคือคำนวณครั้งเดียวในไฟล์ `.astro` แล้วส่งให้แต่ละ island เป็น **prop** ไม่ต้องประสานงานข้าม island เลย — server คือแหล่งข้อมูลร่วม
+
+```astro
+---
+import CartBadge from '../components/CartBadge.jsx';
+const initialCount = await getCartCount(Astro.request);
+---
+<CartBadge count={initialCount} client:load />
+```
+
+อันนี้ครอบคลุม state *เริ่มต้น* แต่ไม่ช่วยตอนที่ island หนึ่งต้อง *อัปเดต* อีกตัวตอน runtime — นั่นคือสิ่งที่ store มีไว้
+
+## 2. nanostores สำหรับ state ที่แชร์ข้าม island
+
+เมื่อ island ต้องตอบสนองต่อกันตอน runtime ให้ใช้ **shared store** ที่อยู่นอก island ตัวใดตัวหนึ่ง เอกสารของ Astro แนะนำ **nanostores** — มันเล็กมาก ไม่ผูกกับ framework ใด และมี adapter สำหรับแต่ละ framework (`@nanostores/react`, `@nanostores/vue`, ...) คุณนิยาม store ครั้งเดียว แล้ว island ไหนก็อ่านและเขียนมันได้
+
+```js
+// src/stores/cart.js
+import { atom } from 'nanostores';
+export const cartCount = atom(0);
+```
+
+```jsx
+// AddToCart.jsx (React island)
+import { cartCount } from '../stores/cart.js';
+export default function AddToCart() {
+  return <button onClick={() => cartCount.set(cartCount.get() + 1)}>Add</button>;
+}
+```
+
+```jsx
+// CartBadge.jsx (another React island, elsewhere on the page)
+import { useStore } from '@nanostores/react';
+import { cartCount } from '../stores/cart.js';
+export default function CartBadge() {
+  const count = useStore(cartCount);   // re-renders when the store changes
+  return <span>Cart: {count}</span>;
+}
+```
+
+ตอนนี้กดปุ่ม "Add" ใน island หนึ่งจะอัปเดต badge ใน island ที่แยกกันคนละที่ — เพราะทั้งคู่ subscribe store เดียวกัน ไม่ได้ subscribe กันเอง
+
+<Mermaid title="island สองตัวที่แยกกัน แชร์ nanostore เดียวกัน" code={diagram} />
+
+export const diagram = `flowchart TB
+  store["nanostore: cartCount"]
+  add["AddToCart island — writes"] --> store
+  store --> badge["CartBadge island — reads and re-renders"]`;
+
+## 3. slot: ส่ง children ที่ render บน server เข้าไปใน island
+
+บางครั้งคุณไม่ได้ต้องแชร์ *state* — แต่ต้องเอา **content ที่ render บน server** ไปวางในเปลือกที่ interactive framework island รับ `<slot />` ได้แบบเดียวกับ `.astro` component ดังนั้น island `<Tabs>` ที่ interactive จึงห่อ panel ที่ static และ render บน server ไว้ได้ เปลือกเป็น interactive ส่วน content ถูกส่งเป็น HTML โดยไม่มี island JS เพิ่ม
+
+```astro
+---
+import Accordion from '../components/Accordion.jsx';
+---
+<Accordion client:visible>
+  <p>This paragraph is server-rendered HTML, passed into the island via its slot.</p>
+</Accordion>
+```
+
+## เลือกจากสามอย่าง
+
+- ข้อมูลรู้ตอน render ไม่มีอัปเดต runtime → **props จาก server**
+- island ต้องอัปเดตกันตอน runtime → **nanostore**
+- ต้องการ chrome ที่ interactive ครอบ content ที่ static → **slot**
+
+คว้า store มาใช้เฉพาะตอนที่มีการประสานงาน runtime ระหว่าง island แยก ๆ จริง ๆ ความต้องการ "shared state" ส่วนใหญ่กลายเป็น props เริ่มต้นหรือ slot ซึ่งส่ง JavaScript น้อยกว่า
+
+<Callout title="สรุปหนึ่งบรรทัด">
+island **แยกตัวจากกัน** — state ไม่ไหลข้ามกันอัตโนมัติ มีเครื่องมือสามอย่าง เรียงตามระดับ: ส่ง **serializable props** จากไฟล์ `.astro` เมื่อข้อมูลรู้ตอน render; ใช้ **nanostore** (ไม่ผูก framework มี adapter `@nanostores/react`/`vue`/...) เมื่อ island แยก ๆ ต้องอัปเดตกันตอน runtime; และใช้ **`<slot />`** วาง content ที่ render บน server เข้าไปใน island ที่ interactive default เป็น props และ slot คว้า store มาใช้เฉพาะการประสานงาน runtime จริง ๆ
+</Callout>
+
+export const quizState = [
+  {
+    q: 'ทำไม useState ใน island หนึ่งถึงไม่ปรากฏในอีก island?',
+    options: [
+      'เพราะ Astro ปิดการใช้ hooks',
+      'เพราะ island hydrate อย่างเป็นอิสระ — แต่ละตัวเป็น root ของตัวเองที่ไม่มี app tree ร่วมกัน state จึงแยกกัน',
+      'เพราะ state ทำงานได้แค่บน server',
+      'มันแชร์กันอัตโนมัติอยู่แล้ว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วิธีที่แนะนำในการแชร์ state ที่ต้องอัปเดตตอน runtime ข้าม island แยก ๆ คืออะไร?',
+    options: [
+      'ตัวแปร global บน window',
+      'store ที่ไม่ผูก framework อย่าง nanostores ที่ทั้งสอง island subscribe',
+      're-fetch หน้าใหม่',
+      'ส่ง callback prop ระหว่างกัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณต้องการ cart count เริ่มต้นใน island สองตัว โดยไม่มีอัปเดต runtime ระหว่างกัน วิธีที่ง่ายที่สุด?',
+    options: [
+      'nanostore',
+      'คำนวณครั้งเดียวในไฟล์ .astro แล้วส่งเป็น serializable prop ให้แต่ละ island',
+      'WebSocket',
+      'fetch ซ้ำข้างในแต่ละ island',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'การส่ง children ผ่าน slot เข้าไปใน framework island ทำให้ทำอะไรได้?',
+    options: [
+      'แชร์ React state แบบ global',
+      'ห่อ content ที่ static และ render บน server ไว้ในเปลือก island ที่ interactive โดยไม่ส่ง content นั้นเป็น island JS เพิ่ม',
+      'ข้ามกฎ serializable-props สำหรับ function',
+      'ไม่ได้ — island มี slot ไม่ได้',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/sharing-state" questions={quizState} />
+
+<ProgressTracker client:visible id="islands/sharing-state" />

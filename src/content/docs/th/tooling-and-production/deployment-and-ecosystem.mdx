@@ -1,0 +1,110 @@
+---
+title: 'Deployment & Ecosystem'
+description: 'การ build สำหรับ production, deploy เว็บแบบ static vs on-demand, ตั้ง site และ base ให้ถูก และ ecosystem ของ Astro รวมถึง Starlight'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## production build
+
+`astro build` สร้าง output ที่ deploy ได้ใน `dist/` สิ่งที่อยู่ในนั้นขึ้นกับ rendering mode:
+
+- **Static** — `dist/` เป็นโฟลเดอร์ของไฟล์ `.html`, CSS และ island JavaScript เป็นแค่ไฟล์
+- **On-demand / hybrid** — `dist/` มี **server entry** ในรูปแบบที่ adapter ของคุณ target ด้วย (Cloudflare Worker, Node server, serverless function) พร้อม static asset
+
+ต่อ type-checking เข้ากับ build เพื่อให้ type error หยุด deploy ที่ไม่ดี: `astro check && astro build`
+
+## deploy สองแบบ
+
+การตัดสินใจ deploy ที่ใหญ่ที่สุดคือ static vs on-demand — มันกำหนดว่าคุณ host *ที่ไหน* ได้:
+
+| | Static | On-demand (SSR) |
+|---|--------|-----------------|
+| Output | ไฟล์ HTML | server entry + assets |
+| ต้องการ | static host / CDN อะไรก็ได้ | runtime (ผ่าน adapter) |
+| Host | Cloudflare Pages, Netlify, GitHub Pages, S3, CDN อะไรก็ได้ | Cloudflare Workers, Node server, Vercel, Netlify Functions |
+| เหมาะกับ | content ที่เหมือนกันสำหรับทุกคน | ข้อมูลต่อ request: auth, form, live data |
+| Adapter | ไม่ต้อง | **ต้อง** |
+
+เว็บ static ล้วน deploy ที่ไหนก็ได้ที่ serve ไฟล์ พอมี route ไหนเป็น on-demand (หรือใช้ server island หรือ Actions) คุณต้องตั้ง **adapter** ที่ตรงกัน — deploy โดยไม่มีมันคือ error คลาสสิก "an adapter is required"
+
+<Mermaid title="build ไปได้ที่ไหนบ้าง" code={deployDiagram} />
+
+export const deployDiagram = `flowchart TB
+  build["astro build"] --> static["Static: HTML files"]
+  build --> ssr["On-demand: server entry + assets"]
+  static --> cdn["any CDN / static host"]
+  ssr --> runtime["adapter runtime: Workers, Node, serverless"]`;
+
+## ตั้ง site และ base ให้ถูก
+
+สอง config value ที่มักทำคนสะดุดตอน deploy:
+
+- **`site`** ต้องเป็น URL ที่ deploy จริง (เช่น `https://example.com`) sitemap, canonical tag และ RSS สร้าง absolute URL จากมัน — `site` ผิด link ก็ผิด
+- **`base`** ต้องตรงกับ subpath ที่คุณถูก serve deploy ไป `example.com/docs/` ก็ตั้ง `base: '/docs'` แล้วอ้าง internal link ด้วย base prefix serve ที่ domain root ก็ละไว้ `base` ที่ไม่ตรงเป็นสาเหตุปกติของ "CSS และ link ของเว็บที่ deploy 404 หมด" — asset ถูกหาที่ path ผิด
+
+## ecosystem
+
+Astro เป็น content-first และ ecosystem ของมันสะท้อนสิ่งนั้น:
+
+- **Starlight** — documentation-site framework ทางการที่สร้างบน Astro (คอร์สนี้สร้างด้วยมัน): sidebar, search, i18n และ dark mode มาในตัว
+- **Integrations directory** — catalog ขนาดใหญ่ของ integration ทางการและ community: UI framework, CMS connector, image service, analytics และ adapter สำหรับ host หลักทุกตัว
+- **content-focused patterns** — เมื่อรวมกับ content collection Astro เป็นตัวเลือกที่เหมาะสำหรับ blog, docs, marketing site และ headless-CMS front-end ที่คุณได้เว็บ static (หรือ hybrid) ที่เร็วพร้อม content ที่มี type
+
+หยิบ framework อย่าง **Starlight** เมื่อมันตรงกับ use case แทนที่จะสร้าง docs infrastructure ใหม่ด้วยมือ — สัญชาตญาณ "compose อย่าสร้างใหม่" เดียวกันที่ไหลผ่าน Astro
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`astro build` เขียน `dist/`: เป็นแค่ **ไฟล์ HTML** สำหรับเว็บ static (deploy ไป CDN อะไรก็ได้ — Cloudflare Pages, Netlify, S3) หรือ **server entry + assets** สำหรับ on-demand ซึ่งต้องมี **adapter** ที่ตรงกันและ runtime ตั้ง **`site`** เป็น URL ที่ deploy จริง (absolute URL ขึ้นกับมัน) และ **`base`** เป็น subpath ที่ถูก serve (ไม่ตรงแล้ว asset 404) ecosystem เป็น content-first: **Starlight** สำหรับ docs พร้อม integrations directory ขนาดใหญ่ — compose กับมันแทนที่จะสร้างใหม่
+</Callout>
+
+export const quizDeploy = [
+  {
+    q: 'เว็บ Astro ที่ static ล้วน deploy ที่ไหนได้?',
+    options: [
+      'เฉพาะ server ที่ติดตั้ง Node',
+      'static host หรือ CDN อะไรก็ได้ — มันเป็นแค่ไฟล์ HTML',
+      'เฉพาะ Cloudflare',
+      'เฉพาะเมื่อมี adapter',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'adapter จำเป็นสำหรับ deploy เมื่อไร?',
+    options: [
+      'เสมอ',
+      'เมื่อ route ไหนถูก render on demand (หรือใช้ server island / Actions)',
+      'เฉพาะเว็บ static',
+      'ไม่เคย',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เว็บที่ deploy ใต้ example.com/docs/ มี CSS และ link คืน 404 หมด สาเหตุที่น่าจะเป็นคือ?',
+    options: [
+      'adapter หายไป',
+      'config `base` ไม่ตรงกับ subpath (ควรเป็น `/docs`) asset เลย resolve ไปที่ path ผิด',
+      'TypeScript error',
+      'build ล้มเหลวแบบเงียบ ๆ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Starlight คืออะไร?',
+    options: [
+      'testing framework',
+      'documentation-site framework ทางการที่สร้างบน Astro (sidebar, search, i18n, dark mode)',
+      'CSS library',
+      'Astro adapter',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/deployment-and-ecosystem" questions={quizDeploy} />
+
+<ProgressTracker client:visible id="tooling-and-production/deployment-and-ecosystem" />

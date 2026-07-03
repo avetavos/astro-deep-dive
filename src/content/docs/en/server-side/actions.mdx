@@ -1,0 +1,145 @@
+---
+title: 'Actions'
+description: 'Astro Actions — type-safe server functions defined with defineAction, called from the client with validated input, wired to forms with progressive enhancement.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem Actions solve
+
+To call server logic from the client the old way, you write an endpoint, invent a URL, `fetch()` it, stringify the body, guess at the response type, and validate the input by hand on the server. **Actions** collapse all of that into a single typed function: define it on the server, call it from the client with full type-safety and automatic validation.
+
+## Defining an action
+
+Actions live in `src/actions/index.ts`, exported as a `server` object. Each is a `defineAction` with an **`input`** schema (Zod) and a **`handler`**:
+
+```ts
+// src/actions/index.ts
+import { defineAction } from 'astro:actions';
+import { z } from 'astro/zod';
+
+export const server = {
+  createComment: defineAction({
+    input: z.object({
+      postId: z.string(),
+      body: z.string().min(1).max(2000),
+    }),
+    handler: async (input, context) => {
+      // input is fully typed and already validated against the schema.
+      const comment = await db.comments.create({
+        postId: input.postId,
+        body: input.body,
+        userId: context.locals.user?.id,   // per-request data from middleware
+      });
+      return comment;                       // the return type flows to the client
+    },
+  }),
+};
+```
+
+Two things are automatic: the input is **validated** against the Zod schema before your handler runs, and the handler's return type is **inferred all the way to the caller** — no manual typing of the response.
+
+## Calling an action from the client
+
+Import `actions` from `astro:actions` and call it. Every call returns `{ data, error }` — Astro never throws across the boundary:
+
+```ts
+import { actions, isInputError } from 'astro:actions';
+
+const { data, error } = await actions.createComment({
+  postId: '42',
+  body: 'Nice post!',
+});
+
+if (isInputError(error)) {
+  // Validation failed — error.fields has per-field messages.
+  console.log(error.fields.body);
+} else if (data) {
+  console.log('Created comment', data.id);   // data is typed
+}
+```
+
+<Mermaid title="A client call runs the validated handler" code={actionDiagram} />
+
+export const actionDiagram = `sequenceDiagram
+  participant C as Client
+  participant A as Astro Action
+  participant H as handler
+  C->>A: actions.createComment(input)
+  A->>A: validate input against Zod schema
+  A->>H: run handler(input, context)
+  H-->>A: return value (typed)
+  A-->>C: { data, error }`;
+
+## Forms and progressive enhancement
+
+An action can be wired directly to an HTML `<form>` by passing `action.name` — it works as a normal form POST even before JavaScript loads, then upgrades to a client call once hydrated. This is **progressive enhancement**: the form submits either way.
+
+```astro
+---
+import { actions } from 'astro:actions';
+---
+<form method="POST" action={actions.createComment}>
+  <input type="hidden" name="postId" value="42" />
+  <textarea name="body"></textarea>
+  <button type="submit">Comment</button>
+</form>
+```
+
+You can also invoke an action from a component script with `Astro.callAction(actions.createComment, input)` when you need its result during server render. The same validated handler runs in every case.
+
+<Callout title="The one-line takeaway">
+**Actions** are type-safe server functions: define them in `src/actions/index.ts` with `defineAction({ input: zodSchema, handler })`, exported on the `server` object. Call `actions.name(input)` from the client — input is **auto-validated** against the schema, the return type is **inferred to the caller**, and every call returns `{ data, error }` (check `isInputError(error)` for `error.fields`). Wire one to a `<form action={actions.name}>` for **progressive enhancement**, or run it during render with `Astro.callAction`.
+</Callout>
+
+export const quizActions = [
+  {
+    q: 'Where are actions defined and what does each need?',
+    options: [
+      'In src/pages/, needing a URL',
+      'In src/actions/index.ts on the `server` object, each with an `input` (Zod) schema and a `handler`',
+      'In astro.config.mjs',
+      'In a .astro component only',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens to an action’s input before the handler runs?',
+    options: [
+      'Nothing — you validate it manually',
+      'It is automatically validated against the Zod `input` schema',
+      'It is converted to a string',
+      'It is discarded',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a client action call return?',
+    options: [
+      'The data directly, throwing on error',
+      'An object `{ data, error }` — Astro does not throw across the boundary (check isInputError(error))',
+      'A Promise that never resolves',
+      'An HTML string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What do you gain by wiring an action to a `<form action={actions.name}>`?',
+    options: [
+      'Nothing',
+      'Progressive enhancement — the form submits as a normal POST without JS, then upgrades to a client call once hydrated',
+      'It disables validation',
+      'It makes the form static',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/actions" questions={quizActions} />
+
+<ProgressTracker client:visible id="server-side/actions" />

@@ -1,0 +1,155 @@
+---
+title: 'Schemas & References'
+description: 'validate frontmatter ด้วย Zod schema, generate TypeScript type จาก schema, และเชื่อม collection เข้าด้วยกันด้วย reference().'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไมต้อง validate content ด้วย
+
+content คือข้อมูลที่อยู่ *นอก* โค้ดของเรา ทั้งไฟล์ Markdown ที่แก้ด้วยมือ, JSON จาก CMS ไม่มีอะไรกันการพิมพ์ผิดได้เลย ทั้ง `title` ที่หาย, `pubDate` ที่เขียนเป็น `"soon"`, หรือ tag ที่ควรเป็น array แต่กลายเป็น string ถ้าไม่มี validation ความผิดพลาดพวกนี้จะโผล่มาเป็น runtime error งง ๆ ลึก ๆ ใน template หรือแย่กว่านั้นคือหน้าเพจพังเงียบ ๆ
+
+**schema** ย้ายการตรวจนั้นมาไว้ที่ **content boundary** เมื่อ Astro โหลด collection มันจะ validate ทุก entry กับ schema *ก่อน* ที่หน้าเพจจะเห็น entry ที่ผิดจะทำให้ build ล้มพร้อมข้อความชัดเจน ("`pubDate` ต้องเป็น date") ไม่ใช่ crash แบบปริศนา และ content ที่ validate แล้วยังเป็น content ที่มี **type** ด้วย ซึ่งเป็นผลตอบแทนอย่างที่สอง
+
+## Zod schema
+
+Astro ใช้ **Zod** ทำ schema เราเอา Zod มาจาก `astro/zod` แล้วอธิบายโครงสร้างของ frontmatter ทีละ field:
+
+```ts
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string().max(80),
+    description: z.string().optional(),          // ไม่ใส่ก็ได้
+    pubDate: z.coerce.date(),                     // "2026-01-01" กลายเป็น Date
+    draft: z.boolean().default(false),            // เติมให้ถ้าไม่มี
+    tags: z.array(z.string()).default([]),
+    status: z.enum(['draft', 'published', 'archived']),
+  }),
+});
+
+export const collections = { blog };
+```
+
+ชิ้นส่วนที่ใช้บ่อย:
+
+- **type** — `z.string()`, `z.number()`, `z.boolean()`, `z.array(...)`, `z.enum([...])`
+- **`.optional()`** — field อาจหายได้ type จะกลายเป็น `T | undefined`
+- **`.default(value)`** — ถ้า field ไม่มี ให้เติมค่านี้ (โค้ดปลายทางจะได้ไม่ต้องเจอ `undefined`)
+- **`z.coerce.date()`** — แปลง date string จาก frontmatter เป็น `Date` จริง
+
+refinement อย่าง `.max(80)` หรือ `.url()` ช่วยบังคับ constraint จริง ๆ ทั้งความยาว title, URL ที่ถูกต้อง content ที่ผิดจึงถูกจับได้ตอน build
+
+## schema generate type ให้
+
+เพราะ schema อธิบาย frontmatter ครบถ้วน Astro จึง **generate TypeScript type** จากมัน พอเราพิมพ์ `post.data.` editor ก็ autocomplete `title`, `pubDate`, `tags` ให้ พร้อม type ที่ถูกต้อง `post.data.pubDate` เป็น `Date` ส่วน `post.data.status` เป็น union `'draft' | 'published' | 'archived'` เราไม่ต้องเขียน interface `Post` เองเลย schema *คือ* แหล่งความจริงเดียวทั้งสำหรับ validation และ type
+
+<Mermaid title="schema เดียว ได้สองผลตอบแทน" code={diagram} />
+
+export const diagram = `flowchart TB
+  schema["Zod schema ใน content.config.ts"] --> validate["validate ทุก entry ตอน build"]
+  schema --> types["generate TypeScript type"]
+  validate --> safe["content ผิดทำให้ build ล้มตั้งแต่เนิ่น"]
+  types --> dx["autocomplete และ type-check entry.data"]`;
+
+## เชื่อม collection ด้วย reference()
+
+content แทบไม่เคยแบน โพสต์บล็อกหนึ่งอันมี author, หน้า doc อยู่ในหมวดหนึ่ง แทนที่จะ copy ข้อมูล author ไปทุกโพสต์ เราเก็บ collection `authors` ไว้ แล้วให้แต่ละโพสต์ **reference** author ด้วย id ของ Zod นั่นเอง **`reference()`** (จาก `astro:content`) เขียนความเชื่อมโยงนั้นและ validate มันให้:
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob, file } from 'astro/loaders';
+
+const authors = defineCollection({
+  loader: file('./src/data/authors.json'),
+  schema: z.object({ name: z.string(), bio: z.string() }),
+});
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string(),
+    author: reference('authors'),          // ต้องตรงกับ id ใน collection authors
+    related: z.array(reference('blog')).default([]),
+  }),
+});
+
+export const collections = { authors, blog };
+```
+
+`reference('authors')` เก็บ id ของ author และรับประกันว่ามันชี้ไปที่ entry จริง ถ้าจะเปลี่ยน reference นั้นให้เป็นข้อมูลจริง ก็ resolve มันด้วย `getEntry`:
+
+```astro
+---
+import { getEntry, getCollection } from 'astro:content';
+
+const post = (await getCollection('blog'))[0];
+const author = await getEntry(post.data.author);   // ส่ง reference เข้าไปตรง ๆ
+---
+<p>โดย {author.data.name}</p>
+```
+
+วิธีนี้ทำให้ content เป็น normalized ข้อมูล author อยู่ที่เดียว ในขณะที่แต่ละโพสต์มีลิงก์ที่ validate แล้วและ resolve ได้
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**Zod schema** (จาก `astro/zod`) validate ทุก entry ที่ content boundary frontmatter ที่ผิดจึงทำให้ build ล้มพร้อมข้อความชัดเจน ไม่ใช่ crash หน้าเพจ และ schema เดียวกันยัง **generate TypeScript type** ให้ `entry.data` เราจึงไม่ต้องเขียน interface เอง ใช้ `.optional()`, `.default()`, `z.coerce.date()`, และ `z.enum()` อธิบาย field และใช้ **`reference()`** เชื่อม collection (resolve ด้วย `getEntry`)
+</Callout>
+
+export const quizSchemas = [
+  {
+    q: 'นอกจากจับ content ที่ผิดแล้ว schema ให้อะไรอีก?',
+    options: [
+      'build เร็วขึ้น',
+      'generate TypeScript type ให้ entry.data field จึง autocomplete และ type-check ได้',
+      'HTML เล็กลง',
+      'จัด style ให้อัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: '.default(false) บน field ของ schema ทำอะไร?',
+    options: [
+      'ทำให้ field required',
+      'เติม false เมื่อ field หาย โค้ดปลายทางจะได้ไม่เจอ undefined',
+      'ลบ field ทิ้ง',
+      'ตั้งเป็น boolean เฉพาะตอน dev',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'reference() ใช้ทำอะไร?',
+    options: [
+      'import component',
+      'เชื่อม collection หนึ่งไปอีก collection (เช่นโพสต์ไปหา author) ด้วย id ที่ validate แล้วและ resolve ผ่าน getEntry',
+      'อ้างอิงไฟล์ CSS',
+      'cache ข้อมูล',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'การ validate content เกิดขึ้นที่ไหน?',
+    options: [
+      'ในเบราว์เซอร์ตอน runtime',
+      'ที่ content boundary ตอน Astro โหลด collection ในช่วง build entry ที่ผิดทำให้ build ล้ม',
+      'เฉพาะตอนเรียก render()',
+      'ไม่เกิดขึ้นอัตโนมัติเลย',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/schemas-and-references" questions={quizSchemas} />
+
+<ProgressTracker client:visible id="content-and-data/schemas-and-references" />

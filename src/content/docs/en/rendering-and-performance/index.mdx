@@ -1,0 +1,73 @@
+---
+title: 'Rendering, Performance & UX'
+description: 'How Astro keeps pages fast and navigation smooth — view transitions with ClientRouter, optimized images and assets, the zero-JS performance baseline, and caching at the edge.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Fast by default, smooth by choice
+
+Astro starts you at a fast baseline: static HTML, zero JavaScript, small pages. This module is about keeping that baseline as you add polish — smooth client-side navigation, optimized images, and caching — without quietly reintroducing the bloat Astro was designed to avoid.
+
+The theme throughout: **every enhancement should cost the least JavaScript and bytes possible.** A view transition, an image, a cached response — each has a "cheap way" that preserves the fast baseline, and this module teaches those.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| View transitions | `<ClientRouter />` for SPA-like animated navigation |
+| Images & assets | The `<Image />` and `<Picture />` components and `astro:assets` |
+| Performance & zero-JS | Choosing directives and prefetch to ship less JavaScript |
+| Caching & edge | Cache-Control, edge caching, and cacheable shells |
+
+## The performance mental model
+
+<Mermaid title="Keep the fast baseline as you add features" code={perfDiagram} />
+
+export const perfDiagram = `flowchart TB
+  base["Baseline: static HTML, zero JS"] --> nav["Add smooth nav: ClientRouter (small JS)"]
+  base --> img["Add images: astro:assets (optimized, lazy)"]
+  base --> cache["Add caching: Cache-Control at the edge"]
+  nav --> fast["Still fast: minimal JS, cacheable"]
+  img --> fast
+  cache --> fast`;
+
+- **Navigation** can feel instant with `<ClientRouter />` and prefetch — for a few kilobytes, not a SPA framework.
+- **Images** are usually the heaviest thing on a page; `astro:assets` optimizes them automatically.
+- **Caching** turns a render into a lookup — the fastest response is one you don't compute.
+
+<Callout title="The one-line takeaway">
+This module keeps Astro's fast baseline (static HTML, zero JS) intact while adding UX polish: `<ClientRouter />` for smooth navigation, `astro:assets` for optimized images, and edge caching for instant responses — each chosen to add the least JavaScript and bytes.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What is the recurring theme of this module?',
+    options: [
+      'Add as many features as possible',
+      'Add UX polish while preserving the fast baseline — the least JavaScript and bytes for each enhancement',
+      'Always use server-side rendering',
+      'Avoid all images',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'On a typical page, what is usually the heaviest thing to load?',
+    options: [
+      'The HTML',
+      'Images',
+      'The CSS reset',
+      'The favicon',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="rendering-and-performance/index" />

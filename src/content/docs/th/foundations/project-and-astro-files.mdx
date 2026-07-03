@@ -1,0 +1,122 @@
+---
+title: 'Project และ .astro Files'
+description: 'โครงสร้างโปรเจกต์ Astro, file-based routing ใน src/pages และกายวิภาคของ .astro component — frontmatter fence ที่รันบน server และ template ที่กลายเป็น HTML'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## โครงสร้างโปรเจกต์
+
+โปรเจกต์ Astro ทั่วไปมีโครงสร้างเล็ก ๆ ที่เป็น convention:
+
+```text
+my-site/
+├── astro.config.mjs      # config: integrations, adapter, output mode
+├── src/
+│   ├── pages/            # file-based routing — แต่ละไฟล์คือหนึ่ง route
+│   ├── components/       # component แบบ .astro (และ framework) ที่ reuse ได้
+│   ├── layouts/          # เชลล์ของหน้าที่ใช้ร่วมกัน
+│   ├── content.config.ts # config ของ content collections (Astro 5+)
+│   └── styles/
+└── public/               # static assets ที่ serve ตรง ๆ (favicon, robots.txt)
+```
+
+สองโฟลเดอร์ที่เป็นแกนหลัก:
+
+- **`src/pages/`** คือ **file-based routing**: `src/pages/index.astro` → `/`, `src/pages/about.astro` → `/about`, `src/pages/blog/[slug].astro` → `/blog/:slug` ตำแหน่งของไฟล์ *คือ* route
+- **`public/`** ถูก copy ไปยัง output ตรง ๆ — ไฟล์ในนี้ถูก serve ที่ root โดยไม่ผ่านการประมวลผล
+
+## กายวิภาคของไฟล์ .astro
+
+ไฟล์ `.astro` คือ component format ของ Astro เอง มันมีสองส่วนคั่นด้วย **code fence** (`---`):
+
+```astro
+---
+// 1. component script (frontmatter) รันบน SERVER เท่านั้น
+//    JavaScript/TypeScript ตรงนี้: imports, ดึงข้อมูล, props, logic
+import Card from '../components/Card.astro';
+
+const title = "Latest posts";
+const posts = await fetch('https://api.example.com/posts').then((r) => r.json());
+---
+
+<!-- 2. template กลายเป็น HTML ใช้ { } เพื่อฝัง JS expression -->
+<h1>{title}</h1>
+<ul>
+  {posts.map((post) => <Card title={post.title} />)}
+</ul>
+```
+
+Mental model สำคัญ:
+
+- ทุกอย่าง **เหนือ** `---` ตัวที่สองคือ **component script** — มันรันครั้งเดียว บน server ตอน build (หรือแต่ละ request สำหรับหน้า on-demand) ตรงนี้คือที่ที่คุณดึงข้อมูล import component และคำนวณค่า ไม่มีอะไรในนี้ถูกส่งไป browser
+- ทุกอย่าง **ใต้** นั้นคือ **template** — HTML ที่มี `{ }` expression หย่อน JavaScript ลงไป นี่คือสิ่งที่กลายเป็น HTML ที่ render ออกมา
+
+<Mermaid title="สองครึ่งของไฟล์ .astro" code={fileDiagram} />
+
+export const fileDiagram = `flowchart LR
+  script["--- frontmatter ---\ncomponent script\n(server เท่านั้น)"] --> compute["ดึงข้อมูล, คำนวณ props"]
+  compute --> template["template (HTML + { } expression)"]
+  template --> html["HTML ที่ render แล้ว"]`;
+
+เพราะ script รันบน server คุณจึง `await` ที่ระดับบนสุดได้ — fetch จาก API หรือ database ตรง ๆ ใน component โดยไม่ต้องมี `useEffect` ไม่ต้องมี loading state ไม่ต้องวิ่งไป client รอบใหม่ ข้อมูลอยู่พร้อมแล้วตอนที่ HTML ถูก build
+
+## มันคือ superset ของ HTML
+
+template `.astro` คือ *HTML ที่ valid บวกกับ expression คล้าย JSX* ถ้าคุณวาง HTML ธรรมดาลงในไฟล์ `.astro` มันก็ทำงานได้เลย คุณเพิ่มความ dynamic ด้วย `{ }` (expression), `{condition && <div/>}` (conditional) และ `{items.map(...)}` (loop) — syntax แบบ expression เดียวกับที่เห็นในตัวอย่าง landing ต่างจาก JSX ตรงที่คุณใช้ชื่อ attribute แบบ HTML มาตรฐาน (`class` ไม่ใช่ `className`)
+
+<Callout title="สรุปบรรทัดเดียว">
+โปรเจกต์ Astro route ด้วยไฟล์ใน **`src/pages/`** และ serve `public/` ตรง ๆ ไฟล์ **`.astro`** มีสองส่วนแบ่งด้วย `---`: **component script** (frontmatter) ที่รันบน *server* — imports, top-level `await` ดึงข้อมูล, props, logic ซึ่งไม่มีอะไรถูกส่งไป browser — และ **template** (HTML บวก `{ }` expression) ที่กลายเป็น HTML ที่ render แล้ว มันเป็น superset ของ HTML ดังนั้น HTML ธรรมดาก็ทำงานได้เลย
+</Callout>
+
+export const quizFiles = [
+  {
+    q: 'routing ใน Astro ทำงานยังไง?',
+    options: [
+      'คุณลงทะเบียน route ในไฟล์ config',
+      'File-based: ตำแหน่งของไฟล์ใน src/pages/ คือ route ของมัน (src/pages/about.astro → /about)',
+      'ทุก route ผ่านไฟล์ index ไฟล์เดียว',
+      'route ถูกกำหนดใน database',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'อะไรรันใน frontmatter (code เหนือ `---` ตัวที่สอง) ของไฟล์ .astro?',
+    options: [
+      'JavaScript ฝั่ง client ที่ส่งไป browser',
+      'component script — รันบน server เท่านั้น (ดึงข้อมูล, imports, logic) มันไม่ถูกส่งไป browser',
+      'CSS เท่านั้น',
+      'ไม่มีอะไร — มันเป็น comment',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมคุณถึงใช้ top-level `await` ใน component script ของ .astro ได้?',
+    options: [
+      'เพราะ Astro polyfill promise ให้',
+      'เพราะ script รันบน server ตอน build/request จึง fetch ข้อมูลตรง ๆ ได้โดยไม่ต้องวิ่งไป client รอบใหม่',
+      'เพราะ await เป็น synchronous ใน Astro',
+      'ใช้ไม่ได้ — await ไม่ถูกอนุญาต',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'template .astro ในเชิง syntax คืออะไร?',
+    options: [
+      'ภาษา template เฉพาะที่ไม่เกี่ยวกับ HTML',
+      'superset ของ HTML บวก expression คล้าย JSX แบบ `{ }` (โดยใช้ชื่อ attribute แบบ HTML มาตรฐานเช่น `class`)',
+      'JavaScript ล้วน ๆ',
+      'Markdown',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/project-and-astro-files" questions={quizFiles} />
+
+<ProgressTracker client:visible id="foundations/project-and-astro-files" />

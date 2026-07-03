@@ -1,0 +1,131 @@
+---
+title: 'Config & Integrations'
+description: 'The astro.config.mjs file, the integrations system for adding capabilities, how Astro sits on Vite, and adding Tailwind the current way.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The config file
+
+Every Astro project is configured from `astro.config.mjs` through a single `defineConfig` call. A handful of keys carry most of the weight:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import mdx from '@astrojs/mdx';
+import sitemap from '@astrojs/sitemap';
+import react from '@astrojs/react';
+import cloudflare from '@astrojs/cloudflare';
+
+export default defineConfig({
+  site: 'https://example.com',   // absolute site URL (used for sitemap, canonical, RSS)
+  base: '/docs',                 // path prefix if not served at the domain root
+  output: 'static',              // 'static' (default) or 'server' for on-demand
+  adapter: cloudflare(),         // runtime for on-demand rendering
+  integrations: [mdx(), sitemap(), react()],
+  vite: { /* escape hatch to raw Vite config */ },
+});
+```
+
+- **`site`** is your deployed URL. It's required for anything that emits absolute URLs (sitemap, canonical tags, RSS). **`base`** sets a path prefix when the site lives under a subpath (like this course under `/astro`).
+- **`output`** picks the default rendering mode; **`adapter`** supplies the runtime when you use on-demand rendering (from the rendering lesson).
+- **`integrations`** is the list of plugins that extend Astro.
+
+## The integrations system
+
+An **integration** is an official or community plugin that hooks into Astro's build to add a capability — rendering a UI framework, generating a sitemap, adding MDX support, wiring an adapter. You install it and add it to the `integrations` array. Many have a one-command installer that edits the config for you:
+
+```bash
+# astro add writes the import + integrations entry for you, and installs deps
+npx astro add react
+npx astro add mdx sitemap
+```
+
+Common official integrations (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework islands), `mdx` (components in Markdown), `sitemap`, `rss`, and the platform adapters (`cloudflare`, `node`, `vercel`, `netlify`).
+
+## Astro is built on Vite
+
+Under the hood, Astro's dev server and build are powered by **Vite**. That's why the dev server starts instantly, why HMR is fast, and why you can use most of the Vite/Rollup plugin ecosystem. When you need something Astro doesn't expose directly, drop into the `vite` key and configure Vite itself:
+
+```js
+export default defineConfig({
+  vite: {
+    plugins: [/* any Vite plugin */],
+    resolve: { alias: { '@': '/src' } },
+  },
+});
+```
+
+<Mermaid title="Astro composes integrations on top of Vite" code={configDiagram} />
+
+export const configDiagram = `flowchart TB
+  cfg["astro.config.mjs (defineConfig)"] --> integ["integrations: UI frameworks, mdx, sitemap, adapter"]
+  cfg --> vite["vite: raw Vite/Rollup plugins and config"]
+  integ --> build["Astro build"]
+  vite --> build`;
+
+## Adding Tailwind (the current way)
+
+Tailwind in current Astro is installed as a **Vite plugin** (`@tailwindcss/vite`, Tailwind v4) — not the old `@astrojs/tailwind` integration. The one-command installer wires it up:
+
+```bash
+npx astro add tailwind
+```
+
+That installs the plugin, adds it to your Vite config, and creates the CSS entry. You then import your CSS once (e.g. in a layout) and use Tailwind utility classes in your markup. If you ever see guides referencing the `@astrojs/tailwind` *integration*, that's the older approach; the current path is the Vite plugin via `astro add tailwind`.
+
+<Callout title="The one-line takeaway">
+`astro.config.mjs` configures a project via `defineConfig` — key fields are `site` (deployed URL, needed for absolute URLs), `base` (path prefix), `output`, `adapter`, and `integrations`. **Integrations** (`@astrojs/*`, added with `npx astro add`) extend the build with UI frameworks, MDX, sitemaps, and adapters. Astro runs on **Vite**, so you can drop into the `vite` key for raw plugins — and current Tailwind is a Vite plugin added with `astro add tailwind`, not the legacy `@astrojs/tailwind` integration.
+</Callout>
+
+export const quizConfig = [
+  {
+    q: 'What does the `site` config option do?',
+    options: [
+      'Sets the dev server port',
+      'Declares the deployed absolute URL, used for sitemap, canonical tags, and RSS',
+      'Chooses the CSS framework',
+      'Enables TypeScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the easiest way to add an official integration like React?',
+    options: [
+      'Manually edit three config files',
+      'Run `npx astro add react`, which installs it and edits the config for you',
+      'Copy it into public/',
+      'Import it in every page',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What build tool underpins Astro, and how do you access it directly?',
+    options: [
+      'Webpack, via webpack.config.js',
+      'Vite — accessed through the `vite` key in astro.config.mjs',
+      'Parcel, via a plugin',
+      'You cannot access the underlying tool',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the current recommended way to add Tailwind to Astro?',
+    options: [
+      'The @astrojs/tailwind integration',
+      'The Tailwind Vite plugin, installed via `npx astro add tailwind`',
+      'A CDN script tag only',
+      'Tailwind is built in',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/config-and-integrations" questions={quizConfig} />
+
+<ProgressTracker client:visible id="tooling-and-production/config-and-integrations" />

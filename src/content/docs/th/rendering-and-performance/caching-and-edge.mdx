@@ -1,0 +1,122 @@
+---
+title: 'Caching & Edge'
+description: 'cache response แบบ on-demand ด้วย Cache-Control, serve จาก CDN edge และรวม static shell ที่ cache ได้เข้ากับ server islands สำหรับส่วนที่ personalize'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## response ที่เร็วที่สุดคืออันที่เราไม่ต้องคำนวณ
+
+หน้า static คือ case ที่ดีที่สุดอยู่แล้ว: build ครั้งเดียว, serve จาก CDN, cache ทุกที่ คำถามที่น่าสนใจคือจะทำยังไงเมื่อ route ถูก render แบบ **on-demand** — เราไม่อยาก re-run render ให้ทุกผู้ชมถ้าผลลัพธ์เหมือนกันไปสักพัก นั่นคือหน้าที่ของ caching: เปลี่ยน render ที่ทำซ้ำ ๆ ให้เป็น lookup ที่ถูก
+
+## Cache-Control บน response แบบ on-demand
+
+สำหรับ route ที่ render แบบ on-demand (`prerender = false`) เราตั้ง caching header บน response แล้ว browser และ CDN ที่อยู่หน้า server ของเราจะใช้ response ซ้ำแทนที่จะ render ใหม่:
+
+```astro
+---
+export const prerender = false;
+
+// Cache this response at the CDN for 1 hour; allow serving a stale copy
+// for a day while revalidating in the background.
+Astro.response.headers.set(
+  'Cache-Control',
+  'public, max-age=0, s-maxage=3600, stale-while-revalidate=86400'
+);
+
+const articles = await getArticles();
+---
+<ArticleList articles={articles} />
+```
+
+directive สำคัญ: `s-maxage` คุมว่า *shared* cache (CDN) เก็บไว้นานแค่ไหน และ `stale-while-revalidate` ให้ CDN serve สำเนาที่เก่าเล็กน้อยได้ทันทีขณะที่ refresh ใน background — user จึงแทบไม่ต้องรอ cold render
+
+## Edge caching
+
+CDN cache response ไว้ที่ location แบบ **edge** ใกล้ user หน้าที่ cache แล้วจึงถูก serve จากเมืองใกล้ ๆ แทนที่จะเป็น origin ของเรา เว็บ Astro แบบ static ถูก edge-cache โดยธรรมชาติ ส่วนเว็บ on-demand จะ edge-friendly ทันทีที่เราเพิ่ม `Cache-Control` ที่ถูกต้อง — CDN cache HTML ที่ render แล้วไว้ที่ edge และเรียก server เฉพาะตอน cache หมดอายุ
+
+<Mermaid title="The edge serves cached HTML; the origin renders only on a miss" code={edgeDiagram} />
+
+export const edgeDiagram = `flowchart LR
+  user["User request"] --> edge["CDN edge"]
+  edge -->|cache hit| fast["Serve cached HTML (fast)"]
+  edge -->|cache miss| origin["Origin renders, then caches at edge"]
+  origin --> edge`;
+
+## pattern ที่ทรงพลัง: shell ที่ cache ได้ + server islands
+
+pure per-request SSR cache ยาก — ถ้าหน้ามี "Welcome back, Ana" เรา share response นั้นกับผู้ชมคนถัดไปไม่ได้ ทางแก้ที่สวยงามรวมสิ่งที่โมดูลก่อนหน้าสอน: ทำให้ **page shell เป็น static/cache ได้** และ defer *เฉพาะส่วนที่ personalize* ไปเป็น **server island** (`server:defer`):
+
+```astro
+---
+// This page is static and fully cacheable at the edge...
+---
+<Layout>
+  <ArticleList />                <!-- same for everyone: cached -->
+  <UserGreeting server:defer>    <!-- per-user: deferred, fetched separately -->
+    <p slot="fallback">Loading…</p>
+  </UserGreeting>
+</Layout>
+```
+
+ทีนี้ส่วนหนักที่ share กันถูก cache ที่ edge และ serve ทันที ส่วน island เล็ก ๆ ที่ personalize ถูก render ต่อ request เราจึงได้หน้าที่เร็วระดับ CDN *พร้อม* personalization — แทนที่จะทำให้ทั้งหน้า cache ไม่ได้เพราะคำทักทายเดียว
+
+## static-with-islands ชนะ full SSR เมื่อไร
+
+ถ้าหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนโดยมีส่วน dynamic นิดหน่อย **static (หรือ cached) + islands** มักชนะ full SSR: cache ได้ดีกว่า, server load น้อยกว่า, response เร็วกว่า เก็บ full on-demand rendering ไว้สำหรับหน้าที่ต่างจริง ๆ ทุก request (dashboard ที่ personalize, ผลการ search) การเลือก option ที่ *cache ได้* เองก็เป็นการตัดสินใจด้าน performance
+
+<Callout title="สรุปบรรทัดเดียว">
+response ที่เร็วที่สุดคืออันที่ cache ไว้ สำหรับ route แบบ on-demand ให้ตั้ง **`Cache-Control`** บน `Astro.response.headers` (`s-maxage` สำหรับ CDN, `stale-while-revalidate` เพื่อเลี่ยง cold render) เพื่อให้ CDN serve HTML จาก **edge** ได้ ดีที่สุดคือเก็บ **shell เป็น static/cache ได้ และ defer เฉพาะส่วนที่ personalize ไปเป็น `server:defer` server island** — ได้หน้าที่เร็วระดับ edge พร้อมส่วน per-user เลือก static-with-islands มากกว่า full SSR เมื่อหน้าส่วนใหญ่ share กัน
+</Callout>
+
+export const quizCache = [
+  {
+    q: 'สำหรับ route แบบ on-demand จะให้ CDN cache response ได้ยังไง?',
+    options: [
+      'cache route แบบ on-demand ไม่ได้',
+      'ตั้ง `Cache-Control` บน `Astro.response.headers` (เช่น `s-maxage` และ `stale-while-revalidate`)',
+      'เปลี่ยนชื่อไฟล์เป็น .static.astro',
+      'ปิด adapter',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`stale-while-revalidate` ให้ผลอะไร?',
+    options: [
+      'ปิด caching',
+      'CDN serve สำเนาที่เก่าเล็กน้อยได้ทันทีขณะ refresh ใน background user จึงแทบไม่ต้องรอ cold render',
+      'บังคับ full reload ทุกครั้ง',
+      'encrypt response',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'pattern "cacheable shell + server islands" คืออะไร?',
+    options: [
+      'render ทุกอย่างฝั่ง server ต่อ request',
+      'เก็บ page shell เป็น static/cache ได้ที่ edge และ defer เฉพาะส่วนที่ personalize ไปเป็น `server:defer` server island',
+      'cache database',
+      'ใช้ client:load กับทุกอย่าง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'static-with-islands ชนะ full SSR เมื่อไร?',
+    options: [
+      'ไม่มีวัน',
+      'เมื่อหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนโดยมีส่วน dynamic นิดหน่อย — ได้ cache ที่ดีกว่า, server load น้อยกว่า และ response เร็วกว่า',
+      'เฉพาะ API route',
+      'เฉพาะตอนไม่มี image',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/caching-and-edge" questions={quizCache} />
+
+<ProgressTracker client:visible id="rendering-and-performance/caching-and-edge" />

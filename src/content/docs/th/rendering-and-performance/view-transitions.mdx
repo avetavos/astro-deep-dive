@@ -1,0 +1,132 @@
+---
+title: 'View Transitions'
+description: 'เพิ่ม navigation แบบ client-side ที่มี animation คล้าย SPA ให้เว็บ multi-page ด้วย ClientRouter, transition directives, การ persist element และ lifecycle events'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ได้ข้อดีของทั้งสองแบบ
+
+เว็บ multi-page แบบดั้งเดิมจะ reload ทั้ง browser ทุกครั้งที่ navigate — เชื่อถือได้ แต่หน้าจอจะแฟลชขาวและ scroll position รีเซ็ต ส่วน SPA เลี่ยงเรื่องนั้นได้แต่ต้องแลกด้วย JavaScript router ที่หนัก **view transitions** ของ Astro ให้ความรู้สึกลื่นแบบ SPA บนเว็บ MPA ปกติ ด้วย script แค่ไม่กี่กิโลไบต์
+
+เรา opt in ด้วยการเพิ่ม component เดียวคือ **`<ClientRouter />`** เข้าไปใน `<head>` ของหน้า — ปกติวางใน layout ที่ใช้ร่วมกันเพื่อให้มีผลทั้งเว็บ:
+
+```astro
+---
+import { ClientRouter } from 'astro:transitions';
+---
+<html lang="en">
+  <head>
+    <title>My site</title>
+    <ClientRouter />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>
+```
+
+พอมีตัวนี้แล้ว การ navigate ระหว่างหน้าในเว็บของเราจะถูก intercept และจัดการฝั่ง client: Astro fetch หน้าถัดไป, swap content เข้ามา และ animate การเปลี่ยน — ไม่มี full reload browser ที่ไม่รองรับ API เบื้องหลังจะ fallback ไปเป็น navigation ปกติ ทุกอย่างจึงไม่พัง
+
+<Callout title="ตอนนี้ชื่อ ClientRouter แล้ว ไม่ใช่ ViewTransitions">
+ใน Astro รุ่นเก่า component นี้ชื่อ `<ViewTransitions />` Astro ปัจจุบันเปลี่ยนชื่อเป็น **`<ClientRouter />`** (import จาก `astro:transitions`) เพื่อสื่อความหมายให้ชัดขึ้นว่ามันทำอะไร — เปิด client-side routing ถ้าเจอ `<ViewTransitions />` ใน tutorial เก่า ให้แทนที่ด้วย `<ClientRouter />` ในใจ
+</Callout>
+
+## navigation ทำงานยังไง
+
+<Mermaid title="ClientRouter swaps content instead of reloading" code={navDiagram} />
+
+export const navDiagram = `flowchart LR
+  click["User clicks a link"] --> intercept["ClientRouter intercepts (no full reload)"]
+  intercept --> fetch["Fetch the next page HTML"]
+  fetch --> swap["Swap in the new content, animate"]
+  swap --> event["Fire astro:page-load"]`;
+
+## Transition directives
+
+โดย default Astro จะ cross-fade หน้า เราคุม animation ต่อ element ได้ด้วย directive:
+
+- **`transition:name`** — ตั้งชื่อเดียวกันให้ element บนทั้งสองหน้า เพื่อให้ Astro morph จากอันหนึ่งไปอีกอัน (shared-element transition เช่น thumbnail ที่ค่อย ๆ ขยายเป็น hero image)
+- **`transition:animate`** — เลือก animation (`fade`, `slide` หรือแบบ custom) import helper จาก `astro:transitions`
+- **`transition:persist`** — เก็บ DOM และ state ของ component ไว้ข้าม navigation แทนที่จะ re-render เหมาะกับ video ที่กำลังเล่นหรือ audio player ที่ไม่ควรเริ่มใหม่
+
+```astro
+---
+import { slide } from 'astro:transitions';
+---
+<!-- This heading slides between pages; the player keeps playing across nav. -->
+<h1 transition:name="page-title" transition:animate={slide({ duration: 200 })}>Title</h1>
+<video controls autoplay transition:name="player" transition:persist />
+```
+
+## Lifecycle events
+
+เพราะ navigation ไม่ trigger full page load อีกต่อไป script ที่รันตอน `DOMContentLoaded` จะไม่รันซ้ำตอน navigate แบบ client-side Astro จึง fire event ของตัวเองให้เรา re-initialize:
+
+- **`astro:page-load`** — fire หลังทุก navigation (ทั้ง load ครั้งแรก *และ* การ swap แบบ client-side) วาง initialization ไว้ตรงนี้แทน `DOMContentLoaded`
+- **`astro:after-swap`** — fire ทันทีหลัง DOM ใหม่ถูก swap เข้ามา ก่อน paint (เหมาะกับการ restore theme/state เพื่อเลี่ยงการแฟลช)
+
+```js
+document.addEventListener('astro:page-load', () => {
+  // runs on first load AND after every client-side navigation
+  initAnalytics();
+});
+```
+
+นี่คือ gotcha ที่พบบ่อยที่สุดของ view transitions: init script ที่ทำงานตอน load ครั้งแรกแต่ "หยุดทำงาน" หลัง navigate เพราะมันผูกกับ `DOMContentLoaded` ให้ย้ายไปที่ `astro:page-load`
+
+<Callout title="สรุปบรรทัดเดียว">
+เพิ่ม **`<ClientRouter />`** (จาก `astro:transitions`) เข้าไปใน `<head>` — ควรวางใน layout ที่ใช้ร่วมกัน — เพื่อเปลี่ยน MPA ธรรมดาให้มี navigation ที่ลื่นและมี animation คล้าย SPA พร้อม full-reload fallback สำหรับ browser ที่ไม่รองรับ คุม animation ด้วย `transition:name` (shared element), `transition:animate` และ `transition:persist` (เก็บ state ข้าม nav) และเพราะไม่มี full reload ให้ย้าย initialization จาก `DOMContentLoaded` ไปที่ event **`astro:page-load`**
+</Callout>
+
+export const quizVT = [
+  {
+    q: 'เปิด view transitions ใน Astro ยังไง?',
+    options: [
+      'ติดตั้ง SPA router',
+      'เพิ่ม `<ClientRouter />` (จาก `astro:transitions`) เข้าไปใน `<head>` ของหน้า ปกติใน layout ที่ใช้ร่วมกัน',
+      'ตั้ง output เป็น server',
+      'เพิ่ม client:load ให้ทุก component',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ชื่อปัจจุบันของ component นี้คืออะไร (Astro รุ่นเก่าเรียกชื่ออื่น)?',
+    options: [
+      '`<ViewTransitions />`',
+      '`<ClientRouter />` — เปลี่ยนชื่อมาจาก `<ViewTransitions />`',
+      '`<Router />`',
+      '`<Transition />`',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`transition:persist` ทำอะไร?',
+    options: [
+      'บันทึกหน้าลง localStorage',
+      'เก็บ DOM และ state ของ component ไว้ข้าม navigation แทนการ re-render (เช่น video ที่กำลังเล่น)',
+      'persist ข้อมูลลง database',
+      'ปิด animation',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'init script ที่ผูกกับ `DOMContentLoaded` หยุดทำงานหลัง navigate แบบ client-side แก้ยังไง?',
+    options: [
+      'ปิด view transitions',
+      'ย้าย initialization ไปที่ event `astro:page-load` ซึ่ง fire หลังทุก navigation',
+      'ใช้ client:only',
+      'reload ทั้งหน้าเอง',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/view-transitions" questions={quizVT} />
+
+<ProgressTracker client:visible id="rendering-and-performance/view-transitions" />

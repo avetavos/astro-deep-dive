@@ -1,0 +1,116 @@
+---
+title: 'Server Islands'
+description: 'server:defer renders a component on the server but defers it — the page ships instantly with a fallback, and the real HTML is fetched and swapped in, letting you cache the shell and defer the personalized or slow part.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem server islands solve
+
+Client islands are about *client-side* interactivity. **Server islands** solve a different problem: a page that is mostly cacheable and static, but has one part that is **personalized or slow** — the logged-in user's avatar, a "recommended for you" strip, a live price that needs a fresh query.
+
+Without server islands you're forced to choose: render the whole page on demand (losing the cache on the 95% that never changes), or give up the personalized part. Server islands let you have both — **cache the shell, defer the dynamic bit.**
+
+## `server:defer`
+
+Add the **`server:defer`** directive to any `.astro` component to turn it into a **server island**. Astro then renders the rest of the page immediately — without waiting for that component — and the deferred component's real HTML is fetched separately and swapped in when ready.
+
+```astro
+---
+import Avatar from '../components/Avatar.astro';
+---
+<Avatar server:defer />
+```
+
+The page's initial HTML ships right away and can be cached at the edge. The `Avatar` renders **on the server** — so it can safely read cookies, a session, or a database — but *out of band*, on its own request, after the shell is already on screen.
+
+## Fallback content with `slot="fallback"`
+
+Because the real content arrives a moment later, you provide **fallback** content to show in the meantime — a skeleton, a spinner, or a generic placeholder — using `slot="fallback"`:
+
+```astro
+---
+import Avatar from '../components/Avatar.astro';
+import GenericAvatar from '../components/GenericAvatar.astro';
+---
+<Avatar server:defer>
+  <GenericAvatar slot="fallback" />
+</Avatar>
+```
+
+The `GenericAvatar` renders into the cached shell immediately; the personalized `Avatar` replaces it once its own server render returns.
+
+<Mermaid title="The page ships with a fallback, then the deferred island is fetched and swapped in" code={diagram} />
+
+export const diagram = `flowchart TB
+  req["request the page"] --> shell["server renders shell instantly (cacheable)"]
+  shell --> fb["fallback shown in place of the island"]
+  fb --> fetch["browser fetches the deferred island"]
+  fetch --> srv["island renders on the server (cookies, session, db)"]
+  srv --> swap["real HTML swapped in over the fallback"]`;
+
+## When to use them (and the adapter requirement)
+
+Server islands are the right tool when a page is **cacheable except for a small dynamic piece**:
+
+- A marketing or product page that's identical for everyone *except* a personalized greeting or cart.
+- A mostly-static page with one **slow** query you don't want blocking first paint.
+- Auth-gated fragments on an otherwise public, CDN-cached page.
+
+Two things to remember. First, `server:defer` renders **on the server**, so it needs an **adapter** installed (Cloudflare, Node, Vercel...) — the same requirement as any on-demand rendering; without one you'll hit the "an adapter is required" error. Second, it's not for client interactivity — if the piece needs to respond to clicks, that's a *client* island (a client directive), possibly in addition. Server islands are about deferring **server-rendered** output, not hydrating JavaScript.
+
+<Callout title="The one-line takeaway">
+`server:defer` turns an `.astro` component into a **server island**: the page's shell renders and ships immediately (so it stays cacheable), while the deferred component renders **on the server on its own request** and its HTML is swapped in over a `slot="fallback"` placeholder when ready. It's the answer to "this page is cacheable except for one personalized or slow part" — cache the shell, defer the dynamic bit. It renders on the server, so it **requires an adapter**, and it's about deferring server output, not client interactivity.
+</Callout>
+
+export const quizServer = [
+  {
+    q: 'What does server:defer do?',
+    options: [
+      'Hydrates a React component on the client',
+      'Turns an .astro component into a server island — the page ships immediately and the component renders on the server out of band, then its HTML is swapped in',
+      'Delays the whole page render until data is ready',
+      'Caches the component in localStorage',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the main use case for a server island?',
+    options: [
+      'Any interactive button',
+      'A page that is mostly cacheable but has one personalized or slow part — cache the shell, defer the dynamic bit',
+      'Loading images lazily',
+      'Sharing state between client islands',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you show something while a server:defer component loads?',
+    options: [
+      'It shows nothing',
+      'Provide fallback content with slot="fallback" (e.g. a skeleton or generic placeholder), which is swapped out when the real HTML arrives',
+      'Use client:load',
+      'A CSS animation is added automatically',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a server island require to run?',
+    options: [
+      'Nothing extra',
+      'An adapter (Cloudflare, Node, Vercel...), because it renders on the server on demand',
+      'A client directive',
+      'A nanostore',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/server-islands" questions={quizServer} />
+
+<ProgressTracker client:visible id="islands/server-islands" />

@@ -1,0 +1,170 @@
+---
+title: 'Styles & Scripts'
+description: 'Scoped vs global CSS, passing values with define:vars, and how a plain script tag really behaves — it runs in the browser but is not an island.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Scoped styles are the default
+
+A `<style>` block inside a `.astro` file is **scoped to that component** automatically. Astro rewrites your selectors (adding a per-component hash) so a rule for `h1` here cannot bleed into another component's `h1`.
+
+```astro
+<h1>Title</h1>
+<p>Body</p>
+<style>
+  h1 { color: rebeccapurple; }   /* only THIS component's h1 */
+  p  { line-height: 1.6; }
+</style>
+```
+
+You write plain, obvious selectors and get component-local CSS — no naming conventions, no CSS-in-JS. This is the default you will use almost everywhere.
+
+## Opting out with `is:global`
+
+Sometimes you genuinely want a rule to apply site-wide — a CSS reset, base typography, a theme. Add `is:global` to opt a whole block out of scoping:
+
+```astro
+<style is:global>
+  :root { --brand: #883AEA; }
+  body { margin: 0; font-family: system-ui; }
+</style>
+```
+
+You can also scope-escape a single selector with the `:global()` function inside an otherwise-scoped block:
+
+```astro
+<style>
+  /* scoped, except this one rule reaches into slotted/child content */
+  :global(.markdown-body a) { color: var(--brand); }
+</style>
+```
+
+## Passing values into CSS with `define:vars`
+
+Frontmatter values are server-side; CSS is static text. To bridge them, `define:vars` injects JavaScript values as **CSS custom properties** on the style block:
+
+```astro
+---
+const accent = "#883AEA";
+const gap = "1.5rem";
+---
+<div class="card">Styled by props</div>
+<style define:vars={{ accent, gap }}>
+  .card {
+    border: 2px solid var(--accent);
+    padding: var(--gap);
+  }
+</style>
+```
+
+Astro emits an inline style carrying `--accent` and `--gap`, so a prop can drive the styling without any client JavaScript. It is the clean way to make a component's colors or spacing configurable by props.
+
+## The `<script>` tag: processed and bundled by default
+
+A `<script>` in a `.astro` file **runs in the browser** — but Astro treats it as a module: it is processed, bundled, TypeScript-compiled, and its imports are resolved, just like any other JS in your build.
+
+```astro
+<button id="menu">Menu</button>
+<script>
+  // Bundled module script. Runs in the browser.
+  import { toggle } from '../scripts/menu';
+  document.getElementById('menu')?.addEventListener('click', toggle);
+</script>
+```
+
+This is real client JavaScript — the one place in this module where code reaches the browser. It is perfect for small, imperative DOM work: wiring an event listener, reading `localStorage`, initializing a third-party widget.
+
+### Opting out with `is:inline`
+
+If you need the script emitted **exactly as written** — not bundled or processed (for an inline analytics snippet, or a script that must run before hydration) — add `is:inline`:
+
+```astro
+<script is:inline>
+  window.dataLayer = window.dataLayer || [];
+</script>
+```
+
+Inline scripts skip bundling, so their `import` statements are not resolved and they are not deduplicated across the page. Use them only when you specifically need the raw, untouched tag.
+
+## The crucial point: a script is NOT an island
+
+This trips up newcomers. A `<script>` runs in the browser, but it does **not** make the surrounding component an island. There is no component hydration, no framework, no re-rendering — it is just a plain script that manipulates the DOM Astro already produced.
+
+```astro
+<!-- This runs, but nothing is "hydrated". It's a script, not an island. -->
+<div id="counter">0</div>
+<script>
+  let n = 0;
+  const el = document.getElementById('counter');
+  document.getElementById('inc')?.addEventListener('click', () => {
+    el.textContent = String(++n);
+  });
+</script>
+```
+
+When you want **component** interactivity — a React/Vue/Svelte component with state that hydrates — that is an **island**, created with a client directive, and it is the entire next module. Rule of thumb: reach for a `<script>` for small imperative DOM tasks; reach for an island when you want a stateful UI component running on the client.
+
+<Mermaid title="Script versus island — two different things" code={diagram} />
+
+export const diagram = `flowchart TB
+  scr["plain script tag"] --> dom["runs in browser, manipulates existing DOM"]
+  dom --> nohy["no component hydration"]
+  isl["island with a client directive"] --> hyd["framework component hydrates"]
+  hyd --> state["has its own state and re-renders"]`;
+
+<Callout title="The one-line takeaway">
+Component `<style>` is **scoped by default**; opt out with `<style is:global>` or a `:global()` selector, and pass props into CSS with `define:vars`. A `<script>` **runs in the browser** and is bundled/processed by default (`is:inline` opts out) — but it is **not an island**: it manipulates existing DOM with no component hydration. For a stateful UI component that hydrates, you need an island (next module).
+</Callout>
+
+export const quizStyles = [
+  {
+    q: 'By default, what is the scope of a `<style>` block in a .astro component?',
+    options: [
+      'Global to the whole site',
+      'Scoped to that component — Astro rewrites selectors so they do not leak',
+      'Only applies in dev mode',
+      'Inline on each element',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you pass a frontmatter value into a component\'s CSS?',
+    options: [
+      'You cannot — CSS is static',
+      '`define:vars={{ ... }}` on the style block, which injects CSS custom properties',
+      'Import the value into the CSS file',
+      'Use a client script to set styles',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A plain `<script>` tag in a .astro component...',
+    options: [
+      'Turns the component into a hydrated island',
+      'Runs in the browser and is bundled by default, but does NOT hydrate the component (it is not an island)',
+      'Never runs in the browser',
+      'Only runs on the server',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does adding `is:inline` to a script do?',
+    options: [
+      'Runs it on the server',
+      'Emits it as written — skipping bundling/processing, so its imports are not resolved',
+      'Scopes it to the component',
+      'Makes it an island',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/styles-and-scripts" questions={quizStyles} />
+
+<ProgressTracker client:visible id="components/styles-and-scripts" />

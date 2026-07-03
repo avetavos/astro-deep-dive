@@ -1,0 +1,139 @@
+---
+title: 'Middleware & Sessions'
+description: 'code ที่รันก่อนทุก request — onRequest middleware และ context.locals — พร้อม server-side session ด้วย Astro.session สำหรับ state ต่อ user และ auth'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Middleware: ประตูหน้าทุก request
+
+Middleware คือ function ตัวเดียวที่รัน **ก่อนทุก request** ถูกจัดการ มันอยู่ใน `src/middleware.ts` และ export `onRequest(context, next)` — คุณทำงาน แล้วเรียก `next()` เพื่อไปต่อยัง page หรือ endpoint (หรือ short-circuit ด้วย `Response` ของตัวเอง)
+
+```ts
+// src/middleware.ts
+import { defineMiddleware } from 'astro:middleware';
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  // Runs for every request, before the route.
+  const token = context.cookies.get('session')?.value;
+  context.locals.user = token ? await getUser(token) : null;  // share data downstream
+
+  // Guard a section of the site.
+  if (context.url.pathname.startsWith('/admin') && !context.locals.user) {
+    return context.redirect('/login');   // short-circuit — never reach the page
+  }
+
+  return next();   // continue to the route
+});
+```
+
+<Mermaid title="middleware รันก่อน route และ short-circuit ได้" code={mwDiagram} />
+
+export const mwDiagram = `sequenceDiagram
+  participant B as Browser
+  participant M as onRequest middleware
+  participant R as Route (page/endpoint)
+  B->>M: request
+  M->>M: read cookies, set context.locals
+  alt not authorized
+    M-->>B: redirect / 403 (short-circuit)
+  else authorized
+    M->>R: next()
+    R-->>B: rendered response
+  end`;
+
+## context.locals: data ที่ share ต่อ request
+
+หัวใจของ middleware คือ **`context.locals`** — object ที่อยู่ตลอดหนึ่ง request อะไรก็ตามที่คุณ set ไว้ (user ปัจจุบัน, request id, feature flag) อ่านได้ในทุก page, endpoint และ action ของ request นั้นผ่าน `Astro.locals` / `context.locals` ของ action มันคือวิธีที่ middleware ส่ง data ที่คำนวณแล้วให้ส่วนที่เหลือของ request โดยไม่ใช้ global state
+
+```astro
+---
+// In any on-demand page — read what middleware put there.
+const user = Astro.locals.user;
+---
+{user ? <p>Hi, {user.name}</p> : <a href="/login">Sign in</a>}
+```
+
+## Sessions: state ต่อ user ข้าม request
+
+`context.locals` อยู่แค่หนึ่ง request การจะจำ user *ข้าม* request — shopping cart, การ login — คุณใช้ **sessions** ระบบ session ของ Astro เก็บ data ฝั่ง server โดย key ด้วย cookie backed ด้วย driver ที่ config ไว้ (memory ตอน dev, KV/Redis/database ตอน production)
+
+```astro
+---
+// Read/write session data in a component script:
+const cart = (await Astro.session?.get('cart')) ?? [];
+---
+<p>{cart.length} items in your cart</p>
+```
+
+```ts
+// In an action handler, context.session is the same session:
+handler: async (input, context) => {
+  const cart = (await context.session?.get('cart')) ?? [];
+  cart.push(input.productId);
+  await context.session?.set('cart', cart);
+  return cart;
+}
+```
+
+session เปิดให้ใช้ `get`, `set` และ `destroy` ตอน logout คุณล้างทุกอย่างด้วย `Astro.session?.destroy()` ซึ่งลบ session cookie และ data ฝั่ง server ต่างจาก cookie ที่คุณ set เอง session data อยู่บน server — cookie เก็บแค่ id ที่ opaque — จึงปลอดภัยสำหรับ state ที่ sensitive
+
+## pattern ของ auth
+
+สามชิ้นนี้ประกอบกันเป็น auth flow มาตรฐาน: **middleware** อ่าน session cookie แล้ววาง user บน `context.locals`; **pages** อ่าน `Astro.locals.user` เพื่อ render UI แบบ signed-in vs signed-out; และ guard ใน middleware redirect request ที่ยังไม่ auth ออกจาก protected route การ login เขียน session การ logout เรียก `destroy()`
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**Middleware** (`src/middleware.ts`, `onRequest(context, next)`) รันก่อนทุก request — อ่าน cookie, set **`context.locals`** เพื่อ share data ต่อ request (เช่น user ปัจจุบัน) ให้ทุก page/endpoint/action และ short-circuit ด้วย redirect เพื่อ guard route **Sessions** (`Astro.session` ใน component, `context.session` ใน action) เก็บ state ต่อ user *ข้าม* request ฝั่ง server ผ่าน `get`/`set`/`destroy` โดยมีแค่ id ที่ opaque ใน cookie รวมกันเป็น auth pattern มาตรฐาน: middleware โหลด user จาก session, pages อ่าน `Astro.locals.user`, guard redirect
+</Callout>
+
+export const quizMiddleware = [
+  {
+    q: '`onRequest` middleware รันเมื่อไร?',
+    options: [
+      'ตอน build เท่านั้น',
+      'ก่อนทุก request — อ่าน cookie, set data, หรือ short-circuit ด้วย Response แล้วเรียก next()',
+      'หลังหน้า render แล้ว',
+      'แค่สำหรับ API endpoint',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`context.locals` มีไว้ทำอะไร?',
+    options: [
+      'storage ถาวรของ database',
+      'data ที่ share ต่อ request — set ใน middleware, อ่าน (ผ่าน Astro.locals) ใน page/endpoint/action ของ request นั้น',
+      'client-side state',
+      'build configuration',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'session ต่างจาก `context.locals` อย่างไร?',
+    options: [
+      'เหมือนกัน',
+      'context.locals อยู่หนึ่ง request; session เก็บ state ต่อ user ข้าม request เก็บฝั่ง server โดย key ด้วย cookie',
+      'session รันบน client',
+      'session เป็น build-time เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณล้าง session ของ user ตอน logout อย่างไร?',
+    options: [
+      'ลบหน้าทิ้ง',
+      '`Astro.session?.destroy()` — ลบ session cookie และ data ฝั่ง server',
+      'reload browser',
+      'set context.locals เป็น null',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/middleware-and-sessions" questions={quizMiddleware} />
+
+<ProgressTracker client:visible id="server-side/middleware-and-sessions" />

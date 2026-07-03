@@ -1,0 +1,140 @@
+---
+title: 'TypeScript & Content Types'
+description: 'การ type props และ Astro.locals, type ที่ Astro generate จาก content schema และการรัน astro check เพื่อ type-check ไฟล์ .astro'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## TypeScript มีมาให้ในตัว
+
+Astro มาพร้อม TypeScript support ในตัว — เขียนไฟล์ `.ts`, type component script และได้ type-checking ใน editor โดยไม่ต้องตั้งอะไร โปรเจกต์ใหม่ extend preset ตัวหนึ่งของ Astro ใน `tsconfig.json`:
+
+```json
+{
+  "extends": "astro/tsconfigs/strict"
+}
+```
+
+preset มี `base`, `strict` และ `strictest` — เลือก `strict` (หรือ `strictest`) สำหรับโปรเจกต์จริง มันเปิด check ที่จับ bug จริง ๆ
+
+## การ type props ของ component
+
+คุณ type props ของ component ด้วยการประกาศ interface `Props` ใน frontmatter Astro ใช้มัน type-check ทุกที่ที่ component ถูกใช้:
+
+```astro
+---
+interface Props {
+  title: string;
+  count?: number;      // optional prop
+}
+const { title, count = 0 } = Astro.props;
+---
+<h1>{title} ({count})</h1>
+```
+
+ส่ง type ผิดหรือลืม prop ที่จำเป็น editor (และ `astro check`) จะเตือนที่จุดเรียกใช้
+
+## type ที่ generate จาก content schema
+
+ตรงนี้แหละที่ typing ของ Astro โดดเด่น เมื่อคุณ define content collection ด้วย Zod schema (จากโมดูล content) Astro **generate TypeScript type** จาก schema นั้น `getCollection` และ `getEntry` จะคืน entry ที่มี type ครบ — editor รู้ทุก field ใน frontmatter และ type ของมัน:
+
+```ts
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog');
+// posts[0].data.title  -> string    (from the schema)
+// posts[0].data.pubDate -> Date     (z.coerce.date())
+// posts[0].data.nope    -> type error: property does not exist
+```
+
+<Mermaid title="schema กลายเป็น type ของคุณ" code={typesDiagram} />
+
+export const typesDiagram = `flowchart LR
+  schema["Zod schema in src/content.config.ts"] --> gen["Astro generates types"]
+  gen --> query["getCollection / getEntry return typed data"]
+  query --> safe["type errors on wrong field access"]`;
+
+type เหล่านี้อยู่ในโฟลเดอร์ `.astro/` ที่ generate ให้ ซึ่ง Astro ดูแลให้เอง (refresh โดย dev server และ `astro sync`) คุณไม่ต้องแก้มัน แค่ได้ autocomplete และความปลอดภัยฟรีจาก schema ที่คุณเขียนไว้แล้ว
+
+## การ type Astro.locals
+
+เมื่อใช้ middleware แนบข้อมูลระดับ request (เช่น user ปัจจุบัน) ไว้ที่ `Astro.locals` คุณ type มันด้วยการประกาศ interface `App.Locals` มักอยู่ใน `src/env.d.ts`:
+
+```ts
+// src/env.d.ts
+declare namespace App {
+  interface Locals {
+    user: { id: string; name: string } | null;
+  }
+}
+```
+
+ตอนนี้ `Astro.locals.user` มี type ทุกที่ — ใน middleware, page และ endpoint
+
+## type-check ด้วย astro check
+
+editor type-check ให้ระหว่างเขียน แต่ไฟล์ `.astro` ไม่ถูก check โดย `tsc` คำสั่งที่ทำคือ **`astro check`** — มัน validate type ข้ามไฟล์ `.astro`, `.ts` และ `.tsx` ต่อมันเข้ากับ build เพื่อให้ type error หยุด deploy ที่พัง:
+
+```json
+{
+  "scripts": {
+    "build": "astro check && astro build"
+  }
+}
+```
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Astro มี **TypeScript ในตัว** (extend `astro/tsconfigs/strict`) type props ของ component ด้วย interface `Props` และ type ข้อมูล request บน `Astro.locals` ผ่าน interface `App.Locals` ฟีเจอร์เด่น: Astro **generate type จาก Zod schema ของ content** ดังนั้น `getCollection`/`getEntry` คืน entry ที่มี type ครบ พร้อม autocomplete และ error เมื่อเข้าถึง field ผิด รัน **`astro check`** (ควรเป็น `astro check && astro build`) เพื่อ type-check ไฟล์ `.astro` และหยุด build ที่พัง
+</Callout>
+
+export const quizTypes = [
+  {
+    q: 'type props ของ component ใน Astro ยังไง?',
+    options: [
+      'ด้วย JSDoc comment อย่างเดียว',
+      'ประกาศ interface `Props` ใน frontmatter Astro type-check การใช้งานกับมัน',
+      'type props ไม่ได้',
+      'ในไฟล์ .d.ts แยกต่อ component',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'type ของ `getCollection(\'blog\')` มาจากไหน?',
+    options: [
+      'คุณเขียนด้วยมือ',
+      'Astro generate จาก Zod schema ของ collection',
+      'จาก database',
+      'เป็น `any` เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'type ข้อมูลที่แนบไว้ที่ `Astro.locals` (เช่นโดย middleware) ยังไง?',
+    options: [
+      'มันไม่มี type',
+      'ประกาศ interface `App.Locals` (มักอยู่ใน src/env.d.ts)',
+      'ใช้ global variable',
+      'ส่งเป็น prop ทุกที่',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`astro check` ทำอะไร?',
+    options: [
+      'รัน test',
+      'type-check ไฟล์ .astro/.ts/.tsx (รันก่อน astro build เพื่อหยุด type error)',
+      'format code',
+      'deploy เว็บ',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/typescript-and-content-types" questions={quizTypes} />
+
+<ProgressTracker client:visible id="tooling-and-production/typescript-and-content-types" />

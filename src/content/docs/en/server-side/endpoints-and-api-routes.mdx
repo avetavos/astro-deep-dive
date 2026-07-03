@@ -1,0 +1,129 @@
+---
+title: 'Endpoints & API Routes'
+description: 'Non-HTML routes — APIRoute handlers that return a Response, reading params and the request body, static vs on-demand endpoints, and how they differ from Actions.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## A route that returns data, not a page
+
+Not every route renders HTML. A file in `src/pages/` with a `.ts` (or `.js`) extension is an **API endpoint**: instead of a template, it exports functions named after HTTP methods (`GET`, `POST`, `PUT`, `DELETE`) that each return a standard `Response`.
+
+```ts
+// src/pages/api/health.ts
+import type { APIRoute } from 'astro';
+
+export const GET: APIRoute = () => {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+```
+
+`GET /api/health` now returns JSON. The `APIRoute` type gives you a typed context argument and a `Response` return — the same web-standard shape as everywhere else in Astro.
+
+## Reading params and the body
+
+The handler receives a context with the request, params, cookies, and more:
+
+```ts
+// src/pages/api/users/[id].ts
+import type { APIRoute } from 'astro';
+
+export const GET: APIRoute = async ({ params }) => {
+  const user = await db.users.find(params.id);   // [id] from the path
+  if (!user) return new Response('Not found', { status: 404 });
+  return Response.json(user);                     // shorthand JSON response
+};
+
+export const POST: APIRoute = async ({ request }) => {
+  const body = await request.json();              // parse the request body
+  const created = await db.users.create(body);
+  return Response.json(created, { status: 201 });
+};
+```
+
+<Mermaid title="An endpoint maps a method to a Response" code={endpointDiagram} />
+
+export const endpointDiagram = `flowchart LR
+  req["GET or POST /api/..."] --> handler["exported handler\n(GET / POST / ...)"]
+  handler --> read["read params, request body, cookies"]
+  read --> resp["return a Response\n(JSON, file, status)"]`;
+
+## Static vs on-demand endpoints
+
+Like pages, endpoints can be built once or run per request:
+
+- **Static** — with `output: 'static'`, a `GET` endpoint runs at **build time** and its `Response` body is written to a file. Great for generating a `rss.xml`, a `sitemap`, or a static JSON API that doesn't change per request. (Static endpoints only support `GET`.)
+- **On-demand** — add `export const prerender = false` (and an adapter) to run the endpoint **per request**, enabling `POST`/`PUT`/`DELETE`, request bodies, and live data.
+
+```ts
+// A dynamic endpoint that handles form posts:
+export const prerender = false;
+```
+
+## Endpoints vs Actions
+
+Both run server code, but they solve different problems:
+
+- An **endpoint** is a raw HTTP route you design yourself — you own the URL, method, status codes, and response shape. Reach for it for webhooks, third-party integrations, file downloads, or a public REST/JSON API.
+- An **Action** (next lesson) is a **type-safe function** you call from your own client code with automatic input validation — no URL or `Response` plumbing. Reach for it for your app's own mutations and forms.
+
+Rule of thumb: **public/external contract → endpoint; internal app logic called from your own frontend → Action.**
+
+<Callout title="The one-line takeaway">
+An **API endpoint** is a `.ts` file in `src/pages/` that exports HTTP-method functions (`GET`, `POST`, …) typed as `APIRoute`, each returning a standard `Response`; the handler reads `params`, the request body, and cookies from its context. Endpoints are **static** (build-time, `GET`-only) unless you add `prerender = false` for on-demand methods. Use an **endpoint** for public/external HTTP contracts (webhooks, REST, downloads) and an **Action** for your own app's internal, type-safe mutations.
+</Callout>
+
+export const quizEndpoints = [
+  {
+    q: 'How do you define an API endpoint in Astro?',
+    options: [
+      'Register routes in the config',
+      'A .ts/.js file in src/pages/ that exports functions named after HTTP methods (GET, POST...) returning a Response',
+      'A special .api.astro file',
+      'Endpoints are not supported',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A static (build-time) endpoint supports which method(s)?',
+    options: [
+      'All methods',
+      'Only GET (its Response is written to a file at build time)',
+      'Only POST',
+      'None',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When should you use an Action instead of an endpoint?',
+    options: [
+      'For a public webhook',
+      'For your own app’s internal, type-safe mutations called from your frontend (with automatic input validation)',
+      'For serving a static file',
+      'Never — they are identical',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does an endpoint handler return?',
+    options: [
+      'JSX',
+      'A standard web `Response` (JSON, a file, a status code, etc.)',
+      'An Astro component',
+      'A string only',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/endpoints-and-api-routes" questions={quizEndpoints} />
+
+<ProgressTracker client:visible id="server-side/endpoints-and-api-routes" />

@@ -1,0 +1,140 @@
+---
+title: 'Sharing State Across Islands'
+description: 'Islands are isolated by design, so their state does not automatically share — how to pass serializable props from the server, use nanostores for cross-island state, and pass server-rendered children through slots.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The isolation problem
+
+Islands hydrate independently — that's what makes them cheap. But it has a consequence that trips people up coming from a SPA: **two islands do not share state automatically.** A React `useState` in one island is invisible to another island, even one made from the same framework. There is no shared app tree; each island is its own little root.
+
+So how do a "add to cart" island and a "cart count" island in the header stay in sync? You have three tools, from simplest to most powerful.
+
+## 1. Pass serializable props from the server
+
+If the data is known when the page renders, the simplest answer is to compute it once in the `.astro` file and hand it to each island as a **prop**. No cross-island coordination needed — the server is the shared source.
+
+```astro
+---
+import CartBadge from '../components/CartBadge.jsx';
+const initialCount = await getCartCount(Astro.request);
+---
+<CartBadge count={initialCount} client:load />
+```
+
+This covers *initial* state. It doesn't help when one island needs to *update* another at runtime — that's what a store is for.
+
+## 2. nanostores for cross-island shared state
+
+When islands must react to each other at runtime, use a **shared store** that lives outside any single island. Astro's docs recommend **nanostores** — it's tiny, framework-agnostic, and has adapters for each framework (`@nanostores/react`, `@nanostores/vue`, ...). You define the store once and any island can read and write it.
+
+```js
+// src/stores/cart.js
+import { atom } from 'nanostores';
+export const cartCount = atom(0);
+```
+
+```jsx
+// AddToCart.jsx (React island)
+import { cartCount } from '../stores/cart.js';
+export default function AddToCart() {
+  return <button onClick={() => cartCount.set(cartCount.get() + 1)}>Add</button>;
+}
+```
+
+```jsx
+// CartBadge.jsx (another React island, elsewhere on the page)
+import { useStore } from '@nanostores/react';
+import { cartCount } from '../stores/cart.js';
+export default function CartBadge() {
+  const count = useStore(cartCount);   // re-renders when the store changes
+  return <span>Cart: {count}</span>;
+}
+```
+
+Now clicking "Add" in one island updates the badge in a completely separate island — because both subscribe to the same store, not to each other.
+
+<Mermaid title="Two isolated islands sharing one nanostore" code={diagram} />
+
+export const diagram = `flowchart TB
+  store["nanostore: cartCount"]
+  add["AddToCart island — writes"] --> store
+  store --> badge["CartBadge island — reads and re-renders"]`;
+
+## 3. Slots: pass server-rendered children into an island
+
+Sometimes you don't need shared *state* — you need to put **server-rendered content** inside an interactive shell. A framework island can accept a `<slot />` the same way an `.astro` component does, so an interactive `<Tabs>` island can wrap static, server-rendered panels. The shell is interactive; the content ships as HTML with no extra island JS.
+
+```astro
+---
+import Accordion from '../components/Accordion.jsx';
+---
+<Accordion client:visible>
+  <p>This paragraph is server-rendered HTML, passed into the island via its slot.</p>
+</Accordion>
+```
+
+## Choosing among the three
+
+- Data known at render time, no runtime updates → **props from the server**.
+- Islands must update each other at runtime → **a nanostore**.
+- You need interactive chrome around static content → **a slot**.
+
+Reach for a store only when you genuinely have runtime coordination between separate islands. Most "shared state" needs turn out to be initial props or slots, which ship less JavaScript.
+
+<Callout title="The one-line takeaway">
+Islands are **isolated** — state does not automatically flow between them. Three tools, in order of reach: pass **serializable props** from the `.astro` file when the data is known at render time; use a **nanostore** (framework-agnostic, with `@nanostores/react`/`vue`/... adapters) when separate islands must update each other at runtime; and use a **`<slot />`** to place server-rendered content inside an interactive island. Default to props and slots; reach for a store only for genuine runtime coordination.
+</Callout>
+
+export const quizState = [
+  {
+    q: 'Why doesn\'t a useState in one island show up in another island?',
+    options: [
+      'Because Astro disables hooks',
+      'Because islands hydrate independently — each is its own root with no shared app tree, so their state is isolated',
+      'Because state only works on the server',
+      'It does share automatically',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the recommended way to share state that must update at runtime across separate islands?',
+    options: [
+      'A global window variable',
+      'A framework-agnostic store like nanostores that both islands subscribe to',
+      'Re-fetching the page',
+      'Passing a callback prop between them',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You need the initial cart count in two islands, with no runtime updates between them. Simplest approach?',
+    options: [
+      'A nanostore',
+      'Compute it once in the .astro file and pass it as a serializable prop to each island',
+      'A WebSocket',
+      'Duplicate the fetch inside each island',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does passing children through a slot into a framework island let you do?',
+    options: [
+      'Share React state globally',
+      'Wrap server-rendered static content inside an interactive island shell, without shipping that content as extra island JS',
+      'Bypass the serializable-props rule for functions',
+      'Nothing — islands cannot have slots',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/sharing-state" questions={quizState} />
+
+<ProgressTracker client:visible id="islands/sharing-state" />

@@ -1,0 +1,153 @@
+---
+title: 'Markdown & MDX'
+description: 'Markdown and MDX pages, frontmatter, applying a layout to content, embedding components in MDX, and when to reach for .md versus .mdx.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Markdown as pages
+
+Drop a `.md` file into `src/pages/` and it becomes a route, rendered to HTML — the same file-based routing as `.astro`. It is the fastest way to author content.
+
+```md
+---
+title: Hello World
+---
+
+# {frontmatter.title}
+
+This is **Markdown**. Astro renders it to HTML at build time.
+```
+
+At the top is **frontmatter** — a YAML block delimited by `---` — holding metadata like `title` or `date`. Inside the Markdown body you can reference those values through the `frontmatter` object.
+
+## Applying a layout to Markdown
+
+Raw Markdown renders as a bare HTML fragment with no shell. To wrap it in your site chrome, point the `layout` frontmatter key at a layout component:
+
+```md
+---
+layout: ../../layouts/BaseLayout.astro
+title: Hello World
+---
+
+# Content here goes into the layout's default slot.
+```
+
+The layout receives the page's frontmatter as props (via `Astro.props.frontmatter`), and the rendered Markdown fills the layout's default `<slot />`:
+
+```astro
+---
+// src/layouts/BaseLayout.astro
+const { frontmatter } = Astro.props;
+---
+<html>
+  <head><title>{frontmatter.title}</title></head>
+  <body>
+    <article><slot /></article>   <!-- the Markdown body lands here -->
+  </body>
+</html>
+```
+
+## MDX: Markdown plus components
+
+`.mdx` is Markdown with JSX-like power. The headline feature: you can **import and render components** — Astro or framework components — right inside your prose.
+
+```mdx
+---
+title: Release notes
+layout: ../../layouts/BaseLayout.astro
+---
+import Callout from '../../components/Callout.astro';
+import Chart from '../../components/Chart.jsx';
+
+# {frontmatter.title}
+
+Regular Markdown paragraphs work as usual.
+
+<Callout title="Heads up">
+  You can drop a component into the middle of prose.
+</Callout>
+
+And even an interactive island:
+
+<Chart client:visible data={[1, 2, 3]} />
+```
+
+MDX is enabled by the `@astrojs/mdx` integration. Once installed, `.mdx` files are pages (or collection entries) that mix content and components freely — including islands with client directives, since MDX composes with everything else in Astro.
+
+<Mermaid title="Markdown renders to HTML; MDX also embeds components" code={diagram} />
+
+export const diagram = `flowchart LR
+  md["Markdown or MDX file"] --> fm["frontmatter provides metadata"]
+  fm --> layout["layout key wraps it in a shell"]
+  md --> body["body renders to HTML"]
+  body --> comp["MDX can also embed Astro and framework components"]
+  layout --> out["final page"]
+  comp --> out`;
+
+## `.md` versus `.mdx`
+
+Reach for **`.md`** when the file is pure content — a blog post, a doc page, notes. It is simpler and has no component overhead.
+
+Reach for **`.mdx`** when the content needs to embed components — a callout box, a chart, an interactive demo, a reusable figure. The cost is the extra integration and slightly heavier processing, so do not default everything to MDX; use it where you actually mix content and components.
+
+## A note on content collections
+
+Putting Markdown files directly in `src/pages/` works, but it does not scale to a large blog or docs site: there is no schema validation, no typed frontmatter, no querying. The modern way to manage **many** Markdown/MDX files is **content collections** — a typed, validated, queryable content layer — which is the entire focus of the next module. Loose pages are fine for a handful of files; collections are how you run real content sites.
+
+<Callout title="The one-line takeaway">
+`.md` and `.mdx` files in `src/pages/` are routes rendered to HTML, with **frontmatter** for metadata and a `layout` key to wrap the content in a shell (the body fills the layout's `<slot />`). **MDX** adds the ability to import and render components — including islands — inside prose. Use `.md` for pure content and `.mdx` when you need components; and for **many** files, graduate to typed **content collections** (next module).
+</Callout>
+
+export const quizMarkdown = [
+  {
+    q: 'How do you wrap a Markdown page in your site\'s shell?',
+    options: [
+      'Import the layout in the Markdown body',
+      'Set the `layout` frontmatter key to a layout component; the rendered Markdown fills its default slot',
+      'Markdown cannot use layouts',
+      'Wrap it in a `<div>`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the defining capability of MDX over plain Markdown?',
+    options: [
+      'It renders faster',
+      'You can import and render components (including islands) inside the prose',
+      'It supports frontmatter',
+      'It supports headings',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When should you prefer `.md` over `.mdx`?',
+    options: [
+      'Always — .mdx is deprecated',
+      'When the file is pure content with no components — .md is simpler and lighter',
+      'Only for the homepage',
+      'Never — .mdx is always better',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the modern way to manage MANY Markdown/MDX files at scale?',
+    options: [
+      'Put them all in src/pages/',
+      'Content collections — a typed, validated, queryable content layer (next module)',
+      'A database',
+      'One giant .mdx file',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/markdown-and-mdx" questions={quizMarkdown} />
+
+<ProgressTracker client:visible id="components/markdown-and-mdx" />

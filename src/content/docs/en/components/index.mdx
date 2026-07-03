@@ -1,0 +1,79 @@
+---
+title: 'Components & Templating'
+description: 'The .astro template language up close — expressions, styles and scripts, slots and composition, and Markdown/MDX. How you actually author the HTML Astro ships.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## From "what a component is" to "how you write one"
+
+Foundations gave you the mental model: an `.astro` component is a server-rendered function of props that returns HTML. This module zooms into the **template language** itself — the exact syntax you use to turn data into markup, style it, sprinkle in browser behavior, and compose components together.
+
+Nothing here hydrates or ships a framework. That is the next module (Islands). Here we stay on the server side of the line: the expressions, styles, slots, and Markdown that produce your HTML.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Astro syntax deep dive | Expressions, conditionals, loops, Fragments, `set:html`, spread attributes |
+| Styles & scripts | Scoped vs global CSS, `define:vars`, and how `<script>` really behaves |
+| Slots & composition | Named slots, fallback content, checking slots, building layouts |
+| Markdown & MDX | Markdown pages, applying layouts, and using components inside `.mdx` |
+
+<Mermaid title="What turns your template into shipped HTML" code={diagram} />
+
+export const diagram = `flowchart LR
+  data["props and data"] --> tmpl["template: expressions, loops, slots"]
+  css["scoped styles"] --> tmpl
+  tmpl --> html["rendered HTML plus scoped CSS"]
+  html --> ship["shipped to the browser, zero JS by default"]`;
+
+## The through-line
+
+Every feature in this module is a way to describe HTML more expressively while keeping the zero-JS-by-default promise. Expressions and loops let data drive the markup. Scoped styles keep CSS local without ceremony. Slots let components wrap content they do not know in advance. And Markdown/MDX let you write content in prose while still dropping in components where you need them.
+
+<Callout title="The one-line takeaway">
+This module is the `.astro` **template language up close**: expressions and control flow that turn data into markup, scoped styles and scripts, slots for composition, and Markdown/MDX for content. It all runs on the **server** to produce HTML — interactivity comes later, in Islands.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What layer of Astro does this module focus on?',
+    options: [
+      'Client-side hydration and framework islands',
+      'The .astro template language that produces HTML on the server — expressions, styles, slots, Markdown',
+      'Deployment and adapters',
+      'Database access',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'By default, what does the templating covered here ship to the browser?',
+    options: [
+      'A JavaScript bundle for each component',
+      'Rendered HTML plus scoped CSS, with zero JavaScript by default',
+      'Only the frontmatter',
+      'Nothing until hydrated',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which topic belongs to the NEXT module, not this one?',
+    options: [
+      'Scoped styles',
+      'Named slots',
+      'Hydrating an interactive island with a client directive',
+      'Looping over data with `{items.map(...)}`',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="components/index" />

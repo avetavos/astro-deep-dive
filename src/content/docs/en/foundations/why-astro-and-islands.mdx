@@ -1,0 +1,115 @@
+---
+title: 'Why Astro & Islands'
+description: 'The problem with shipping a whole SPA for a content site, the islands architecture, and the zero-JS-by-default thesis that makes Astro fast.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem: shipping a framework to render text
+
+Most of the web is content: blogs, docs, marketing sites, e-commerce listings. Building those with a client-rendered SPA means the browser downloads a large JavaScript bundle, boots the framework, and re-renders — on the client — HTML that could have been sent as plain HTML in the first place.
+
+The cost is real: slower first paint, delayed interactivity (the "uncanny valley" where the page looks ready but doesn't respond), and a lot of CPU spent hydrating parts of the page that are never interactive — a footer, an article body, a nav bar.
+
+The insight Astro is built on: **for content sites, the HTML is the product. JavaScript should be the exception, not the substrate.**
+
+## The islands architecture
+
+Astro renders the whole page to static HTML, then treats each interactive component as an **island** — a small, independently-hydrated piece in a sea of static HTML.
+
+<Mermaid title="A page is static HTML with a few hydrated islands" code={islandDiagram} />
+
+export const islandDiagram = `flowchart TB
+  page["Page: static HTML (no JS)"]
+  page --> nav["nav — static"]
+  page --> article["article body — static"]
+  page --> search["SearchBox — island (hydrated)"]
+  page --> cart["CartWidget — island (hydrated)"]
+  page --> footer["footer — static"]`;
+
+Two properties define an island:
+
+- **Isolated.** Each island hydrates on its own, with its own JavaScript, independent of the others. A slow-to-load carousel doesn't block a search box.
+- **Opt-in.** Nothing is interactive unless you *mark* it so (with a client directive — a whole later lesson). The default is static HTML with no JavaScript at all.
+
+Contrast this with a SPA, where the *entire* page is one JavaScript application that must boot before anything works. Islands ship JavaScript only for the components that need it, and only that much.
+
+## Zero JS by default
+
+This is the headline: an Astro component, by default, produces **HTML and CSS and no JavaScript**. Write a component with a button and an `onClick`, and — unless you turn it into an island — the button renders, but the handler never ships. That's not a limitation; it's the point. You're forced to be deliberate about what runs on the client.
+
+```astro
+---
+// This component runs on the server to produce HTML.
+// None of this JavaScript is sent to the browser.
+const posts = await getPosts();
+---
+<ul>
+  {posts.map((post) => <li>{post.title}</li>)}
+</ul>
+<!-- Ships: an HTML <ul>. Ships: no JavaScript. -->
+```
+
+The result is pages that are fast by construction: the browser gets HTML it can paint immediately, and downloads JavaScript only for the islands you explicitly opted into.
+
+## When Astro is (and isn't) the right tool
+
+Astro shines for **content-driven sites**: blogs, documentation, marketing, portfolios, e-commerce, anything where most of the page is content and interactivity is localized.
+
+It's a weaker fit for **highly interactive app-like UIs** — a figma-style editor, a trading dashboard, a realtime collaborative tool — where nearly everything is stateful and interactive. There, a full SPA framework (or Astro with very large islands, which defeats the purpose) makes more sense. Astro even lets you embed those framework components as islands when you need them.
+
+<Callout title="The one-line takeaway">
+Astro renders pages to static HTML and ships **zero JavaScript by default**; interactivity is added deliberately as **islands** — small, isolated, individually-hydrated components in an otherwise static page. That makes content sites fast by construction (paint HTML immediately, download JS only for the few interactive pieces). It's the right tool for content-driven sites, and a weaker fit for fully app-like, everything-is-interactive UIs.
+</Callout>
+
+export const quizWhy = [
+  {
+    q: 'What is the main cost of building a content site as a client-rendered SPA?',
+    options: [
+      'It cannot use CSS',
+      'The browser downloads and boots a framework to render HTML that could have been sent as plain HTML, hurting first paint and time-to-interactive',
+      'It requires a database',
+      'It only works offline',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What are the two defining properties of an island?',
+    options: [
+      'Global and mutable',
+      'Isolated (hydrates independently) and opt-in (nothing is interactive unless marked)',
+      'Server-only and cached',
+      'Encrypted and compressed',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'By default, how much JavaScript does an Astro component ship?',
+    options: [
+      'The whole framework',
+      'None — it produces HTML and CSS with no client JavaScript unless you make it an island',
+      'One bundle per page',
+      'Only the event handlers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which project is the WEAKEST fit for Astro?',
+    options: [
+      'A documentation site',
+      'A marketing landing page',
+      'A realtime collaborative editor where nearly everything is interactive',
+      'A blog',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="foundations/why-astro-and-islands" questions={quizWhy} />
+
+<ProgressTracker client:visible id="foundations/why-astro-and-islands" />

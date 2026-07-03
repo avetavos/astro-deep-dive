@@ -1,0 +1,191 @@
+---
+title: 'Astro Syntax Deep Dive'
+description: 'Template expressions, conditionals and loops, Fragments, set:html and set:text, spread attributes, and dynamic tags — the JSX-like syntax that turns data into markup.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Expressions: `{ }` drops into JavaScript
+
+Anywhere in the template, `{ }` embeds a JavaScript expression whose value is rendered. Variables from the frontmatter are in scope.
+
+```astro
+---
+const name = "Ada";
+const count = 3;
+---
+<h1>Hello, {name}</h1>
+<p>You have {count} messages.</p>
+<p>Total: {count * 2}</p>
+```
+
+Only **expressions** go inside `{ }` — things that evaluate to a value. Statements (an `if` block, a `for` loop) belong in the frontmatter; in the template you express control flow as expressions, shown below.
+
+## Conditionals
+
+Use the logical-AND idiom to render something only when a condition is true, and a ternary to choose between two branches:
+
+```astro
+---
+const isLoggedIn = true;
+const user = { name: "Ada", role: "admin" };
+---
+{isLoggedIn && <p>Welcome back, {user.name}</p>}
+
+{user.role === "admin"
+  ? <a href="/admin">Admin panel</a>
+  : <a href="/account">Your account</a>}
+```
+
+`{cond && <div/>}` renders the element when `cond` is truthy, and nothing otherwise. The ternary always renders one of the two branches.
+
+## Loops
+
+There is no special loop directive — you `map` an array to markup, exactly like JSX:
+
+```astro
+---
+const posts = [
+  { id: 1, title: "First" },
+  { id: 2, title: "Second" },
+];
+---
+<ul>
+  {posts.map((post) => <li>{post.title}</li>)}
+</ul>
+```
+
+Astro does not require a `key` prop the way React does — this is server rendering, there is no reconciliation. Map, return elements, done.
+
+## Fragments: grouping without a wrapper
+
+When you need to return several elements without adding a wrapping DOM node, use a **Fragment**. Astro supports both the named `<Fragment>` and the shorthand `<>`:
+
+```astro
+---
+const items = ["a", "b"];
+---
+<Fragment>
+  <dt>Term</dt>
+  <dd>Definition</dd>
+</Fragment>
+
+{items.map((x) => (
+  <>
+    <span>{x}</span>
+    <br />
+  </>
+))}
+```
+
+Fragments are also where `set:*` directives live when you have no element to attach them to (next).
+
+## Rendering raw HTML: `set:html` and `set:text`
+
+By default, an expression that produces a string is **escaped** — Astro renders it as text, so `<b>hi</b>` shows the tags literally. That is safe. When you have a trusted HTML string you genuinely want rendered as markup (say, HTML from a CMS you control), use `set:html`:
+
+```astro
+---
+const fromCms = "<strong>Bold from the CMS</strong>";
+const plain = "<not a tag>";
+---
+<div set:html={fromCms} />     <!-- renders as real bold markup -->
+<div set:text={plain} />       <!-- renders the characters, escaped -->
+<Fragment set:html={fromCms} /> <!-- no wrapper element -->
+```
+
+`set:html` **bypasses escaping** — only use it on content you trust, or you open an XSS hole. `set:text` forces the value to be treated as plain text (the safe default made explicit).
+
+## Spread attributes
+
+When you have an object of attributes, spread it onto an element with `{...obj}` — handy for passing through props:
+
+```astro
+---
+const attrs = { id: "cta", class: "btn", "data-track": "signup" };
+---
+<a href="/join" {...attrs}>Join</a>
+```
+
+## Dynamic tag names
+
+You can compute *which* element to render. Assign a capitalized variable to a tag name and use it:
+
+```astro
+---
+const level = 2;
+const Heading = `h${level}`;   // "h2"
+---
+<Heading>Dynamic heading</Heading>   <!-- renders <h2>Dynamic heading</h2> -->
+```
+
+The variable must be **capitalized** so Astro treats it as a component/tag reference rather than a literal HTML tag.
+
+<Mermaid title="How a template expression becomes HTML" code={diagram} />
+
+export const diagram = `flowchart LR
+  expr["expression in curly braces"] --> eval["evaluated on the server"]
+  eval --> esc["string values are escaped by default"]
+  esc --> html["safe HTML output"]
+  eval --> raw["set:html bypasses escaping for trusted HTML"]
+  raw --> html`;
+
+## HTML attribute names, not JSX names
+
+A subtle but important difference from React: Astro templates use **standard HTML attribute names**. It is `class`, not `className`; `for`, not `htmlFor`. You are writing a superset of HTML, so the HTML names are the real ones.
+
+<Callout title="The one-line takeaway">
+Astro templating is JSX-like but HTML-native: `{ }` embeds expressions, `{cond && <el/>}` and ternaries handle conditionals, `{items.map(...)}` handles loops (no `key` needed), and `<Fragment>` / `<>` group without a wrapper. `set:html` renders a **trusted** raw HTML string (bypassing escaping — an XSS risk on untrusted input), `set:text` forces plain text, and `{...obj}` spreads attributes. Use real HTML attribute names — `class`, not `className`.
+</Callout>
+
+export const quizSyntax = [
+  {
+    q: 'How do you render a list from an array in an Astro template?',
+    options: [
+      'A special <For> directive',
+      '`{items.map((item) => <li>{item}</li>)}` — plain JS map, no key required',
+      'A for loop in the template',
+      'You cannot loop in templates',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `set:html` do, and what is the risk?',
+    options: [
+      'It escapes HTML; no risk',
+      'It renders a string as raw HTML, bypassing escaping — an XSS risk if the content is not trusted',
+      'It sets an element id',
+      'It imports an HTML file',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You want to return two sibling elements without adding a wrapper node. What do you use?',
+    options: [
+      'A `<div>`',
+      'A Fragment — `<Fragment>` or the `<>` shorthand',
+      'A `<span>`',
+      'Two separate components',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which attribute name is correct in an Astro template?',
+    options: [
+      '`className`',
+      '`class` — Astro uses standard HTML attribute names, not JSX names',
+      '`htmlFor`',
+      'Both className and class work identically',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/astro-syntax-deep" questions={quizSyntax} />
+
+<ProgressTracker client:visible id="components/astro-syntax-deep" />

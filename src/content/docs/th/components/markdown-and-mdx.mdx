@@ -1,0 +1,153 @@
+---
+title: 'Markdown & MDX'
+description: 'หน้า Markdown กับ MDX, frontmatter, การใส่ layout ให้ content, การฝัง component ใน MDX และเมื่อไหร่ควรใช้ .md กับ .mdx'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Markdown เป็นหน้า
+
+วางไฟล์ `.md` ลงใน `src/pages/` แล้วมันจะกลายเป็น route ที่ render เป็น HTML — file-based routing แบบเดียวกับ `.astro` เป็นวิธีที่เร็วที่สุดในการเขียน content
+
+```md
+---
+title: Hello World
+---
+
+# {frontmatter.title}
+
+This is **Markdown**. Astro renders it to HTML at build time.
+```
+
+บนสุดคือ **frontmatter** — บล็อก YAML คั่นด้วย `---` — เก็บ metadata อย่าง `title` หรือ `date` ภายใน body ของ Markdown คุณอ้างถึงค่าพวกนั้นผ่าน object `frontmatter` ได้
+
+## ใส่ layout ให้ Markdown
+
+Markdown ดิบ ๆ render ออกมาเป็น HTML fragment เปล่า ๆ ไม่มี shell ในการห่อมันด้วย chrome ของไซต์ ให้ชี้ key `layout` ใน frontmatter ไปที่ component layout
+
+```md
+---
+layout: ../../layouts/BaseLayout.astro
+title: Hello World
+---
+
+# Content here goes into the layout's default slot.
+```
+
+layout จะได้รับ frontmatter ของหน้าเป็น props (ผ่าน `Astro.props.frontmatter`) และ Markdown ที่ render แล้วจะเติมลงใน default `<slot />` ของ layout
+
+```astro
+---
+// src/layouts/BaseLayout.astro
+const { frontmatter } = Astro.props;
+---
+<html>
+  <head><title>{frontmatter.title}</title></head>
+  <body>
+    <article><slot /></article>   <!-- the Markdown body lands here -->
+  </body>
+</html>
+```
+
+## MDX: Markdown บวก component
+
+`.mdx` คือ Markdown ที่มีพลังแบบ JSX ฟีเจอร์เด่น: คุณ **import แล้ว render component** — component Astro หรือ framework — ได้ตรงในร้อยแก้วของคุณ
+
+```mdx
+---
+title: Release notes
+layout: ../../layouts/BaseLayout.astro
+---
+import Callout from '../../components/Callout.astro';
+import Chart from '../../components/Chart.jsx';
+
+# {frontmatter.title}
+
+Regular Markdown paragraphs work as usual.
+
+<Callout title="Heads up">
+  You can drop a component into the middle of prose.
+</Callout>
+
+And even an interactive island:
+
+<Chart client:visible data={[1, 2, 3]} />
+```
+
+MDX เปิดใช้ด้วย integration `@astrojs/mdx` เมื่อติดตั้งแล้ว ไฟล์ `.mdx` เป็นหน้า (หรือ entry ของ collection) ที่ผสม content กับ component ได้อย่างอิสระ — รวมถึง island ที่มี client directive เพราะ MDX ประกอบกับทุกอย่างใน Astro ได้
+
+<Mermaid title="Markdown render เป็น HTML; MDX ฝัง component ได้ด้วย" code={diagram} />
+
+export const diagram = `flowchart LR
+  md["Markdown or MDX file"] --> fm["frontmatter provides metadata"]
+  fm --> layout["layout key wraps it in a shell"]
+  md --> body["body renders to HTML"]
+  body --> comp["MDX can also embed Astro and framework components"]
+  layout --> out["final page"]
+  comp --> out`;
+
+## `.md` กับ `.mdx`
+
+หยิบ **`.md`** มาใช้เมื่อไฟล์เป็น content ล้วน ๆ — บล็อกโพสต์, หน้า doc, โน้ต มันเรียบง่ายกว่าและไม่มี overhead ของ component
+
+หยิบ **`.mdx`** มาใช้เมื่อ content ต้องฝัง component — กล่อง callout, chart, demo ที่ interactive, figure ที่ใช้ซ้ำได้ ต้นทุนคือ integration เพิ่มและการ process ที่หนักขึ้นเล็กน้อย ดังนั้นอย่า default ทุกอย่างเป็น MDX ใช้มันตรงที่คุณผสม content กับ component จริง ๆ
+
+## หมายเหตุเรื่อง content collection
+
+การวางไฟล์ Markdown ตรง ๆ ใน `src/pages/` ใช้ได้ แต่มันไม่สเกลไปยังบล็อกหรือไซต์ doc ขนาดใหญ่: ไม่มี schema validation, ไม่มี frontmatter ที่มี type, ไม่มีการ query วิธีสมัยใหม่ในการจัดการไฟล์ Markdown/MDX **จำนวนมาก** คือ **content collection** — ชั้น content ที่มี type, validate และ query ได้ — ซึ่งเป็นเนื้อหาทั้งหมดของโมดูลถัดไป หน้าหลวม ๆ โอเคสำหรับไฟล์ไม่กี่ไฟล์; collection คือวิธีรันไซต์ content จริงจัง
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ไฟล์ `.md` และ `.mdx` ใน `src/pages/` เป็น route ที่ render เป็น HTML โดยมี **frontmatter** สำหรับ metadata และ key `layout` เพื่อห่อ content ใน shell (body เติมลง `<slot />` ของ layout) **MDX** เพิ่มความสามารถ import แล้ว render component — รวมถึง island — ในร้อยแก้ว ใช้ `.md` สำหรับ content ล้วน ๆ และ `.mdx` เมื่อต้องการ component; และสำหรับไฟล์ **จำนวนมาก** ให้เลื่อนขั้นไปใช้ **content collection** ที่มี type (โมดูลถัดไป)
+</Callout>
+
+export const quizMarkdown = [
+  {
+    q: 'คุณห่อหน้า Markdown ด้วย shell ของไซต์ยังไง?',
+    options: [
+      'import layout ใน body ของ Markdown',
+      'ตั้งค่า key `layout` ใน frontmatter ให้เป็น component layout; Markdown ที่ render แล้วเติมลง default slot ของมัน',
+      'Markdown ใช้ layout ไม่ได้',
+      'ห่อมันใน `<div>`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ความสามารถที่นิยาม MDX เหนือ Markdown ธรรมดาคืออะไร?',
+    options: [
+      'มัน render เร็วกว่า',
+      'คุณ import แล้ว render component (รวมถึง island) ในร้อยแก้วได้',
+      'มันรองรับ frontmatter',
+      'มันรองรับ heading',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อไหร่ควรใช้ `.md` มากกว่า `.mdx`?',
+    options: [
+      'เสมอ — .mdx เลิกใช้แล้ว',
+      'เมื่อไฟล์เป็น content ล้วน ๆ ไม่มี component — .md เรียบง่ายและเบากว่า',
+      'เฉพาะหน้าแรก',
+      'ไม่มีวันใช้ — .mdx ดีกว่าเสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วิธีสมัยใหม่ในการจัดการไฟล์ Markdown/MDX จำนวนมากในสเกลใหญ่คืออะไร?',
+    options: [
+      'วางทั้งหมดใน src/pages/',
+      'content collection — ชั้น content ที่มี type, validate และ query ได้ (โมดูลถัดไป)',
+      'database',
+      'ไฟล์ .mdx ยักษ์ไฟล์เดียว',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/markdown-and-mdx" questions={quizMarkdown} />
+
+<ProgressTracker client:visible id="components/markdown-and-mdx" />

@@ -1,0 +1,105 @@
+---
+title: 'Client Directives'
+description: 'client directive ทั้งห้าตัว — client:load, client:idle, client:visible, client:media และ client:only — กับวิธีเลือกตัวที่ส่ง JavaScript น้อยที่สุดสำหรับ interactivity ที่ต้องการ.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เปลี่ยน component ให้เป็น island
+
+framework component ที่ import เข้ามาในไฟล์ `.astro` จะ render เป็น **static HTML** — ไม่มี interactivity — จนกว่าเราจะเพิ่ม **client directive** ให้ directive บอก Astro สองอย่าง: *hydrate component นี้บน client* และ *เมื่อไหร่* ให้ทำ
+
+```astro
+---
+import Counter from '../components/Counter.jsx';
+---
+<Counter />                    <!-- static HTML, no JS ships -->
+<Counter client:load />        <!-- an island: hydrates immediately -->
+```
+
+คำว่า "เมื่อไหร่" คือหัวใจทั้งหมด hydrate เร็วขึ้นทำให้ component interactive เร็วขึ้น แต่แลกด้วย JavaScript ที่โหลดล่วงหน้าและเวลาบน main thread ส่วน hydrate ช้าลงทำให้หน้าเบา แต่ interactivity มาช้า directive แต่ละตัวคือจุดที่ต่างกันบนเส้น trade-off นี้
+
+## directive ทั้งห้าตัว
+
+- **`client:load`** — hydrate **ทันที** ตั้งแต่หน้าโหลด ใช้กับ control ที่อยู่เหนือ fold และต้องทำงานได้ทันทีที่หน้าใช้งานได้: search ที่ header, toggle สำคัญ ๆ เป็นตัวที่ขยันที่สุดและแพงที่สุด
+- **`client:idle`** — hydrate ตอน browser **idle** (ผ่าน `requestIdleCallback`) หลังงานหลักของการโหลดเสร็จแล้ว เหมาะกับ interactivity ที่สำคัญแต่ไม่ต้องทันที — มันรอจังหวะที่ว่าง
+- **`client:visible`** — hydrate ตอน component **scroll เข้ามาในจอ** (ผ่าน `IntersectionObserver`) เป็น default ที่ดีที่สุดสำหรับอะไรก็ตามที่อยู่ใต้ fold: widget comment, ฟอร์ม newsletter ที่ footer, carousel ที่อยู่ลึกลงไปในหน้า JavaScript ของมันจะไม่ถูกโหลดเลยถ้า user ไม่ scroll ไปถึง
+- **`client:media`** — hydrate เฉพาะตอน **CSS media query match** เช่น `client:media="(max-width: 50em)"` ใช้กับ interactivity ที่มีเฉพาะบาง breakpoint — เมนู hamburger ที่มีเฉพาะบน mobile ซึ่งไม่มีความหมายบน desktop
+- **`client:only="react"`** — **ข้าม server rendering ทั้งหมด** และ render บน client เท่านั้น เราต้องระบุชื่อ framework (`"react"`, `"vue"`, `"svelte"`, ...) เพราะ Astro จะไม่ render มันบน server เพื่อตรวจว่าเป็น framework อะไร ใช้กับ component ที่ render บน server ไม่ได้เลย — พวกที่แตะ `window`, `localStorage` หรือ library ที่ใช้ได้แค่บน browser ตั้งแต่ render ครั้งแรก
+
+<Mermaid title="แต่ละ directive hydrate เมื่อไหร่ บนเส้น timeline ของหน้า" code={diagram} />
+
+export const diagram = `flowchart LR
+  start["page loads"] --> load["client:load — hydrate now"]
+  load --> idle["client:idle — when browser is idle"]
+  idle --> visible["client:visible — when scrolled into view"]
+  visible --> media["client:media — when a breakpoint matches"]
+  only["client:only — skip server render, client only"]`;
+
+## เลือกตัวที่ถูก
+
+เส้นทางตัดสินใจง่าย ๆ ครอบคลุมเกือบทุกเคส:
+
+- ต้องทำงานได้ทันทีที่หน้าโหลด อยู่เหนือ fold ไหม? → **`client:load`**
+- อยู่ใต้ fold หรือไม่ต้องใช้ทันที? → **`client:visible`** (default ที่เบาและปลอดภัยที่สุด)
+- สำคัญแต่รอจังหวะว่างได้? → **`client:idle`**
+- เกี่ยวเฉพาะบางขนาดหน้าจอ? → **`client:media`**
+- render บน server ไม่ได้เลย? → **`client:only="react"`**
+
+สัญชาตญาณที่จะคว้า `client:load` มาใส่ทุกอย่างคือสิ่งที่ island มีไว้ป้องกันพอดี ส่ง JavaScript ให้น้อยที่สุดเท่าที่ให้ interactivity ที่ต้องการ และปล่อยให้ island ส่วนใหญ่ของคุณเป็น `client:visible`
+
+<Callout title="สรุปหนึ่งบรรทัด">
+client directive ทำสองอย่าง: **ทำให้ component เป็น island** และกำหนดว่า **hydrate เมื่อไหร่** — `client:load` (ทันที สำหรับ control เหนือ fold), `client:idle` (ตอน browser idle), `client:visible` (ตอน scroll เข้ามาในจอ — default ที่เบาที่สุดสำหรับใต้ fold), `client:media` (เฉพาะตอน breakpoint match) และ `client:only="react"` (ข้าม server render, client อย่างเดียว — ต้องระบุชื่อ framework) hydrate เร็วขึ้นแปลว่า JavaScript ล่วงหน้ามากขึ้น ดังนั้น default เป็น `client:visible` และเก็บ `client:load` ไว้กับสิ่งที่ต้องทำงานทันทีจริง ๆ
+</Callout>
+
+export const quizDirectives = [
+  {
+    q: 'directive ตัวไหนเป็น default ที่เบาที่สุดสำหรับ widget interactive ที่อยู่ใต้ fold?',
+    options: [
+      'client:load เพื่อให้พร้อมทันที',
+      'client:visible — hydrate เฉพาะตอน scroll เข้ามาในจอ และไม่โหลด JS เลยถ้า user ไม่ scroll ไปถึง',
+      'client:only เพื่อข้าม server',
+      'ไม่ต้องมี directive',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้องเขียน client:only="react" พร้อมชื่อ framework?',
+    options: [
+      'เพื่อเป็นเอกสารเฉย ๆ',
+      'เพราะ client:only ข้าม server rendering ทำให้ Astro เดา framework จาก server render ไม่ได้ จึงต้องให้เราระบุชื่อ',
+      'เพราะ React ต้องการแต่ตัวอื่นไม่ต้อง',
+      'เพื่อเลือก CSS theme',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'trade-off ของการ hydrate component เร็วขึ้น (เช่น client:load เทียบกับ client:visible) คืออะไร?',
+    options: [
+      'hydrate เร็วขึ้นใช้ JavaScript น้อยลง',
+      'hydrate เร็วขึ้นทำให้ component interactive เร็วขึ้น แต่แลกด้วย JavaScript ล่วงหน้าและเวลาบน main thread',
+      'ไม่มีความต่าง',
+      'hydrate ช้าลงทำให้ component พัง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะใช้ client:media เมื่อไหร่?',
+    options: [
+      'กับ interactive component ทุกตัว',
+      'ตอน interactivity เกี่ยวเฉพาะบางขนาดหน้าจอ เช่น เมนู mobile-only ทำให้ JS โหลดเฉพาะตอน media query match',
+      'เพื่อเล่น audio และ video',
+      'เพื่อโหลดรูปแบบ lazy',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/client-directives" questions={quizDirectives} />
+
+<ProgressTracker client:visible id="islands/client-directives" />

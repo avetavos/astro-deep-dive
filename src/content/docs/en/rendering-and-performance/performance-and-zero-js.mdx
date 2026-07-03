@@ -1,0 +1,105 @@
+---
+title: 'Performance & Zero-JS'
+description: 'The zero-JS default as a performance baseline, choosing client directives to minimize upfront JavaScript, prefetch for instant navigation, and how to measure what you actually shipped.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Performance you start with, not bolt on
+
+Most frameworks make you claw performance back: you build the app, it's slow, and you optimize. Astro inverts that — you *start* at a fast baseline (static HTML, zero JavaScript) and your job is to not lose it. Every kilobyte of client JavaScript is one you added deliberately, so the question is always "does this really need to ship?"
+
+## Choose the cheapest client directive
+
+The islands lesson covered *what* the client directives do; here's the *performance* framing. The directive you pick decides how much JavaScript runs, and when:
+
+| Directive | Ships & runs JS | Use when |
+|-----------|-----------------|----------|
+| `client:load` | Immediately on page load | Critical, above-the-fold interactivity (rare) |
+| `client:idle` | When the browser goes idle | Interactive, but not needed instantly |
+| `client:visible` | When it scrolls into view | Below-the-fold islands (the best default) |
+| `client:media` | Only at a breakpoint | A mobile-only or desktop-only widget |
+
+The rule of thumb: **reach for `client:visible` (or `client:idle`) before `client:load`.** A carousel three screens down doesn't need its JavaScript during initial load; hydrating it with `client:visible` keeps that cost off the critical path. Overusing `client:load` quietly rebuilds the "everything hydrates upfront" cost Astro exists to avoid.
+
+<Mermaid title="Directives move JS cost off the critical path" code={dirDiagram} />
+
+export const dirDiagram = `flowchart LR
+  load["client:load"] --> upfront["JS on the critical path (heaviest)"]
+  idle["client:idle"] --> later["JS after first paint"]
+  visible["client:visible"] --> onscroll["JS only when scrolled into view (lightest)"]`;
+
+## Prefetch for instant navigation
+
+Fast first load is half the story; fast *navigation* is the other half. Astro can **prefetch** a page's HTML before the user clicks, so the next page is essentially instant. Enable it in config, then it prefetches links on hover/viewport by default, or opt a link in explicitly:
+
+```astro
+<a href="/pricing" data-astro-prefetch>Pricing</a>
+```
+
+Paired with `<ClientRouter />`, prefetch makes multi-page navigation feel like a SPA — the HTML is already in the browser cache when the click happens — without a client-side data layer.
+
+## Measure what you actually shipped
+
+Don't optimize by vibes. Two things to look at:
+
+- **The islands you shipped.** Build the site and check which components actually became islands (and with which directive). A component you thought was static but is hydrating is wasted JavaScript; a `client:load` that could be `client:visible` is misplaced cost.
+- **Lighthouse / Core Web Vitals.** Run Lighthouse (in Chrome DevTools) against the built site. Watch Largest Contentful Paint (usually your hero image — see the assets lesson), Cumulative Layout Shift (reserve image/font space), and Total Blocking Time (your island JavaScript).
+
+The Astro baseline usually scores near-perfect out of the box. When a score drops, it's almost always one of: an unoptimized image, a font causing shift, or an island hydrating more eagerly than it needs to.
+
+<Callout title="The one-line takeaway">
+Astro gives you a fast baseline (static HTML, zero JS); performance work is keeping it. Prefer the **cheapest client directive** — `client:visible`/`client:idle` over `client:load` — so island JavaScript stays off the critical path. Use **prefetch** (plus `<ClientRouter />`) to make navigation feel instant. And **measure** — check which islands actually shipped and run Lighthouse — because regressions are almost always an unoptimized image, a shifting font, or an over-eager `client:load`.
+</Callout>
+
+export const quizPerf = [
+  {
+    q: 'What is Astro’s performance philosophy?',
+    options: [
+      'Build first, optimize later',
+      'Start at a fast baseline (static HTML, zero JS) and avoid losing it — every kilobyte of client JS is added deliberately',
+      'Ship as much JavaScript as possible for features',
+      'Performance does not matter for content sites',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which client directive is the best default for a below-the-fold island?',
+    options: [
+      '`client:load`',
+      '`client:visible` — it only ships/runs the JavaScript when the island scrolls into view',
+      '`client:only`',
+      'No directive at all',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does prefetch do, and how does it pair with view transitions?',
+    options: [
+      'It preloads images only',
+      'It fetches a page’s HTML before the click (e.g. on hover), so with `<ClientRouter />` the next navigation is nearly instant',
+      'It caches API responses server-side',
+      'It disables JavaScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A Lighthouse score drops on an Astro page. What is the most likely cause?',
+    options: [
+      'The HTML is too semantic',
+      'An unoptimized image, a font causing layout shift, or an island hydrating more eagerly than needed',
+      'Too little JavaScript',
+      'Using static rendering',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/performance-and-zero-js" questions={quizPerf} />
+
+<ProgressTracker client:visible id="rendering-and-performance/performance-and-zero-js" />

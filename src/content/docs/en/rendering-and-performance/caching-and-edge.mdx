@@ -1,0 +1,122 @@
+---
+title: 'Caching & Edge'
+description: 'Caching on-demand responses with Cache-Control, serving from the CDN edge, and combining a cacheable static shell with server islands for the personalized parts.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The fastest response is one you don't compute
+
+Static pages are already the ideal case: built once, served from a CDN, cached everywhere. The interesting question is what to do when a route is rendered **on demand** — you don't want to re-run the render for every visitor if the result is the same for a while. That's what caching is for: turn a repeated render into a cheap lookup.
+
+## Cache-Control on on-demand responses
+
+For a route rendered on demand (`prerender = false`), you set caching headers on the response. The browser and any CDN in front of your server will then reuse the response instead of hitting your render again:
+
+```astro
+---
+export const prerender = false;
+
+// Cache this response at the CDN for 1 hour; allow serving a stale copy
+// for a day while revalidating in the background.
+Astro.response.headers.set(
+  'Cache-Control',
+  'public, max-age=0, s-maxage=3600, stale-while-revalidate=86400'
+);
+
+const articles = await getArticles();
+---
+<ArticleList articles={articles} />
+```
+
+The key directives: `s-maxage` controls how long a *shared* cache (the CDN) keeps it, and `stale-while-revalidate` lets the CDN serve a slightly-stale copy instantly while it refreshes in the background — so users almost never wait on a cold render.
+
+## Edge caching
+
+A CDN caches responses at **edge** locations near users, so a cached page is served from a nearby city rather than your origin. A static Astro site is edge-cached by nature. An on-demand site becomes edge-friendly the moment you add the right `Cache-Control` — the CDN caches the rendered HTML at the edge and only calls your server when the cache expires.
+
+<Mermaid title="The edge serves cached HTML; the origin renders only on a miss" code={edgeDiagram} />
+
+export const edgeDiagram = `flowchart LR
+  user["User request"] --> edge["CDN edge"]
+  edge -->|cache hit| fast["Serve cached HTML (fast)"]
+  edge -->|cache miss| origin["Origin renders, then caches at edge"]
+  origin --> edge`;
+
+## The powerful pattern: cacheable shell + server islands
+
+Pure per-request SSR is hard to cache — if the page contains "Welcome back, Ana," you can't share that response with the next visitor. The elegant fix combines what earlier modules taught: make the **page shell static/cacheable**, and defer *only the personalized part* to a **server island** (`server:defer`).
+
+```astro
+---
+// This page is static and fully cacheable at the edge...
+---
+<Layout>
+  <ArticleList />                <!-- same for everyone: cached -->
+  <UserGreeting server:defer>    <!-- per-user: deferred, fetched separately -->
+    <p slot="fallback">Loading…</p>
+  </UserGreeting>
+</Layout>
+```
+
+Now the heavy, shared part is cached at the edge and served instantly, while the tiny personalized island is rendered per request. You get CDN-speed pages *and* personalization — instead of making the whole page uncacheable for the sake of one greeting.
+
+## When static-with-islands beats full SSR
+
+If a page is mostly the same for everyone with a few dynamic bits, **static (or cached) + islands** almost always beats full SSR: better cacheability, less server load, faster responses. Reserve full on-demand rendering for pages that are genuinely different on every request (a personalized dashboard, search results). Choosing the *cacheable* option is itself a performance decision.
+
+<Callout title="The one-line takeaway">
+The fastest response is a cached one. For on-demand routes, set **`Cache-Control`** on `Astro.response.headers` (`s-maxage` for the CDN, `stale-while-revalidate` to avoid cold renders) so a CDN can serve the HTML from the **edge**. Best of all, keep the **shell static/cacheable and defer only the personalized part to a `server:defer` server island** — edge-speed pages with per-user bits. Prefer static-with-islands over full SSR whenever a page is mostly shared.
+</Callout>
+
+export const quizCache = [
+  {
+    q: 'For an on-demand route, how do you let a CDN cache the response?',
+    options: [
+      'You cannot cache on-demand routes',
+      'Set `Cache-Control` on `Astro.response.headers` (e.g. `s-maxage` and `stale-while-revalidate`)',
+      'Rename the file to .static.astro',
+      'Disable the adapter',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `stale-while-revalidate` achieve?',
+    options: [
+      'It disables caching',
+      'The CDN serves a slightly-stale cached copy instantly while refreshing it in the background, so users rarely wait on a cold render',
+      'It forces a full reload every time',
+      'It encrypts the response',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the "cacheable shell + server islands" pattern?',
+    options: [
+      'Rendering everything on the server per request',
+      'Keep the page shell static/cacheable at the edge and defer only the personalized part to a `server:defer` server island',
+      'Caching the database',
+      'Using client:load for everything',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When does static-with-islands beat full SSR?',
+    options: [
+      'Never',
+      'When a page is mostly the same for everyone with a few dynamic bits — you get better cacheability, less server load, and faster responses',
+      'Only for API routes',
+      'Only when there are no images',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/caching-and-edge" questions={quizCache} />
+
+<ProgressTracker client:visible id="rendering-and-performance/caching-and-edge" />

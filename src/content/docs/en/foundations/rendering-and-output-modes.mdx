@@ -1,0 +1,119 @@
+---
+title: 'Rendering & Output Modes'
+description: 'Static (SSG) vs on-demand (SSR) rendering, per-route prerendering, when you need an adapter, and how the build produces your site.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two ways to produce a page's HTML
+
+Astro can render a route's HTML at two different times, and this choice is central to how you deploy:
+
+- **Static (SSG)** — the HTML is built **once, at build time**, and served as a plain file. Fast, cacheable, deployable to any static host or CDN. Perfect for content that's the same for everyone.
+- **On-demand (SSR)** — the HTML is built **per request, on a server**, so it can use request-time data (the logged-in user, cookies, query params, live data). Requires a runtime, which means an **adapter**.
+
+<Mermaid title="Static builds once; on-demand renders per request" code={modeDiagram} />
+
+export const modeDiagram = `flowchart TB
+  subgraph static["Static (SSG)"]
+    b["build time"] --> f["HTML file"] --> cdn["served from CDN"]
+  end
+  subgraph ssr["On-demand (SSR)"]
+    r["each request"] --> srv["server renders HTML"] --> resp["response"]
+  end`;
+
+The default is static. You opt a project (or a single route) into on-demand rendering when a page genuinely needs per-request data.
+
+## Per-route control with `prerender`
+
+You don't choose one mode for the whole site. In a server-enabled project, **each route decides** for itself with `export const prerender`:
+
+```astro
+---
+// A mostly-static site with one dynamic route:
+export const prerender = false;  // render THIS page on demand, per request
+const user = await getUser(Astro.request);  // needs the incoming request
+---
+<p>Welcome, {user.name}</p>
+```
+
+- `export const prerender = true` → build this route to a static file (even in a server project).
+- `export const prerender = false` → render this route on demand (even in a mostly-static project).
+
+This is the powerful middle ground: a site that is 95% static files with a handful of on-demand routes (a dashboard, a form handler), each rendered only when needed. This is often called **hybrid** rendering.
+
+## Adapters: how on-demand runs
+
+Static output needs nothing but a file host. On-demand rendering needs a **runtime** to execute your server code per request — and that's where an **adapter** comes in. You install the adapter for your target platform and set it in the config:
+
+```js
+// astro.config.mjs — enabling on-demand rendering on Cloudflare
+import { defineConfig } from 'astro/config';
+import cloudflare from '@astrojs/cloudflare';
+
+export default defineConfig({
+  adapter: cloudflare(),   // or node(), vercel(), netlify()...
+});
+```
+
+The adapter translates Astro's server rendering into the platform's format (a Cloudflare Worker, a Node server, a Vercel function). Without an adapter, on-demand features (SSR routes, server islands, Actions endpoints) can't run — that's a common first-deploy error: *"an adapter is required."*
+
+## What the build produces
+
+`astro build` runs your component scripts, renders the HTML, bundles the CSS and any island JavaScript, and writes the output to `dist/`. For a static site that's a folder of `.html` files and assets you can drop on any CDN. For a hybrid/server site, `dist/` also contains the server entry the adapter runs. Either way, the browser receives finished HTML plus only the island JS — the foundational promise, delivered by the build.
+
+<Callout title="The one-line takeaway">
+Astro renders a route's HTML either **statically** (once at build time → a file on a CDN) or **on demand** (per request on a server, for request-time data). The default is static; you opt individual routes in or out with `export const prerender` — enabling **hybrid** sites that are mostly static with a few dynamic routes. On-demand rendering needs an **adapter** (Cloudflare/Node/Vercel/…) to run server code per request; forgetting it is the classic "an adapter is required" deploy error.
+</Callout>
+
+export const quizModes = [
+  {
+    q: 'What is the difference between static and on-demand rendering?',
+    options: [
+      'Static uses CSS, on-demand uses JavaScript',
+      'Static builds the HTML once at build time (served as a file); on-demand renders it per request on a server (for request-time data)',
+      'Static is slower',
+      'They are the same',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you make a single route render on demand in an otherwise static project?',
+    options: [
+      'Move it to a different folder',
+      'Add `export const prerender = false` to that route',
+      'Rename it to .server.astro',
+      'It is not possible',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is an adapter for?',
+    options: [
+      'Converting Markdown to HTML',
+      'Providing the runtime to execute on-demand server rendering on a target platform (Cloudflare, Node, Vercel...)',
+      'Optimizing images',
+      'Managing CSS',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You deploy a site with an SSR route but no adapter configured. What happens?',
+    options: [
+      'It works fine',
+      'A build/deploy error — on-demand rendering requires an adapter',
+      'The route becomes static automatically',
+      'The whole site fails to build even static pages',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/rendering-and-output-modes" questions={quizModes} />
+
+<ProgressTracker client:visible id="foundations/rendering-and-output-modes" />

@@ -1,0 +1,129 @@
+---
+title: 'Endpoints & API Routes'
+description: 'route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint และมันต่างจาก Actions อย่างไร'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## route ที่ return data ไม่ใช่หน้า
+
+ไม่ใช่ทุก route ที่ render HTML ไฟล์ใน `src/pages/` ที่นามสกุล `.ts` (หรือ `.js`) คือ **API endpoint**: แทนที่จะมี template มันจะ export function ที่ตั้งชื่อตาม HTTP method (`GET`, `POST`, `PUT`, `DELETE`) ซึ่งแต่ละตัว return `Response` มาตรฐาน
+
+```ts
+// src/pages/api/health.ts
+import type { APIRoute } from 'astro';
+
+export const GET: APIRoute = () => {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+```
+
+ตอนนี้ `GET /api/health` return JSON แล้ว type `APIRoute` ให้ context argument แบบ typed และ return เป็น `Response` — รูปแบบ web-standard เดียวกับที่อื่นใน Astro
+
+## อ่าน params และ body
+
+handler รับ context ที่มี request, params, cookies และอื่น ๆ:
+
+```ts
+// src/pages/api/users/[id].ts
+import type { APIRoute } from 'astro';
+
+export const GET: APIRoute = async ({ params }) => {
+  const user = await db.users.find(params.id);   // [id] from the path
+  if (!user) return new Response('Not found', { status: 404 });
+  return Response.json(user);                     // shorthand JSON response
+};
+
+export const POST: APIRoute = async ({ request }) => {
+  const body = await request.json();              // parse the request body
+  const created = await db.users.create(body);
+  return Response.json(created, { status: 201 });
+};
+```
+
+<Mermaid title="endpoint map method ไปสู่ Response" code={endpointDiagram} />
+
+export const endpointDiagram = `flowchart LR
+  req["GET or POST /api/..."] --> handler["exported handler\n(GET / POST / ...)"]
+  handler --> read["read params, request body, cookies"]
+  read --> resp["return a Response\n(JSON, file, status)"]`;
+
+## static vs on-demand endpoint
+
+เหมือนหน้า endpoint จะ build ครั้งเดียวหรือรันต่อ request ก็ได้:
+
+- **static** — เมื่อ `output: 'static'` `GET` endpoint จะรันตอน **build** แล้วเขียน body ของ `Response` ลงไฟล์ เหมาะกับการ generate `rss.xml`, `sitemap`, หรือ static JSON API ที่ไม่เปลี่ยนต่อ request (static endpoint รองรับแค่ `GET`)
+- **on-demand** — เพิ่ม `export const prerender = false` (และ adapter) เพื่อรัน endpoint **ต่อ request** เปิดใช้ `POST`/`PUT`/`DELETE`, request body และ live data
+
+```ts
+// A dynamic endpoint that handles form posts:
+export const prerender = false;
+```
+
+## endpoint vs Actions
+
+ทั้งคู่รัน server code แต่แก้คนละปัญหา:
+
+- **endpoint** คือ HTTP route ดิบที่คุณออกแบบเอง — คุณเป็นเจ้าของ URL, method, status code และรูปแบบ response หยิบมาใช้กับ webhook, integration กับ third-party, การดาวน์โหลดไฟล์ หรือ REST/JSON API สาธารณะ
+- **Action** (บทถัดไป) คือ **type-safe function** ที่คุณเรียกจาก client code ของตัวเองพร้อม input validation อัตโนมัติ — ไม่มี URL หรือ `Response` plumbing หยิบมาใช้กับ mutation และ form ของแอปตัวเอง
+
+หลักจำง่าย ๆ: **สัญญาแบบ public/external → endpoint; internal app logic ที่เรียกจาก frontend ตัวเอง → Action**
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แบบ typed เป็น `APIRoute` ซึ่งแต่ละตัว return `Response` มาตรฐาน; handler อ่าน `params`, request body และ cookies จาก context ของมัน endpoint เป็น **static** (build-time, `GET` เท่านั้น) ถ้าไม่เพิ่ม `prerender = false` เพื่อ method แบบ on-demand ใช้ **endpoint** สำหรับสัญญา HTTP แบบ public/external (webhook, REST, download) และใช้ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe
+</Callout>
+
+export const quizEndpoints = [
+  {
+    q: 'คุณ define API endpoint ใน Astro อย่างไร?',
+    options: [
+      'register route ใน config',
+      'ไฟล์ .ts/.js ใน src/pages/ ที่ export function ตามชื่อ HTTP method (GET, POST...) ซึ่ง return Response',
+      'ไฟล์ .api.astro พิเศษ',
+      'ไม่รองรับ endpoint',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'static (build-time) endpoint รองรับ method อะไรบ้าง?',
+    options: [
+      'ทุก method',
+      'แค่ GET (Response ถูกเขียนลงไฟล์ตอน build)',
+      'แค่ POST',
+      'ไม่มีเลย',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อไรควรใช้ Action แทน endpoint?',
+    options: [
+      'สำหรับ webhook สาธารณะ',
+      'สำหรับ mutation ภายในแอปตัวเองแบบ type-safe ที่เรียกจาก frontend (พร้อม input validation อัตโนมัติ)',
+      'สำหรับ serve static file',
+      'ไม่มีวัน — มันเหมือนกัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'endpoint handler return อะไร?',
+    options: [
+      'JSX',
+      '`Response` มาตรฐานของ web (JSON, ไฟล์, status code ฯลฯ)',
+      'Astro component',
+      'string เท่านั้น',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/endpoints-and-api-routes" questions={quizEndpoints} />
+
+<ProgressTracker client:visible id="server-side/endpoints-and-api-routes" />

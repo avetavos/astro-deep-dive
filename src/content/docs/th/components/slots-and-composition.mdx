@@ -1,0 +1,185 @@
+---
+title: 'Slots & Composition'
+description: 'default กับ named slot, fallback content, การเช็คว่ามี slot ถูกส่งมาไหม และการใช้ slot สร้าง layout shell ที่ห่อทุกหน้า'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทวน slot: การฉีด markup
+
+component มักต้องห่อ content ที่มันยังไม่รู้ล่วงหน้า markup ที่ parent วางไว้ระหว่าง tag ของ component จะถูก render ตรงที่ `<slot />` อยู่ — นั่นคือ **default slot**
+
+```astro
+---
+// src/components/Panel.astro
+const { heading } = Astro.props;
+---
+<section class="panel">
+  <h2>{heading}</h2>
+  <slot />
+</section>
+```
+
+```astro
+<Panel heading="Notes">
+  <p>This paragraph lands in the default slot.</p>
+</Panel>
+```
+
+## named slot: จุดฉีดหลายจุด
+
+default slot อันเดียวไม่พอสำหรับ layout จริง ๆ **named slot** ให้ช่องที่มีป้ายชื่อหลายช่อง component ประกาศ `<slot name="x" />` ส่วน parent เติมมันด้วย `slot="x"` บน child
+
+```astro
+---
+// src/components/Shell.astro
+---
+<header><slot name="header" /></header>
+<main><slot /></main>            <!-- default slot -->
+<footer><slot name="footer" /></footer>
+```
+
+```astro
+<Shell>
+  <h1 slot="header">Page title</h1>
+  <p>Body content fills the default slot.</p>
+  <small slot="footer">© 2026</small>
+</Shell>
+```
+
+## fallback content
+
+`<slot>` เก็บ **content เริ่มต้น** ที่จะ render เฉพาะตอน parent ไม่ส่งอะไรมาให้ slot นั้นได้
+
+```astro
+<button class="btn">
+  <slot>Click me</slot>   <!-- "Click me" shows if no children are passed -->
+</button>
+```
+
+```astro
+<Button />                <!-- renders: Click me -->
+<Button>Save</Button>     <!-- renders: Save -->
+```
+
+## เช็คว่ามี slot ถูกส่งมาไหม
+
+ภายใน component คุณถามได้ว่า slot ได้รับ content หรือไม่ ผ่าน `Astro.slots.has` แล้ว render โครงสร้างแบบมีเงื่อนไข
+
+```astro
+---
+const hasAside = Astro.slots.has('aside');
+---
+<div class:list={["layout", { "has-aside": hasAside }]}>
+  <main><slot /></main>
+  {hasAside && (
+    <aside><slot name="aside" /></aside>
+  )}
+</div>
+```
+
+แบบนี้ทำให้ component ปรับ markup ได้ — เช่น render wrapper `aside` เฉพาะตอนมี aside จะโชว์จริง ๆ เพื่อไม่ให้ปล่อย element ว่างออกมา
+
+## slot สร้าง layout
+
+นี่คือสิ่งที่ slot มีไว้ *เพื่อ* ในทางปฏิบัติ **layout** คือ component ที่นิยาม shell ของหน้า — `<html>`, `<head>`, nav, footer — พร้อม `<slot />` สำหรับ body ของหน้า ทุกหน้าห่อ content ของตัวเองใน layout ดังนั้น shell อยู่ที่เดียว
+
+```astro
+---
+// src/layouts/BaseLayout.astro
+const { title } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+    <slot name="head" />
+  </head>
+  <body>
+    <nav>…site nav…</nav>
+    <main><slot /></main>
+    <footer>…site footer…</footer>
+  </body>
+</html>
+```
+
+```astro
+---
+// src/pages/about.astro
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+<BaseLayout title="About">
+  <link slot="head" rel="canonical" href="https://example.com/about" />
+  <h1>About us</h1>
+  <p>Page-specific content in the default slot.</p>
+</BaseLayout>
+```
+
+<Mermaid title="layout คือ shell ที่มี slot; หน้าต่าง ๆ เติม slot" code={diagram} />
+
+export const diagram = `flowchart TB
+  layout["BaseLayout: html, head, nav, footer with slots"] --> page["Page fills the default slot with its body"]
+  page --> head["Page fills the head slot with meta tags"]
+  layout --> out["one composed HTML document"]
+  page --> out
+  head --> out`;
+
+## รูปแบบ composition
+
+ด้วย slot คุณประกอบ component เล็ก ๆ ให้เป็นหน้าได้แบบเดียวกับที่ประกอบฟังก์ชัน: `Card` ที่มี default slot สำหรับ body, `Grid` ที่ default slot เก็บ card, `Section` ที่มี named slot `header` และ `body` คุณเก็บแต่ละชิ้นให้โฟกัสแล้วให้ parent ตัดสินใจว่าจะใส่อะไรข้างใน เพราะทั้งหมด render บน server composition แทบไม่มีต้นทุนตอน runtime — มันคือแค่การประกอบ HTML
+
+<Callout title="สรุปหนึ่งบรรทัด">
+slot ให้ component render markup ที่ parent ป้อนมา: **default slot** ที่ `<slot />`, **named slot** (`<slot name="x" />` เติมด้วย `slot="x"`) สำหรับจุดฉีดหลายจุด และ **fallback content** ใน `<slot>…</slot>` ตอนไม่มีอะไรส่งมา `Astro.slots.has('x')` ให้ component ปรับโครงสร้างตาม slot ที่ถูกเติม การใช้งานเด่นคือ **layout** — component shell ที่มี slot ที่ทุกหน้าห่อ content ของตัวเองไว้
+</Callout>
+
+export const quizSlots = [
+  {
+    q: 'คุณทำจุดฉีดมากกว่าหนึ่งจุดใน component ยังไง?',
+    options: [
+      'default slot หลายอัน',
+      'named slot — `<slot name="header" />` เติมโดย child ด้วย `slot="header"`',
+      'component หลายอันเท่านั้น',
+      'ทำไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`<slot>Click me</slot>` render อะไรเมื่อ parent ไม่ส่ง children มา?',
+    options: [
+      'ไม่มีอะไรเลย',
+      'fallback content — "Click me"',
+      'error',
+      'props ของ parent',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'component เช็คว่า slot ได้รับ content ยังไง?',
+    options: [
+      '`Astro.props.slot`',
+      '`Astro.slots.has("name")`',
+      'เช็คไม่ได้',
+      '`slot.exists()`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'การใช้งานหลักของ slot ในไซต์ Astro จริง ๆ คืออะไร?',
+    options: [
+      'ดึงข้อมูล',
+      'สร้าง layout — component shell ที่มี slot ที่ทุกหน้าห่อ content ของตัวเองไว้',
+      'scope CSS',
+      'routing ฝั่ง client',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/slots-and-composition" questions={quizSlots} />
+
+<ProgressTracker client:visible id="components/slots-and-composition" />

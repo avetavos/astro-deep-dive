@@ -1,0 +1,157 @@
+---
+title: 'Content Collections'
+description: 'Content Layer API — ประกาศ collection ด้วย loader, validate ด้วย schema, query ด้วย getCollection และ getEntry, และ render body ของ entry ด้วย render.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ประกาศ collection
+
+collection อยู่ในไฟล์ config ไฟล์เดียวคือ **`src/content.config.ts`** แต่ละ collection คือการเรียก `defineCollection` ที่มีสองส่วน คือ **`loader`** (content มาจากไหน) กับ **`schema`** (โครงสร้างที่ validate แล้ว):
+
+```ts
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  // loader: อ่านทุกไฟล์ .md/.mdx ใต้ src/data/blog (ข้ามไฟล์ _drafts)
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  // schema: validate frontmatter ของแต่ละไฟล์
+  schema: z.object({
+    title: z.string(),
+    pubDate: z.coerce.date(),
+    draft: z.boolean().default(false),
+  }),
+});
+
+export const collections = { blog };
+```
+
+กฎสำคัญของ Astro 6 คือ **ทุก collection ต้องประกาศ `loader`** พฤติกรรมเก่าที่แค่โยนไฟล์ลง `src/content/blog/` แล้วมันเก็บให้อัตโนมัติ หายไปแล้ว การเขียนให้ชัดเจนแปลว่า API เดียวกันโหลดไฟล์ในเครื่องได้วันนี้ และโหลด API ปลายทางได้พรุ่งนี้ โดยวิธี query ไม่ต้องเปลี่ยนเลย
+
+## loader: content มาจากไหน
+
+Astro มี loader มาให้สองตัวจาก `astro/loaders`:
+
+- **`glob()`** — โหลดหลายไฟล์ที่ตรง pattern แต่ละไฟล์กลายเป็นหนึ่ง entry ใช้กับโฟลเดอร์ที่มีโพสต์บล็อกหรือหน้า docs: `glob({ pattern: '**/*.md', base: './src/data/blog' })`
+- **`file()`** — โหลดหลาย entry จากไฟล์ข้อมูล *ไฟล์เดียว* (array JSON หรือ YAML) ใช้กับข้อมูลที่มีโครงสร้างอย่าง author หรือ product: `file('./src/data/authors.json')`
+
+pattern `**/[^_]*.{md,mdx}` น่าอ่านให้เข้าใจ มันตรงกับไฟล์ `.md` และ `.mdx` ในทุก subfolder แต่ `[^_]` ตัดไฟล์ที่ขึ้นต้นด้วย underscore ออก ซึ่งเป็น convention ที่สะดวกสำหรับ draft
+
+นอกจากนี้ loader เป็น interface ที่มีเอกสารกำกับ ecosystem จึงมี loader สำหรับ CMS และ API ต่าง ๆ และคุณเขียนเองเพื่อดึงจากแหล่งไหนก็ได้
+
+<Mermaid title="pipeline ของ content collection" code={diagram} />
+
+export const diagram = `flowchart LR
+  src["files: src/data/blog/*.md"] --> loader["glob loader อ่านไฟล์"]
+  loader --> schema["schema validate frontmatter"]
+  schema --> store["entry ที่มี type ใน content store"]
+  store --> get["getCollection('blog')"]
+  get --> page["page render แต่ละ entry"]`;
+
+## query collection
+
+เมื่อประกาศแล้ว เรา query collection จาก component script ไหนก็ได้ ด้วยสองฟังก์ชันจาก `astro:content`:
+
+```astro
+---
+import { getCollection, getEntry } from 'astro:content';
+
+// โพสต์ที่ publish ทั้งหมด ใหม่สุดก่อน
+const posts = (await getCollection('blog'))
+  .filter((post) => !post.data.draft)
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+// entry เดียวจาก id
+const featured = await getEntry('blog', 'hello-world');
+---
+<ul>
+  {posts.map((post) => (
+    <li>
+      <a href={`/blog/${post.id}`}>{post.data.title}</a>
+    </li>
+  ))}
+</ul>
+```
+
+แต่ละ entry มี **`id`** (ได้มาจากชื่อไฟล์) และ object **`data`** ซึ่งคือ frontmatter ที่ validate แล้ว มี type ครบจาก schema เพราะ validation รันไปแล้ว `post.data.pubDate` จึงเป็น `Date` จริง ไม่ใช่ string และ editor ก็ autocomplete field ให้
+
+## render body ของ entry
+
+การ query ให้ frontmatter ของ entry แต่ *body* ที่เป็น Markdown ยังไม่ใช่ HTML ถ้าจะ render มันต้องเรียก **`render`** (จาก `astro:content`) บน entry มันจะคืน component `<Content />` ที่เราเอาไปวางใน template ได้:
+
+```astro
+---
+import { getEntry, render } from 'astro:content';
+
+const post = await getEntry('blog', 'hello-world');
+if (!post) throw new Error('Post not found');
+
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <time>{post.data.pubDate.toDateString()}</time>
+  <Content />
+</article>
+```
+
+`render` คอมไพล์ Markdown/MDX ของ entry ให้เป็น component ดังนั้น `<Content />` จึงพ่น HTML สำเร็จรูปออกมา ทั้งหัวข้อ, code block, และ component ที่ใช้ใน MDX render ครบ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+collection คือ `defineCollection({ loader, schema })` ใน **`src/content.config.ts`** โดย `loader` (`glob` สำหรับหลายไฟล์, `file` สำหรับไฟล์ข้อมูลไฟล์เดียว) บอกว่า content อยู่ที่ไหน ส่วน `schema` validate มัน query ด้วย `getCollection` (หลายอัน) และ `getEntry` (อันเดียว) แต่ละ entry มี `id` และ `data` ที่มี type ถ้าจะพ่น body ให้เรียก `render(entry)` แล้ววาง `<Content />` ที่ได้ลง template ใน Astro 6 ทุก collection ต้องมี loader
+</Callout>
+
+export const quizCollections = [
+  {
+    q: 'ใน Astro 6 ประกาศ content collection ที่ไหน?',
+    options: [
+      'ใน astro.config.mjs',
+      'ใน src/content.config.ts ด้วย defineCollection',
+      'ในไฟล์เพจแต่ละหน้า',
+      'ใน package.json',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'loader แบบ glob กับ file ต่างกันยังไง?',
+    options: [
+      'glob เร็วกว่า',
+      'glob โหลดหลายไฟล์ (หนึ่ง entry ต่อไฟล์) ส่วน file โหลดหลาย entry จากไฟล์ข้อมูลไฟล์เดียวอย่าง array JSON',
+      'file ใช้ได้แค่กับรูป',
+      'เหมือนกันทุกอย่าง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะ render body ที่เป็น Markdown ของ entry ให้เป็น HTML ยังไง?',
+    options: [
+      'print entry.body ตรง ๆ',
+      'เรียก render(entry) แล้วใช้ component <Content /> ที่คืนมา',
+      'ใช้ dangerouslySetInnerHTML',
+      'มัน render ให้เองอัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'หลัง schema validate แล้ว field แบบ z.coerce.date() บน entry.data เป็น type อะไร?',
+    options: [
+      'string',
+      'Date object จริง เพราะ validation coerce และใส่ type ให้แล้ว',
+      'number',
+      'undefined',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/content-collections" questions={quizCollections} />
+
+<ProgressTracker client:visible id="content-and-data/content-collections" />

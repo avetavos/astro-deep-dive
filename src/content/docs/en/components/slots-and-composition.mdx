@@ -1,0 +1,185 @@
+---
+title: 'Slots & Composition'
+description: 'Default and named slots, fallback content, checking whether a slot was passed, and using slots to build layout shells that wrap every page.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Slots recap: injecting markup
+
+A component often wraps content it does not know in advance. The markup a parent puts between the component's tags is rendered wherever `<slot />` appears — that is the **default slot**.
+
+```astro
+---
+// src/components/Panel.astro
+const { heading } = Astro.props;
+---
+<section class="panel">
+  <h2>{heading}</h2>
+  <slot />
+</section>
+```
+
+```astro
+<Panel heading="Notes">
+  <p>This paragraph lands in the default slot.</p>
+</Panel>
+```
+
+## Named slots: multiple insertion points
+
+One default slot is not enough for a real layout. **Named slots** give you several labeled holes. The component declares `<slot name="x" />`; the parent fills it with `slot="x"` on a child:
+
+```astro
+---
+// src/components/Shell.astro
+---
+<header><slot name="header" /></header>
+<main><slot /></main>            <!-- default slot -->
+<footer><slot name="footer" /></footer>
+```
+
+```astro
+<Shell>
+  <h1 slot="header">Page title</h1>
+  <p>Body content fills the default slot.</p>
+  <small slot="footer">© 2026</small>
+</Shell>
+```
+
+## Fallback content
+
+A `<slot>` can hold **default content** that renders only when the parent passes nothing for that slot:
+
+```astro
+<button class="btn">
+  <slot>Click me</slot>   <!-- "Click me" shows if no children are passed -->
+</button>
+```
+
+```astro
+<Button />                <!-- renders: Click me -->
+<Button>Save</Button>     <!-- renders: Save -->
+```
+
+## Checking whether a slot was passed
+
+Inside the component you can ask whether a slot received content, via `Astro.slots.has`, and render structure conditionally:
+
+```astro
+---
+const hasAside = Astro.slots.has('aside');
+---
+<div class:list={["layout", { "has-aside": hasAside }]}>
+  <main><slot /></main>
+  {hasAside && (
+    <aside><slot name="aside" /></aside>
+  )}
+</div>
+```
+
+This lets a component adapt its markup — for example, only render the `aside` wrapper when there is actually an aside to show, so you do not emit an empty element.
+
+## Slots build layouts
+
+This is what slots are *for* in practice. A **layout** is a component that defines the page shell — the `<html>`, `<head>`, nav, footer — with a `<slot />` for the page body. Every page wraps its content in the layout, so the shell lives in one place.
+
+```astro
+---
+// src/layouts/BaseLayout.astro
+const { title } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+    <slot name="head" />
+  </head>
+  <body>
+    <nav>…site nav…</nav>
+    <main><slot /></main>
+    <footer>…site footer…</footer>
+  </body>
+</html>
+```
+
+```astro
+---
+// src/pages/about.astro
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+<BaseLayout title="About">
+  <link slot="head" rel="canonical" href="https://example.com/about" />
+  <h1>About us</h1>
+  <p>Page-specific content in the default slot.</p>
+</BaseLayout>
+```
+
+<Mermaid title="A layout is a shell with slots; pages fill the slots" code={diagram} />
+
+export const diagram = `flowchart TB
+  layout["BaseLayout: html, head, nav, footer with slots"] --> page["Page fills the default slot with its body"]
+  page --> head["Page fills the head slot with meta tags"]
+  layout --> out["one composed HTML document"]
+  page --> out
+  head --> out`;
+
+## Composition patterns
+
+With slots you compose small components into pages the same way you compose functions: a `Card` with a default slot for its body, a `Grid` whose default slot holds cards, a `Section` with named `header` and `body` slots. You keep each piece focused and let the parent decide what goes inside. Because it is all server-rendered, composition costs nothing at runtime — it is just HTML assembly.
+
+<Callout title="The one-line takeaway">
+Slots let a component render markup the parent supplies: the **default slot** at `<slot />`, **named slots** (`<slot name="x" />` filled with `slot="x"`) for multiple insertion points, and **fallback content** inside `<slot>…</slot>` when nothing is passed. `Astro.slots.has('x')` lets a component adapt its structure to which slots were filled. The headline use is **layouts** — a shell component with slots that every page wraps its content in.
+</Callout>
+
+export const quizSlots = [
+  {
+    q: 'How do you provide more than one insertion point in a component?',
+    options: [
+      'Multiple default slots',
+      'Named slots — `<slot name="header" />` filled by a child with `slot="header"`',
+      'Multiple components only',
+      'You cannot',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `<slot>Click me</slot>` render when the parent passes no children?',
+    options: [
+      'Nothing',
+      'The fallback content — "Click me"',
+      'An error',
+      'The parent\'s props',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does a component check whether a slot received content?',
+    options: [
+      '`Astro.props.slot`',
+      '`Astro.slots.has("name")`',
+      'It cannot check',
+      '`slot.exists()`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the primary use of slots in a real Astro site?',
+    options: [
+      'Fetching data',
+      'Building layouts — a shell component with slots that every page wraps its content in',
+      'Scoping CSS',
+      'Client-side routing',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/slots-and-composition" questions={quizSlots} />
+
+<ProgressTracker client:visible id="components/slots-and-composition" />

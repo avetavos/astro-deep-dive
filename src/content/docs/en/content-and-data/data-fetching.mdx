@@ -1,0 +1,117 @@
+---
+title: 'Data Fetching'
+description: 'Fetching external data with top-level await, the difference between build-time and request-time data, pulling from a headless CMS, and why Astro.glob is superseded.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Fetching data is just top-level await
+
+An `.astro` component script runs on the server, so you fetch external data the plainest way possible: **`await fetch()` at the top level**. No `useEffect`, no loading state, no client round-trip — the data is resolved before the HTML exists.
+
+```astro
+---
+// src/pages/products.astro
+const res = await fetch('https://api.example.com/products');
+if (!res.ok) throw new Error(`API returned ${res.status}`);
+const products = await res.json();
+---
+<ul>
+  {products.map((p) => <li>{p.name} — ${p.price}</li>)}
+</ul>
+```
+
+The same pattern works against a REST API, a database client, or a headless CMS SDK. Because it runs on the server, secrets (API keys) stay server-side and never ship to the browser.
+
+## Build-time vs request-time: the crucial distinction
+
+*When* that `fetch` runs depends on the page's rendering mode — and this is the single most important thing to understand about data in Astro:
+
+- **Static page (the default).** The `fetch` runs **once, at build time**. The response is baked into the HTML file. Every visitor gets the same snapshot until you rebuild. Perfect for a product list, a blog index, docs — data that changes on a deploy cadence.
+- **On-demand page (`prerender = false`).** The `fetch` runs **per request, on the server**. Each visitor can get fresh, personalized data — the current user, live inventory, a search result. Requires an adapter (see the rendering module).
+
+```astro
+---
+// This page renders per request, so the fetch is live on every visit.
+export const prerender = false;
+
+const res = await fetch('https://api.example.com/inventory');
+const inventory = await res.json();
+---
+<p>{inventory.inStock} in stock right now</p>
+```
+
+The mental test: **does this data need to be fresh per visitor, or is a build-time snapshot fine?** Snapshot → leave it static (fast, cacheable). Fresh → opt the route into on-demand rendering. Reaching for on-demand when a static snapshot would do is the most common way people give up Astro's speed for no reason.
+
+<Mermaid title="When does the fetch run?" code={diagram} />
+
+export const diagram = `flowchart TB
+  q["Does data change per request?"]
+  q -->|no| static["Static: fetch runs once at build, baked into HTML"]
+  q -->|yes| ondemand["On-demand: prerender = false, fetch runs per request"]
+  static --> cdn["served from CDN, same for everyone"]
+  ondemand --> server["rendered on the server per visitor"]`;
+
+## Headless CMS
+
+A headless CMS (Contentful, Sanity, Storyblok, a WordPress API) is just another data source. Fetch it in the component script — often via the CMS's SDK — and map the response into your template. For content you own and edit as files, prefer a **content collection** with a loader; for content managed in an external system, fetch it (or use a community loader that wraps the CMS behind the collections API). Either way the page code looks the same: get data on the server, render HTML.
+
+## What about Astro.glob()?
+
+Older Astro code used **`Astro.glob()`** to pull in many local files (all Markdown in a folder) at once. It still exists but is **superseded by content collections**, which give you the same "load many files" power *plus* schema validation and generated types. For local content, define a collection with a `glob` loader instead of reaching for `Astro.glob()`; reserve raw `fetch` for genuinely external data.
+
+<Callout title="The one-line takeaway">
+Fetch data with plain **top-level `await fetch()`** in the component script — it runs on the server, so secrets stay safe and there's no client round-trip. The key question is *when* it runs: on a **static** page the fetch happens **once at build** and is baked in; on an **on-demand** page (`prerender = false`) it runs **per request** for fresh, per-visitor data. Default to static unless the data must be live. For loading many local files, prefer a content collection over the older `Astro.glob()`.
+</Callout>
+
+export const quizFetching = [
+  {
+    q: 'How do you fetch external data in an .astro component?',
+    options: [
+      'With useEffect on the client',
+      'With top-level await fetch() in the component script — it runs on the server',
+      'Only through a plugin',
+      'You cannot fetch in Astro',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'On a static (default) page, when does a top-level fetch run?',
+    options: [
+      'On every request',
+      'Once at build time — the response is baked into the HTML file',
+      'In the browser',
+      'Never',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You need per-visitor live data on a page. What do you set?',
+    options: [
+      'Nothing — static pages are already live',
+      'export const prerender = false, so the page renders on demand and the fetch runs per request',
+      'A CSS media query',
+      'client:load on the page',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'For loading many local Markdown files, what is preferred over Astro.glob()?',
+    options: [
+      'A content collection with a glob loader — same power plus schema validation and types',
+      'Copy-pasting the files',
+      'A client-side fetch',
+      'Nothing, Astro.glob() is required',
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content-and-data/data-fetching" questions={quizFetching} />
+
+<ProgressTracker client:visible id="content-and-data/data-fetching" />

@@ -1,0 +1,141 @@
+---
+title: 'Framework Integrations'
+description: 'Using React, Vue, Svelte, Solid, and Preact components as islands — adding an integration, mixing frameworks on one page, and the serializable-props rule for passing data from the server.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Bring your own framework
+
+Astro doesn't have its own client-side component runtime — instead it lets you use the UI framework you already know for the interactive bits. React, Vue, Svelte, Solid, and Preact all work as islands, via official **integrations**.
+
+You add an integration with the CLI, which installs the package and wires up the config:
+
+```bash
+npx astro add react
+```
+
+That updates `astro.config.mjs` for you:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+
+export default defineConfig({
+  integrations: [react()],
+});
+```
+
+Now a `.jsx` component can be imported into an `.astro` file and hydrated with a client directive.
+
+## Importing a framework component as an island
+
+The island is written in the framework's normal style; the `.astro` file imports it and decides when it hydrates.
+
+```jsx
+// src/components/Counter.jsx — a plain React component
+import { useState } from 'react';
+
+export default function Counter({ start }) {
+  const [count, setCount] = useState(start);
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
+}
+```
+
+```astro
+---
+// src/pages/index.astro
+import Counter from '../components/Counter.jsx';   // 1. import the framework component
+---
+<h1>Welcome</h1>
+<Counter start={0} client:visible />               <!-- 2. hydrate it as an island -->
+```
+
+Without the `client:visible`, that `Counter` would render as static HTML (the button, but no working `onClick`). The directive is what ships its JavaScript.
+
+## Mixing frameworks on one page
+
+Because each island is independent, you can use **different frameworks on the same page** — a React widget next to a Svelte one — as long as both integrations are installed. This is genuinely useful for incremental migration or for dropping in a component that only exists in one ecosystem.
+
+<Mermaid title="One page, islands from different frameworks" code={diagram} />
+
+export const diagram = `flowchart TB
+  page["Astro page (static HTML)"]
+  page --> r["React island — client:load"]
+  page --> s["Svelte island — client:visible"]
+  page --> v["Vue island — client:idle"]`;
+
+## Props must be serializable
+
+When you pass props from an `.astro` file into an island, they are rendered on the server and **serialized** into the HTML so the client can rehydrate with the same values. That imposes one hard rule: **island props must be serializable** — strings, numbers, booleans, arrays, plain objects. What you *cannot* pass:
+
+- **Functions** (including event handlers). There's no way to serialize a function across the server/client boundary.
+- Class instances, `Date` objects in some cases, and other non-plain values.
+
+```astro
+---
+import Chart from '../components/Chart.jsx';
+const data = await getMetrics();   // fetched on the server
+---
+<Chart data={data} client:visible />   <!-- fine: data is a plain array/object -->
+<!-- <Chart onPoint={(p) => ...} /> — NOT allowed: functions cannot be serialized -->
+```
+
+If you need behavior instead of data, put that logic *inside* the island, or pass server-rendered children through a **slot** (covered next lesson). The framing that keeps you out of trouble: an `.astro` file hands an island **data**, not **callbacks**.
+
+<Callout title="The one-line takeaway">
+Astro uses your existing UI framework for interactivity: add an integration (`npx astro add react`, which wires up `astro.config.mjs`), then import a `.jsx`/`.vue`/`.svelte` component into an `.astro` file and hydrate it with a client directive. Islands are independent, so **multiple frameworks can coexist on one page**. The one rule when passing props from the server into an island: they must be **serializable** — plain data, no functions or class instances — because props are serialized into the HTML for rehydration.
+</Callout>
+
+export const quizIntegrations = [
+  {
+    q: 'How do you add support for React components in an Astro project?',
+    options: [
+      'Nothing — React works out of the box',
+      'Install the integration (e.g. `npx astro add react`), which adds `@astrojs/react` to the integrations array in astro.config.mjs',
+      'Rename files to .astro',
+      'Import react from a CDN in the HTML',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Can you use a React island and a Svelte island on the same page?',
+    options: [
+      'No, only one framework per project',
+      'Yes — islands are independent, so different frameworks can coexist on one page as long as both integrations are installed',
+      'Only if they are in different folders',
+      'Only in development mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why can\'t you pass a function (like an event handler) as a prop to an island from an .astro file?',
+    options: [
+      'Functions are too large',
+      'Island props are serialized into the HTML for rehydration, and functions cannot be serialized across the server/client boundary',
+      'Astro disallows all props',
+      'You can — there is no restriction',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A framework component imported into an .astro file with NO client directive will:',
+    options: [
+      'Throw an error',
+      'Render as static HTML with no client-side JavaScript (e.g. a button that renders but whose onClick never ships)',
+      'Hydrate immediately by default',
+      'Be excluded from the build',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/framework-integrations" questions={quizIntegrations} />
+
+<ProgressTracker client:visible id="islands/framework-integrations" />

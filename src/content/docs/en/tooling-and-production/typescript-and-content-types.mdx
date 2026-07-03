@@ -1,0 +1,140 @@
+---
+title: 'TypeScript & Content Types'
+description: 'Typing props and Astro.locals, the types Astro generates from your content schemas, and running astro check to type-check .astro files.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## TypeScript is built in
+
+Astro ships TypeScript support out of the box — you can write `.ts` files, type your component scripts, and get editor type-checking with zero setup. A new project extends one of Astro's presets in `tsconfig.json`:
+
+```json
+{
+  "extends": "astro/tsconfigs/strict"
+}
+```
+
+The presets are `base`, `strict`, and `strictest` — pick `strict` (or `strictest`) for real projects; it turns on the checks that catch actual bugs.
+
+## Typing component props
+
+You type a component's props by declaring a `Props` interface in the frontmatter. Astro uses it to type-check every place the component is used:
+
+```astro
+---
+interface Props {
+  title: string;
+  count?: number;      // optional prop
+}
+const { title, count = 0 } = Astro.props;
+---
+<h1>{title} ({count})</h1>
+```
+
+Pass a wrong type or forget a required prop, and the editor (and `astro check`) flags it at the call site.
+
+## Types generated from content schemas
+
+This is where Astro's typing shines. When you define a content collection with a Zod schema (from the content module), Astro **generates TypeScript types** from that schema. `getCollection` and `getEntry` then return fully-typed entries — your editor knows every frontmatter field and its type:
+
+```ts
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog');
+// posts[0].data.title  -> string    (from the schema)
+// posts[0].data.pubDate -> Date     (z.coerce.date())
+// posts[0].data.nope    -> type error: property does not exist
+```
+
+<Mermaid title="Your schema becomes your types" code={typesDiagram} />
+
+export const typesDiagram = `flowchart LR
+  schema["Zod schema in src/content.config.ts"] --> gen["Astro generates types"]
+  gen --> query["getCollection / getEntry return typed data"]
+  query --> safe["type errors on wrong field access"]`;
+
+These types live in a generated `.astro/` folder that Astro maintains for you (refreshed by the dev server and by `astro sync`). You never edit them; you just get autocomplete and safety for free from the schema you already wrote.
+
+## Typing Astro.locals
+
+When you use middleware to attach request-scoped data (like the current user) to `Astro.locals`, you type it by declaring the `App.Locals` interface, usually in `src/env.d.ts`:
+
+```ts
+// src/env.d.ts
+declare namespace App {
+  interface Locals {
+    user: { id: string; name: string } | null;
+  }
+}
+```
+
+Now `Astro.locals.user` is typed everywhere — in middleware, pages, and endpoints.
+
+## Type-checking with astro check
+
+Editors type-check as you go, but `.astro` files aren't checked by `tsc`. The command that does it is **`astro check`** — it validates types across your `.astro`, `.ts`, and `.tsx` files. Wire it into your build so type errors block a broken deploy:
+
+```json
+{
+  "scripts": {
+    "build": "astro check && astro build"
+  }
+}
+```
+
+<Callout title="The one-line takeaway">
+Astro has **built-in TypeScript** (extend `astro/tsconfigs/strict`). Type component props with a `Props` interface, and type request data on `Astro.locals` via the `App.Locals` interface. The standout feature: Astro **generates types from your content Zod schemas**, so `getCollection`/`getEntry` return fully-typed entries with autocomplete and errors on wrong field access. Run **`astro check`** (ideally as `astro check && astro build`) to type-check `.astro` files and block broken builds.
+</Callout>
+
+export const quizTypes = [
+  {
+    q: 'How do you type a component’s props in Astro?',
+    options: [
+      'With a JSDoc comment only',
+      'Declare a `Props` interface in the frontmatter; Astro type-checks usage against it',
+      'Props cannot be typed',
+      'In a separate .d.ts per component',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where do the types for `getCollection(\'blog\')` come from?',
+    options: [
+      'You write them by hand',
+      'Astro generates them from the collection’s Zod schema',
+      'From the database',
+      'They are always `any`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you type data attached to `Astro.locals` (e.g. by middleware)?',
+    options: [
+      'It is untyped',
+      'Declare the `App.Locals` interface (typically in src/env.d.ts)',
+      'Use a global variable',
+      'Pass it as a prop everywhere',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `astro check` do?',
+    options: [
+      'Runs the tests',
+      'Type-checks .astro/.ts/.tsx files (run it before astro build to block type errors)',
+      'Formats the code',
+      'Deploys the site',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/typescript-and-content-types" questions={quizTypes} />
+
+<ProgressTracker client:visible id="tooling-and-production/typescript-and-content-types" />

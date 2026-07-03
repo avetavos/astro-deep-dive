@@ -1,0 +1,83 @@
+---
+title: 'Astro Foundations & Mental Model'
+description: 'The one idea Astro is built on — ship HTML, not JavaScript — plus islands, the .astro component, and static vs on-demand rendering. The lens for everything else.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The idea in one sentence
+
+**Astro renders your pages to HTML on the server (at build time or per request) and ships zero JavaScript by default — you opt *into* interactivity, island by island.** Most of a content site is static; Astro treats that as the default and makes the interactive parts explicit.
+
+Every Astro feature — islands, client directives, content collections, server islands — is a consequence of that one commitment: **send the browser finished HTML, and only the JavaScript it actually needs.**
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Why Astro & islands | The islands architecture and the zero-JS-by-default thesis |
+| Project & .astro files | The project layout and the `.astro` component (frontmatter + template) |
+| The component model | Astro components, props, slots, and scoped styles |
+| Rendering & output modes | Static (SSG) vs on-demand (SSR), and how the build works |
+
+## The lens for the whole course
+
+Two ideas explain almost everything Astro does:
+
+<Mermaid title="The two ideas everything builds on" code={lensDiagram} />
+
+export const lensDiagram = `flowchart TB
+  html["Server-first: render to HTML\n(build time or per request)"] --> ship["Ship finished HTML,\nno JS by default"]
+  islands["Islands: opt into interactivity\nper component, not per page"] --> ship
+  ship --> fast["Fast pages,\nminimal JavaScript"]`;
+
+- Because Astro is **server-first**, your components run to produce HTML — the framework code and templating never reach the browser.
+- Because interactivity is opt-in via **islands**, a page can be 99% static HTML with one small interactive widget hydrated, instead of shipping a whole framework to run the entire page.
+
+Hold those two and Astro's design stops feeling like a pile of directives and starts feeling like one coherent bet.
+
+<Callout title="The mental shift">
+Coming from a SPA framework (React/Vue as the *whole app*), your instinct is "everything is a component that runs in the browser." Astro inverts it: **the page is HTML; JavaScript is the exception you add deliberately.** You stop asking "how do I hydrate this app?" and start asking "which few pieces actually need to be interactive?" — and ship only those.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What does Astro ship to the browser by default?',
+    options: [
+      'A full JavaScript bundle for the whole page',
+      'Finished HTML with zero JavaScript — you opt into interactivity per island',
+      'Only CSS',
+      'A single-page application shell',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the "islands architecture"?',
+    options: [
+      'Splitting the app across servers',
+      'Interactive components are isolated islands hydrated individually, in an otherwise static HTML page',
+      'A CSS layout system',
+      'A database sharding strategy',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does "server-first" mean in Astro?',
+    options: [
+      'You must run your own server',
+      'Components render to HTML on the server (build time or per request); the templating code never reaches the browser',
+      'The database runs first',
+      'JavaScript runs before HTML',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="foundations/index" />

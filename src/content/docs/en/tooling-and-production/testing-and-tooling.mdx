@@ -1,0 +1,135 @@
+---
+title: 'Testing & Tooling'
+description: 'Unit tests with Vitest, component tests with the Astro Container API, end-to-end tests with Playwright, and the Astro Dev Toolbar for debugging.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Three layers of testing
+
+An Astro site is mostly server-rendered HTML with a few islands, which shapes how you test it. Three layers cover it:
+
+| Layer | Tool | What it checks |
+|-------|------|----------------|
+| Unit | Vitest | Plain logic — helpers, data transforms, schema parsing |
+| Component | Astro Container API (+ Vitest) | A component renders the expected HTML for given props/slots |
+| End-to-end | Playwright | Real pages in a real browser, including island interactivity |
+
+The rule of thumb: push logic into plain functions and unit-test those, render-test the components whose output matters, and use a few end-to-end tests for the flows that involve real hydration and navigation.
+
+## Unit tests with Vitest
+
+Because Astro runs on Vite, **Vitest** is the natural unit-test runner — same config, instant startup. Anything that's plain TypeScript (a date formatter, a filter, a Zod schema) is tested the ordinary way:
+
+```ts
+import { expect, test } from 'vitest';
+import { formatDate } from '../src/lib/format';
+
+test('formatDate renders a friendly date', () => {
+  expect(formatDate(new Date('2026-01-15'))).toBe('Jan 15, 2026');
+});
+```
+
+## Component tests with the Container API
+
+To test that a `.astro` component renders the right HTML, use the **Astro Container API** — it renders a component to a string in isolation, no browser needed. It's currently exposed as `experimental_AstroContainer`:
+
+```ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Card from '../src/components/Card.astro';
+
+test('Card renders its title and slotted content', async () => {
+  const container = await AstroContainer.create();
+  const result = await container.renderToString(Card, {
+    props: { title: 'Hello' },
+    slots: { default: 'Body content' },
+  });
+
+  expect(result).toContain('Hello');
+  expect(result).toContain('Body content');
+});
+```
+
+You get the rendered HTML as a string and assert against it — fast, and it exercises the real component including its props and slots.
+
+## End-to-end with Playwright
+
+Container tests render HTML but don't run islands. For behavior that depends on **hydration** — clicking an interactive island, client-side navigation with `<ClientRouter />`, a form submission — use **Playwright** (or Cypress) to drive a real browser against your built site:
+
+```ts
+import { test, expect } from '@playwright/test';
+
+test('counter island increments on click', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Increment' }).click();
+  await expect(page.getByText('Count: 1')).toBeVisible();
+});
+```
+
+<Mermaid title="Test at the layer that matches the risk" code={testDiagram} />
+
+export const testDiagram = `flowchart LR
+  logic["plain logic"] --> vitest["Vitest unit test"]
+  comp["component HTML output"] --> container["Container API test"]
+  flow["hydrated flows and navigation"] --> pw["Playwright e2e"]`;
+
+## The Dev Toolbar
+
+In development, Astro shows a **Dev Toolbar** at the bottom of the page — it flags accessibility issues, shows which components are islands (and their hydration directives), and hosts plugins for auditing and debugging. It's the fastest way to see *what actually became an island* and catch a11y problems while you build. It only runs in dev and never ships to production.
+
+<Callout title="The one-line takeaway">
+Test an Astro site at three layers: **Vitest** for plain logic, the **Astro Container API** (`experimental_AstroContainer`, `renderToString`) for asserting a component's rendered HTML in isolation, and **Playwright** for end-to-end flows that need real hydration and navigation. Container tests don't run islands, so interactive behavior belongs in Playwright. The dev-only **Dev Toolbar** helps you see which components became islands and catch accessibility issues as you build.
+</Callout>
+
+export const quizTesting = [
+  {
+    q: 'Which tool renders a .astro component to an HTML string in isolation for testing?',
+    options: [
+      'Playwright',
+      'The Astro Container API (experimental_AstroContainer)',
+      'astro check',
+      'The Dev Toolbar',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why do you need Playwright in addition to Container API tests?',
+    options: [
+      'Container tests are deprecated',
+      'Container tests render HTML but do not run islands; Playwright drives a real browser to test hydrated interactivity and navigation',
+      'Playwright is faster for unit tests',
+      'You do not — Container tests cover everything',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the natural unit-test runner for an Astro project, and why?',
+    options: [
+      'Jest, because Astro requires it',
+      'Vitest, because Astro runs on Vite (shared config, fast startup)',
+      'Mocha, by convention',
+      'There is no unit testing in Astro',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the Astro Dev Toolbar help with?',
+    options: [
+      'It deploys the site',
+      'In development, it flags accessibility issues and shows which components are islands and their hydration directives',
+      'It runs in production to monitor errors',
+      'It formats your code',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/testing-and-tooling" questions={quizTesting} />
+
+<ProgressTracker client:visible id="tooling-and-production/testing-and-tooling" />

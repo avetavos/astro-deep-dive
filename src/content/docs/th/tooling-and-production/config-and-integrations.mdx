@@ -1,0 +1,131 @@
+---
+title: 'Config & Integrations'
+description: 'ไฟล์ astro.config.mjs, ระบบ integrations สำหรับเพิ่มความสามารถ, Astro วางอยู่บน Vite ยังไง และการเพิ่ม Tailwind แบบปัจจุบัน'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ไฟล์ config
+
+ทุกโปรเจกต์ Astro ตั้งค่าจาก `astro.config.mjs` ผ่าน `defineConfig` ครั้งเดียว มีไม่กี่ key ที่รับน้ำหนักส่วนใหญ่:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import mdx from '@astrojs/mdx';
+import sitemap from '@astrojs/sitemap';
+import react from '@astrojs/react';
+import cloudflare from '@astrojs/cloudflare';
+
+export default defineConfig({
+  site: 'https://example.com',   // absolute site URL (used for sitemap, canonical, RSS)
+  base: '/docs',                 // path prefix if not served at the domain root
+  output: 'static',              // 'static' (default) or 'server' for on-demand
+  adapter: cloudflare(),         // runtime for on-demand rendering
+  integrations: [mdx(), sitemap(), react()],
+  vite: { /* escape hatch to raw Vite config */ },
+});
+```
+
+- **`site`** คือ URL ที่ deploy จริง จำเป็นสำหรับอะไรก็ตามที่ต้องออก absolute URL (sitemap, canonical tag, RSS) **`base`** ตั้ง path prefix เมื่อเว็บอยู่ใต้ subpath (เหมือนคอร์สนี้อยู่ใต้ `/astro`)
+- **`output`** เลือก rendering mode เริ่มต้น **`adapter`** ให้ runtime เมื่อใช้ on-demand rendering (จากบทเรียน rendering)
+- **`integrations`** คือ list ของ plugin ที่ขยายความสามารถของ Astro
+
+## ระบบ integrations
+
+**integration** คือ plugin ทางการหรือของ community ที่ hook เข้ากับ build ของ Astro เพื่อเพิ่มความสามารถ — render UI framework, generate sitemap, เพิ่ม MDX support, ต่อ adapter คุณติดตั้งแล้วเพิ่มลงใน array `integrations` หลายตัวมีตัวติดตั้งแบบคำสั่งเดียวที่แก้ config ให้:
+
+```bash
+# astro add writes the import + integrations entry for you, and installs deps
+npx astro add react
+npx astro add mdx sitemap
+```
+
+integration ทางการที่พบบ่อย (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework island), `mdx` (component ใน Markdown), `sitemap`, `rss` และ adapter ของแต่ละ platform (`cloudflare`, `node`, `vercel`, `netlify`)
+
+## Astro สร้างบน Vite
+
+ข้างใต้นั้น dev server และ build ของ Astro ขับเคลื่อนด้วย **Vite** นั่นคือเหตุผลที่ dev server เริ่มทันที, HMR เร็ว และคุณใช้ plugin จาก ecosystem ของ Vite/Rollup ได้เกือบทั้งหมด เมื่อต้องการอะไรที่ Astro ไม่ได้เปิดให้ตรง ๆ ก็ลงไปที่ key `vite` แล้วตั้งค่า Vite เอง:
+
+```js
+export default defineConfig({
+  vite: {
+    plugins: [/* any Vite plugin */],
+    resolve: { alias: { '@': '/src' } },
+  },
+});
+```
+
+<Mermaid title="Astro ประกอบ integrations บน Vite" code={configDiagram} />
+
+export const configDiagram = `flowchart TB
+  cfg["astro.config.mjs (defineConfig)"] --> integ["integrations: UI frameworks, mdx, sitemap, adapter"]
+  cfg --> vite["vite: raw Vite/Rollup plugins and config"]
+  integ --> build["Astro build"]
+  vite --> build`;
+
+## การเพิ่ม Tailwind (แบบปัจจุบัน)
+
+Tailwind ใน Astro ปัจจุบันติดตั้งเป็น **Vite plugin** (`@tailwindcss/vite`, Tailwind v4) — ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า ตัวติดตั้งคำสั่งเดียวต่อให้เรียบร้อย:
+
+```bash
+npx astro add tailwind
+```
+
+คำสั่งนั้นติดตั้ง plugin, เพิ่มลง Vite config และสร้าง CSS entry ให้ จากนั้น import CSS ครั้งเดียว (เช่นใน layout) แล้วใช้ Tailwind utility class ใน markup ได้ ถ้าเจอ guide ที่อ้างถึง *integration* `@astrojs/tailwind` นั่นคือวิธีเก่า วิธีปัจจุบันคือ Vite plugin ผ่าน `astro add tailwind`
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`astro.config.mjs` ตั้งค่าโปรเจกต์ผ่าน `defineConfig` — field สำคัญคือ `site` (URL ที่ deploy จริง จำเป็นสำหรับ absolute URL), `base` (path prefix), `output`, `adapter` และ `integrations` **integrations** (`@astrojs/*` เพิ่มด้วย `npx astro add`) ขยาย build ด้วย UI framework, MDX, sitemap และ adapter Astro รันบน **Vite** จึงลงไปที่ key `vite` เพื่อใช้ raw plugin ได้ — และ Tailwind ปัจจุบันเป็น Vite plugin ที่เพิ่มด้วย `astro add tailwind` ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า
+</Callout>
+
+export const quizConfig = [
+  {
+    q: 'config option `site` ทำอะไร?',
+    options: [
+      'ตั้ง port ของ dev server',
+      'ประกาศ absolute URL ที่ deploy จริง ใช้สำหรับ sitemap, canonical tag และ RSS',
+      'เลือก CSS framework',
+      'เปิด TypeScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วิธีที่ง่ายที่สุดในการเพิ่ม integration ทางการอย่าง React คือ?',
+    options: [
+      'แก้ config สามไฟล์ด้วยมือ',
+      'รัน `npx astro add react` ซึ่งติดตั้งและแก้ config ให้',
+      'copy ไปไว้ใน public/',
+      'import มันในทุกหน้า',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'build tool ตัวไหนอยู่ใต้ Astro และเข้าถึงมันตรง ๆ ยังไง?',
+    options: [
+      'Webpack ผ่าน webpack.config.js',
+      'Vite — เข้าถึงผ่าน key `vite` ใน astro.config.mjs',
+      'Parcel ผ่าน plugin',
+      'เข้าถึง tool ที่อยู่ข้างใต้ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วิธีที่แนะนำในปัจจุบันสำหรับเพิ่ม Tailwind ใน Astro คือ?',
+    options: [
+      'integration @astrojs/tailwind',
+      'Tailwind Vite plugin ติดตั้งผ่าน `npx astro add tailwind`',
+      'CDN script tag อย่างเดียว',
+      'Tailwind มีมาให้ในตัว',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/config-and-integrations" questions={quizConfig} />
+
+<ProgressTracker client:visible id="tooling-and-production/config-and-integrations" />

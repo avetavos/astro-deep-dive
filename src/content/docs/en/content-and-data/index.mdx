@@ -1,0 +1,79 @@
+---
+title: 'Content & Data'
+description: 'How Astro turns Markdown, files, and external APIs into typed, queryable content — the Content Layer API, Zod schemas, data fetching, and dynamic routes.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The content problem
+
+Most Astro sites are content sites: a blog with dozens of posts, docs with hundreds of pages, a product catalog pulled from a CMS. The question this module answers is: **how do you get that content — Markdown files, JSON, or a remote API — into your pages as typed, validated data you can query?**
+
+Astro's answer is the **Content Layer API**: you define collections, each backed by a `loader` that reads content from somewhere (local files, a remote endpoint), and a `schema` that validates the shape. You then query collections with `getCollection` and `getEntry`, and render entry bodies with `render`. The result is content that behaves like a small typed database, generated at build time.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Content collections | The Content Layer API: `defineCollection`, a `loader`, `getCollection`, and `render` |
+| Schemas & references | Validating frontmatter with Zod, and linking collections with `reference()` |
+| Data fetching | Top-level `await fetch()`, build-time vs request-time data, headless CMS |
+| Dynamic routes | File-based `[slug].astro`, `getStaticPaths()`, and pagination |
+
+<Mermaid title="From raw content to a rendered page" code={diagram} />
+
+export const diagram = `flowchart LR
+  files["Markdown / JSON / API"] --> loader["loader (glob / file)"]
+  loader --> schema["schema validates (Zod)"]
+  schema --> query["getCollection / getEntry"]
+  query --> page["page renders HTML"]`;
+
+## The one big change to know
+
+If you used Astro before version 5, the biggest shift is that **collections are no longer magic folders**. You used to drop Markdown in `src/content/blog/` and it became a collection automatically. In Astro 6, **every collection must declare a `loader`** in `src/content.config.ts`. This is more explicit, but far more powerful: the same API now loads local files *and* remote data behind one typed interface.
+
+<Callout title="The one-line takeaway">
+Astro turns content into a **typed, queryable layer**: you declare collections in `src/content.config.ts`, each with a `loader` (where content comes from) and a `schema` (its validated shape), then query with `getCollection`/`getEntry` and render bodies with `render`. In Astro 6 every collection needs a loader — the old auto-magic content folders are gone.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What is the Content Layer API for?',
+    options: [
+      'Styling content pages',
+      'Turning content (local files or remote data) into a typed, queryable, validated layer you access with getCollection/getEntry',
+      'Client-side routing',
+      'Bundling JavaScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What changed about collections in Astro 6 versus older versions?',
+    options: [
+      'Collections were removed',
+      'Every collection must declare a loader in src/content.config.ts — the old auto-magic src/content/ folders are gone',
+      'Collections now require a database',
+      'Nothing changed',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which two things does defineCollection combine?',
+    options: [
+      'A route and a layout',
+      'A loader (where content comes from) and a schema (its validated shape)',
+      'A component and a style',
+      'A server and a client',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="content-and-data/index" />

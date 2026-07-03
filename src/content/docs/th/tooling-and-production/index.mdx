@@ -1,0 +1,69 @@
+---
+title: 'Tooling, Integrations & Production'
+description: 'config file, ระบบ integrations, TypeScript และ content types ที่ generate ให้, การ test เว็บ Astro และการ deploy — เครื่องมือรอบ ๆ component ของคุณ'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## อะไรบ้างที่อยู่รอบ ๆ component
+
+คุณได้เรียนแล้วว่า Astro render หน้าและ hydrate island ยังไง โมดูลนี้คือเครื่องมือที่ล้อมรอบสิ่งเหล่านั้น: config ที่ต่อทุกอย่างเข้าด้วยกัน, integrations ที่เพิ่มความสามารถ, TypeScript ที่คอยกันพลาด, test ที่พิสูจน์ว่ามันทำงาน และ build ที่ส่งมันขึ้น production
+
+ไม่มีอะไรแปลกใหม่ — Astro วางอยู่บน **Vite** ดังนั้นส่วนใหญ่เป็นเครื่องมือที่คุ้นเคยพร้อมชั้น Astro บาง ๆ เป้าหมายตรงนี้คือรู้ว่าปุ่มไหนทำอะไร
+
+## โมดูลนี้ครอบคลุมอะไร
+
+| บทเรียน | สิ่งที่จะได้เรียน |
+|--------|-------------------|
+| Config & integrations | `astro.config.mjs`, ระบบ integrations และ Vite ที่อยู่ข้างใต้ |
+| TypeScript & content types | type ของ props และ locals และ type ที่ generate จาก content schema |
+| Testing & tooling | Vitest, Container API, Playwright และ Dev Toolbar |
+| Deployment & ecosystem | deploy แบบ static vs on-demand และ ecosystem ของ Astro |
+
+## pipeline จาก source ไปเป็นเว็บ
+
+<Mermaid title="จากโปรเจกต์ไปสู่เว็บที่ deploy แล้ว" code={pipelineDiagram} />
+
+export const pipelineDiagram = `flowchart LR
+  config["astro.config.mjs\n(integrations, adapter)"] --> build["astro check + astro build"]
+  src["src/ (pages, components, content)"] --> build
+  build --> dist["dist/ (HTML, assets, server entry)"]
+  dist --> deploy["deploy: static CDN หรือ adapter runtime"]`;
+
+ทุกอย่างไหลผ่าน config และ build ทำความคุ้นเคยกับสองอย่างนี้ ที่เหลือคือรายละเอียด
+
+<Callout title="สรุปหนึ่งบรรทัด">
+โมดูลนี้ว่าด้วยเครื่องมือ **รอบ ๆ** component: `astro.config.mjs` (ต่อ integrations และ adapter), **integrations** ที่เพิ่มฟีเจอร์, **TypeScript** พร้อม type ที่ Astro generate จาก content schema, **testing** (Vitest + Container API + Playwright) และ **deployment** (static ไป CDN หรือ on-demand ผ่าน adapter) Astro สร้างบน Vite ส่วนใหญ่จึงเป็นเครื่องมือที่คุ้นเคยพร้อมชั้น Astro บาง ๆ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Astro วางอยู่บน build tool ตัวไหน?',
+    options: [
+      'Webpack',
+      'Vite',
+      'Rollup อย่างเดียว',
+      'esbuild อย่างเดียว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'integrations และ adapter ของโปรเจกต์ตั้งค่าที่ไหน?',
+    options: [
+      'ใน package.json',
+      'ใน astro.config.mjs',
+      'ใน frontmatter ของแต่ละหน้า',
+      'ใน .env file',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="tooling-and-production/index" />

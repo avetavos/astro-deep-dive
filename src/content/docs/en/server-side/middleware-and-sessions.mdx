@@ -1,0 +1,139 @@
+---
+title: 'Middleware & Sessions'
+description: 'Code that runs before every request — onRequest middleware and context.locals — plus server-side sessions with Astro.session for per-user state and auth.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Middleware: a gate in front of every request
+
+Middleware is a single function that runs **before every request** is handled. It lives in `src/middleware.ts` and exports `onRequest(context, next)` — you do work, then call `next()` to continue to the page or endpoint (or short-circuit with your own `Response`).
+
+```ts
+// src/middleware.ts
+import { defineMiddleware } from 'astro:middleware';
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  // Runs for every request, before the route.
+  const token = context.cookies.get('session')?.value;
+  context.locals.user = token ? await getUser(token) : null;  // share data downstream
+
+  // Guard a section of the site.
+  if (context.url.pathname.startsWith('/admin') && !context.locals.user) {
+    return context.redirect('/login');   // short-circuit — never reach the page
+  }
+
+  return next();   // continue to the route
+});
+```
+
+<Mermaid title="Middleware runs before the route and can short-circuit" code={mwDiagram} />
+
+export const mwDiagram = `sequenceDiagram
+  participant B as Browser
+  participant M as onRequest middleware
+  participant R as Route (page/endpoint)
+  B->>M: request
+  M->>M: read cookies, set context.locals
+  alt not authorized
+    M-->>B: redirect / 403 (short-circuit)
+  else authorized
+    M->>R: next()
+    R-->>B: rendered response
+  end`;
+
+## context.locals: per-request shared data
+
+The key to middleware is **`context.locals`** — an object that lives for the duration of one request. Whatever you set there (the current user, a request id, a feature flag) is readable in every page, endpoint, and action for that request via `Astro.locals` / the action's `context.locals`. It's how middleware hands computed data to the rest of the request without global state.
+
+```astro
+---
+// In any on-demand page — read what middleware put there.
+const user = Astro.locals.user;
+---
+{user ? <p>Hi, {user.name}</p> : <a href="/login">Sign in</a>}
+```
+
+## Sessions: per-user state across requests
+
+`context.locals` lasts one request. To remember a user *across* requests — a shopping cart, a login — you use **sessions**. Astro's session support stores data server-side, keyed by a cookie, backed by a configured driver (memory in dev, a KV/Redis/database store in production).
+
+```astro
+---
+// Read/write session data in a component script:
+const cart = (await Astro.session?.get('cart')) ?? [];
+---
+<p>{cart.length} items in your cart</p>
+```
+
+```ts
+// In an action handler, context.session is the same session:
+handler: async (input, context) => {
+  const cart = (await context.session?.get('cart')) ?? [];
+  cart.push(input.productId);
+  await context.session?.set('cart', cart);
+  return cart;
+}
+```
+
+Sessions expose `get`, `set`, and `destroy`. On logout you clear everything with `Astro.session?.destroy()`, which deletes the session cookie and its server-side data. Unlike cookies you set by hand, session data lives on the server — the cookie only holds an opaque id — so it's safe for sensitive state.
+
+## The auth pattern
+
+These three pieces compose into the standard auth flow: **middleware** reads the session cookie and puts the user on `context.locals`; **pages** read `Astro.locals.user` to render signed-in vs signed-out UI; and a guard in middleware redirects unauthenticated requests away from protected routes. Login writes the session; logout calls `destroy()`.
+
+<Callout title="The one-line takeaway">
+**Middleware** (`src/middleware.ts`, `onRequest(context, next)`) runs before every request — read cookies, set **`context.locals`** to share per-request data (like the current user) with every page/endpoint/action, and short-circuit with a redirect to guard routes. **Sessions** (`Astro.session` in components, `context.session` in actions) persist per-user state *across* requests server-side via `get`/`set`/`destroy`, with only an opaque id in the cookie. Together they form the standard auth pattern: middleware loads the user from the session, pages read `Astro.locals.user`, guards redirect.
+</Callout>
+
+export const quizMiddleware = [
+  {
+    q: 'When does `onRequest` middleware run?',
+    options: [
+      'Only at build time',
+      'Before every request — you can read cookies, set data, or short-circuit with a Response, then call next()',
+      'After the page renders',
+      'Only for API endpoints',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is `context.locals` for?',
+    options: [
+      'Permanent database storage',
+      'Per-request shared data — set it in middleware, read it (via Astro.locals) in pages/endpoints/actions for that request',
+      'Client-side state',
+      'Build configuration',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do sessions differ from `context.locals`?',
+    options: [
+      'They are identical',
+      'context.locals lasts one request; sessions persist per-user state ACROSS requests, stored server-side keyed by a cookie',
+      'Sessions run on the client',
+      'Sessions are build-time only',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you clear a user’s session on logout?',
+    options: [
+      'Delete the page',
+      '`Astro.session?.destroy()` — removes the session cookie and its server-side data',
+      'Reload the browser',
+      'Set context.locals to null',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/middleware-and-sessions" questions={quizMiddleware} />
+
+<ProgressTracker client:visible id="server-side/middleware-and-sessions" />

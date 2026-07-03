@@ -1,0 +1,161 @@
+---
+title: 'Dynamic Routes'
+description: 'route แบบ file-based, สร้างหน้าจาก collection ด้วย getStaticPaths(), rest param, pagination ด้วย paginate(), และ param แบบ on-demand.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## route ที่มีส่วนแปรผัน
+
+คุณมี collection ของโพสต์บล็อก 50 อัน และอยากได้หน้าเพจต่ออัน แต่คงไม่นั่งเขียนไฟล์ 50 ไฟล์ **dynamic route** คือไฟล์เดียวที่ชื่อมีส่วนแปรผันอยู่ในวงเล็บเหลี่ยม และมันแทน URL ได้หลายอัน:
+
+- `src/pages/blog/[slug].astro` → ตรงกับ `/blog/anything`
+- `src/pages/[category]/[id].astro` → สองตัวแปร
+- `src/pages/docs/[...path].astro` → **rest** param ตรงกับ `/docs/a/b/c` (ลึกเท่าไรก็ได้)
+
+ค่าในวงเล็บมาถึงตอน runtime บน `Astro.params` (`Astro.params.slug`) แต่สำหรับเว็บ *static* Astro ต้องรู้ด้วยว่า **มี** slug ไหนบ้าง เพื่อ build ไฟล์ให้แต่ละอัน นั่นคือหน้าที่ของ `getStaticPaths()`
+
+## getStaticPaths(): หนึ่งหน้าต่อหนึ่ง entry
+
+ใน static build ไฟล์ dynamic route จะ export **`getStaticPaths()`** ซึ่งคืน list ของหน้าที่ต้อง generate แต่ละอันคือ `{ params, props }` โดย `params` เติมส่วนในวงเล็บ และ `props` ส่งข้อมูลเข้าหน้า:
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({
+    params: { slug: post.id },   // เติม [slug] หนึ่งหน้าต่อโพสต์
+    props: { post },             // ส่งทั้ง entry เข้าหน้า
+  }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <time>{post.data.pubDate.toDateString()}</time>
+  <Content />
+</article>
+```
+
+ตอน build Astro เรียก `getStaticPaths()` เห็น (สมมติ) 50 entry แล้วเขียนไฟล์ HTML 50 ไฟล์ ทั้ง `/blog/hello-world`, `/blog/second-post` เรื่อยไป key `params` **ต้อง** ตรงกับชื่อในวงเล็บ (ตรงนี้คือ `slug`) ส่วน `props` คือทางลัดที่ส่ง entry ที่โหลดมาแล้วเข้าไป หน้า body จะได้ไม่ต้อง query ซ้ำ
+
+<Mermaid title="getStaticPaths เปลี่ยน entry ให้เป็นหน้า" code={diagram} />
+
+export const diagram = `flowchart LR
+  coll["getCollection('blog') — 50 entry"] --> map["map แต่ละอันเป็น params + props"]
+  map --> paths["getStaticPaths คืน 50 path"]
+  paths --> build["build เขียนไฟล์ HTML 50 ไฟล์"]`;
+
+## pagination ด้วย paginate()
+
+สำหรับ list ยาว ๆ คุณอยากได้หน้าแบบมีเลข `/blog/1`, `/blog/2` `getStaticPaths` รับ helper ชื่อ **`paginate`** ที่หั่น list เป็นหน้า ๆ และ generate route ให้ ตั้งชื่อไฟล์ route ด้วย param ของหน้า มักจะเป็น `src/pages/blog/[page].astro`:
+
+```astro
+---
+// src/pages/blog/[page].astro
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths({ paginate }) {
+  const posts = await getCollection('blog');
+  return paginate(posts, { pageSize: 10 });   // 10 โพสต์ต่อหน้า
+}
+
+const { page } = Astro.props;   // paginate ยัด prop `page` ให้
+---
+<ul>
+  {page.data.map((post) => <li>{post.data.title}</li>)}
+</ul>
+<nav>
+  {page.url.prev && <a href={page.url.prev}>ก่อนหน้า</a>}
+  <span>หน้า {page.currentPage} จาก {page.lastPage}</span>
+  {page.url.next && <a href={page.url.next}>ถัดไป</a>}
+</nav>
+```
+
+`paginate` ส่ง prop `page` ให้แต่ละหน้า มีทั้ง `data` (slice ของหน้านี้), `currentPage`, `lastPage`, และ `url.prev`/`url.next` ครบทุกอย่างที่ต้องใช้ทั้ง list และลิงก์ prev/next
+
+## static param vs on-demand param
+
+dynamic route รู้ param ของตัวเองได้สองทาง และมันสะท้อน rendering mode สองแบบ:
+
+- **Static:** คุณระบุทุก param ล่วงหน้าด้วย `getStaticPaths()` แล้ว Astro build ไฟล์ต่อ path เร็ว, cache ได้ แต่ชุดหน้าถูกล็อกตอน build
+- **On-demand:** ตั้ง `export const prerender = false` แล้ว *เอา* `getStaticPaths()` ออก แทนที่ด้วยการอ่าน `Astro.params` สด ๆ แล้ว query ทันที วิธีนี้รองรับ URL ที่รู้ตอน build ไม่ได้ (user id, คำค้น):
+
+```astro
+---
+// src/pages/blog/[slug].astro — เวอร์ชัน on-demand
+export const prerender = false;
+import { getEntry, render } from 'astro:content';
+
+const { slug } = Astro.params;
+const post = await getEntry('blog', slug);
+if (!post) return Astro.redirect('/404');
+
+const { Content } = await render(post);
+---
+<h1>{post.data.title}</h1>
+<Content />
+```
+
+หลักคิด: ชุดหน้าที่ **รู้แน่และจำกัด** (โพสต์บล็อกทั้งหมด) → `getStaticPaths()` แล้วอยู่แบบ static ส่วนชุดที่ **เปิดกว้าง** (profile ของใครก็ได้, ค้นหาอะไรก็ได้) → `prerender = false` แล้วอ่าน `Astro.params` ต่อ request
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**dynamic route** คือไฟล์ที่มีส่วนในวงเล็บ (`[slug].astro` หรือ `[...path]` สำหรับ rest param) ใน static build มัน export **`getStaticPaths()`** ที่คืน `{ params, props }` ต่อหน้า หนึ่งไฟล์ HTML ต่อหนึ่ง entry ของ collection และ `paginate()` หั่น list ยาวเป็นหน้าแบบมีเลข สำหรับ URL ที่ระบุล่วงหน้าไม่ได้ ให้ตั้ง **`prerender = false`** ข้าม `getStaticPaths` แล้วอ่าน **`Astro.params`** สดต่อ request
+</Callout>
+
+export const quizRoutes = [
+  {
+    q: 'getStaticPaths() คืนอะไรสำหรับ static dynamic route?',
+    options: [
+      'HTML ที่ render แล้ว',
+      'list ของ { params, props } หนึ่งอันต่อหนึ่งหน้าที่ Astro ควร build',
+      'string เดียว',
+      'database query',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน [slug].astro key params ต้องชื่ออะไร?',
+    options: [
+      'ต้องเป็น "id" เสมอ',
+      'ต้องตรงกับชื่อในวงเล็บ params: { slug } สำหรับ [slug].astro',
+      'อะไรก็ได้',
+      'ต้องเป็น "path"',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'helper paginate() ให้อะไรกับแต่ละหน้าที่ generate?',
+    options: [
+      'แค่จำนวนรวม',
+      'prop page ที่มี data (slice นี้), currentPage, lastPage, และ url.prev/url.next',
+      'list เต็มที่ยังไม่หั่น',
+      'แค่เลขหน้า',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ต้องการ route สำหรับ user id ใด ๆ ที่รู้ไม่ได้ตอน build ทำยังไง?',
+    options: [
+      'ลิสต์ทุก id ที่เป็นไปได้ใน getStaticPaths',
+      'ตั้ง prerender = false เอา getStaticPaths ออก แล้วอ่าน Astro.params สดต่อ request',
+      'ใช้ rest param อย่างเดียว',
+      'ทำไม่ได้ใน Astro',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/dynamic-routes" questions={quizRoutes} />
+
+<ProgressTracker client:visible id="content-and-data/dynamic-routes" />

@@ -1,0 +1,117 @@
+---
+title: 'Images & Assets'
+description: 'image optimization อัตโนมัติด้วย component Image และ Picture, local vs remote image, โมดูล astro:assets และ font ที่ optimize'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Image คือผลไม้ที่เก็บง่ายที่สุดเรื่อง performance
+
+ในหน้าเว็บส่วนใหญ่ image คือ bytes ที่ใหญ่ที่สุดบนสาย — hero photo ที่ไม่ optimize อาจหนักกว่า HTML, CSS และ JavaScript รวมกัน Astro มี image pipeline อยู่ในโมดูล **`astro:assets`** ที่มีมาให้ในตัว เราจึงได้ format สมัยใหม่, dimension ที่ถูกต้อง และ lazy loading โดยไม่ต้องทำเอง
+
+## component `<Image />`
+
+เมื่อ import local image เข้ามาแล้ว render ด้วย `<Image />` Astro จะ process มันตอน build time — แปลงเป็น format ที่มีประสิทธิภาพ (เช่น WebP/AVIF) และบังคับให้ระบุ width/height เพื่อให้ browser จองพื้นที่ไว้ (ไม่มี layout shift):
+
+```astro
+---
+import { Image } from 'astro:assets';
+import heroImage from '../assets/hero.png';   // a local import
+---
+<Image src={heroImage} alt="A mountain at sunrise" width={800} height={400} />
+```
+
+สิ่งที่ `<Image />` ทำแต่ `<img>` ธรรมดาไม่ทำ:
+
+- **optimize ไฟล์** — re-encode เป็น format สมัยใหม่ที่เล็กกว่าอัตโนมัติ
+- **ป้องกัน layout shift** — บังคับ width/height (infer มาจาก local import) พื้นที่จึงถูกจองก่อน image โหลด
+- **lazy-load โดย default** — ใส่ `loading="lazy"` และ `decoding="async"` ให้ image ที่อยู่นอกจอไม่ block การ render แรก
+
+สำหรับ local import Astro รู้ dimension จริงอยู่แล้ว เราจึงละ width/height ได้และมันจะเติมให้เอง
+
+## `<Picture />` สำหรับหลาย format และ art direction
+
+เมื่ออยากให้ browser *เลือก* format เอง หรือ serve crop ต่างกันในแต่ละ breakpoint ให้ใช้ **`<Picture />`** มัน render เป็น element `<picture>` ที่มีหลาย `<source>`:
+
+```astro
+---
+import { Picture } from 'astro:assets';
+import hero from '../assets/hero.png';
+---
+<Picture src={hero} formats={['avif', 'webp']} alt="Sunrise" width={800} height={400} />
+```
+
+browser เลือก format แรกที่รองรับ (AVIF แล้วค่อย WebP) และ fallback ไปที่ต้นฉบับ — ได้ compression ที่ดีที่สุดเท่าที่ browser ของผู้ชมแต่ละคนรับได้
+
+## Local vs remote image
+
+- **local image** (import จาก `src/`) ถูก optimize เต็มที่และรู้ dimension — ควรใช้แบบนี้เสมอ
+- **image ใน `public/`** ถูก serve ตามเดิม ไม่ optimize (Astro ไม่แตะ `public/` เลย) ใช้เฉพาะกับของที่ต้องคง path/ชื่อไว้เป๊ะ ๆ
+- **remote image** (URL) optimize ได้เหมือนกัน แต่ต้อง list domain เป็น **authorized** ใน `astro.config.mjs` (`image.domains` หรือ `image.remotePatterns`) — เป็นมาตรการความปลอดภัยไม่ให้เรา proxy host มั่วซั่ว
+
+<Mermaid title="Where an image comes from decides how it's handled" code={imgDiagram} />
+
+export const imgDiagram = `flowchart TB
+  local["Imported from src/"] --> opt["Optimized, dimensions known"]
+  remote["Remote URL"] --> auth["Optimized only if domain is authorized"]
+  pub["In public/"] --> asis["Served as-is, not optimized"]`;
+
+## font ที่ optimize
+
+font คืออีก asset ใหญ่ที่ render-blocking Fonts API ของ Astro มี component **`<Font />`** (จาก `astro:assets`) ที่ download, self-host และ optimize web font ตอน build time — สร้าง `@font-face` rule และ preload ที่ถูกต้อง — เราจึงเลี่ยง request ไป font ของ third-party และ layout shift ที่มากับมัน เรา config font family ใน `astro.config.mjs` แล้ววาง `<Font />` ใน head
+
+<Callout title="สรุปบรรทัดเดียว">
+ใช้ **`<Image />`** (จาก `astro:assets`) แทน `<img>` ธรรมดา: มัน auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อไม่ให้มี layout shift และ lazy-load โดย default ใช้ **`<Picture />`** เมื่ออยากได้หลาย format หรือ crop แบบ art direction เลือก **local imported image** (optimize เต็มที่ รู้ dimension) มากกว่า `public/` (serve ตามเดิม) และ remote URL (ต้องมี authorized domain) และ component **`<Font />`** ช่วย self-host และ optimize web font เพื่อตัด request render-blocking ของ third-party
+</Callout>
+
+export const quizImg = [
+  {
+    q: 'component `<Image />` ทำอะไรที่ `<img>` ธรรมดาไม่ทำ?',
+    options: [
+      'ไม่มีอะไร มันเป็นแค่ alias',
+      'auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อป้องกัน layout shift และ lazy-load โดย default',
+      'ใช้ได้กับ remote image เท่านั้น',
+      'ปิด lazy loading',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ควรใช้ `<Picture />` แทน `<Image />` เมื่อไร?',
+    options: [
+      'ไม่มีวัน มันเหมือนกัน',
+      'เมื่ออยากให้ browser เลือกจากหลาย format หรือ serve crop ต่างกันในแต่ละ breakpoint',
+      'เฉพาะกับ SVG',
+      'เฉพาะใน server mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'image ที่วางในโฟลเดอร์ `public/` ถูกจัดการยังไง?',
+    options: [
+      'optimize เต็มที่เหมือน local import',
+      'serve ตามเดิม ไม่ optimize — Astro ไม่ process `public/`',
+      'ถูก reject ตอน build',
+      'ถูกแปลงเป็น base64',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะ optimize remote image จาก URL ต้องมีอะไร?',
+    options: [
+      'ไม่ต้องมีอะไร ทุก URL ใช้ได้',
+      'domain ของมันต้องถูก list เป็น authorized ใน Astro config (`image.domains` / `image.remotePatterns`)',
+      'ต้องเล็กกว่า 1KB',
+      'ต้องเป็น SVG',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/images-and-assets" questions={quizImg} />
+
+<ProgressTracker client:visible id="rendering-and-performance/images-and-assets" />

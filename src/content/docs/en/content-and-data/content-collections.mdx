@@ -1,0 +1,157 @@
+---
+title: 'Content Collections'
+description: 'The Content Layer API — defining collections with a loader, validating with a schema, querying with getCollection and getEntry, and rendering entry bodies with render.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Defining a collection
+
+Collections live in one config file: **`src/content.config.ts`**. Each collection is a call to `defineCollection` with two parts — a **`loader`** (where the content comes from) and a **`schema`** (its validated shape):
+
+```ts
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  // loader: read every .md/.mdx file under src/data/blog (skipping _drafts)
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  // schema: validate each file's frontmatter
+  schema: z.object({
+    title: z.string(),
+    pubDate: z.coerce.date(),
+    draft: z.boolean().default(false),
+  }),
+});
+
+export const collections = { blog };
+```
+
+The key Astro 6 rule: **every collection must declare a `loader`**. The old behavior — dropping files in `src/content/blog/` and having them auto-collected — is gone. Being explicit means the same API can load local files today and a remote API tomorrow, with no change to how you query.
+
+## Loaders: where content comes from
+
+Astro ships two built-in loaders from `astro/loaders`:
+
+- **`glob()`** — load many files matching a pattern. Each file becomes one entry. Use it for a folder of blog posts or docs pages: `glob({ pattern: '**/*.md', base: './src/data/blog' })`.
+- **`file()`** — load many entries from a *single* data file (a JSON or YAML array). Use it for structured data like authors or products: `file('./src/data/authors.json')`.
+
+The pattern `**/[^_]*.{md,mdx}` is worth reading: it matches `.md` and `.mdx` files in any subfolder, but the `[^_]` excludes files starting with an underscore — a handy convention for drafts.
+
+Beyond these, the loader is a documented interface, so the ecosystem provides loaders for CMSs and APIs; you can also write your own to pull from any source.
+
+<Mermaid title="The content collection pipeline" code={diagram} />
+
+export const diagram = `flowchart LR
+  src["files: src/data/blog/*.md"] --> loader["glob loader reads files"]
+  loader --> schema["schema validates frontmatter"]
+  schema --> store["typed entries in the content store"]
+  store --> get["getCollection('blog')"]
+  get --> page["page renders each entry"]`;
+
+## Querying a collection
+
+Once defined, you query a collection from any component script with two functions from `astro:content`:
+
+```astro
+---
+import { getCollection, getEntry } from 'astro:content';
+
+// All published posts, newest first
+const posts = (await getCollection('blog'))
+  .filter((post) => !post.data.draft)
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+// A single entry by its id
+const featured = await getEntry('blog', 'hello-world');
+---
+<ul>
+  {posts.map((post) => (
+    <li>
+      <a href={`/blog/${post.id}`}>{post.data.title}</a>
+    </li>
+  ))}
+</ul>
+```
+
+Each entry has an **`id`** (derived from its filename) and a **`data`** object — the validated frontmatter, fully typed from your schema. Because validation already ran, `post.data.pubDate` is a real `Date`, not a string; your editor autocompletes the fields.
+
+## Rendering an entry's body
+
+Querying gives you an entry's frontmatter, but the Markdown *body* isn't HTML yet. To render it, call **`render`** (from `astro:content`) on the entry — it returns a `<Content />` component you drop into the template:
+
+```astro
+---
+import { getEntry, render } from 'astro:content';
+
+const post = await getEntry('blog', 'hello-world');
+if (!post) throw new Error('Post not found');
+
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <time>{post.data.pubDate.toDateString()}</time>
+  <Content />
+</article>
+```
+
+`render` compiles the entry's Markdown/MDX to a component, so `<Content />` outputs the finished HTML — headings, code blocks, and any components used in MDX all rendered.
+
+<Callout title="The one-line takeaway">
+A collection is `defineCollection({ loader, schema })` in **`src/content.config.ts`** — the `loader` (`glob` for many files, `file` for a data file) says where content lives, the `schema` validates it. Query with `getCollection` (many) and `getEntry` (one); each entry has an `id` and typed `data`. To output the body, call `render(entry)` and drop the returned `<Content />` into your template. In Astro 6, every collection must have a loader.
+</Callout>
+
+export const quizCollections = [
+  {
+    q: 'Where do you define content collections in Astro 6?',
+    options: [
+      'In astro.config.mjs',
+      'In src/content.config.ts, with defineCollection',
+      'In each page file',
+      'In package.json',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the difference between the glob and file loaders?',
+    options: [
+      'glob is faster',
+      'glob loads many files (one entry per file); file loads many entries from a single data file like a JSON array',
+      'file only works for images',
+      'They are identical',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you render a collection entry\'s Markdown body to HTML?',
+    options: [
+      'Print entry.body directly',
+      'Call render(entry) and use the returned <Content /> component',
+      'Use dangerouslySetInnerHTML',
+      'It renders automatically',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'After a schema validates, what type is a z.coerce.date() frontmatter field on entry.data?',
+    options: [
+      'A string',
+      'A real Date object — validation coerced and typed it',
+      'A number',
+      'undefined',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/content-collections" questions={quizCollections} />
+
+<ProgressTracker client:visible id="content-and-data/content-collections" />

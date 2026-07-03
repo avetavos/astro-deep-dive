@@ -1,0 +1,117 @@
+---
+title: 'Data Fetching'
+description: 'fetch ข้อมูลภายนอกด้วย top-level await, ความต่างระหว่างข้อมูล build-time กับ request-time, ดึงจาก headless CMS, และทำไม Astro.glob ถึงถูกแทนที่.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การ fetch ข้อมูลก็แค่ top-level await
+
+component script ของ `.astro` รันบน server เราจึง fetch ข้อมูลภายนอกด้วยวิธีที่ตรงไปตรงมาที่สุด คือ **`await fetch()` แบบ top-level** ไม่มี `useEffect`, ไม่มี loading state, ไม่มี round-trip ไปฝั่ง client ข้อมูล resolve เสร็จก่อนที่ HTML จะมีอยู่ด้วยซ้ำ
+
+```astro
+---
+// src/pages/products.astro
+const res = await fetch('https://api.example.com/products');
+if (!res.ok) throw new Error(`API returned ${res.status}`);
+const products = await res.json();
+---
+<ul>
+  {products.map((p) => <li>{p.name} — ${p.price}</li>)}
+</ul>
+```
+
+pattern เดียวกันใช้ได้กับ REST API, database client, หรือ SDK ของ headless CMS เพราะรันบน server ความลับ (API key) จึงอยู่ฝั่ง server ไม่ถูกส่งไปเบราว์เซอร์
+
+## build-time vs request-time: ความต่างที่สำคัญมาก
+
+*ตอนไหน* ที่ `fetch` นั้นรัน ขึ้นกับ rendering mode ของหน้า และนี่คือเรื่องสำคัญที่สุดที่ต้องเข้าใจเกี่ยวกับข้อมูลใน Astro:
+
+- **หน้า static (ค่า default)** — `fetch` รัน **ครั้งเดียว ตอน build** response ถูกอบเข้าไปในไฟล์ HTML ทุกคนที่เข้ามาได้ snapshot เดียวกันจนกว่าจะ build ใหม่ เหมาะกับ product list, blog index, docs คือข้อมูลที่เปลี่ยนตามรอบ deploy
+- **หน้า on-demand (`prerender = false`)** — `fetch` รัน **ต่อ request บน server** แต่ละคนได้ข้อมูลสดและ personalize ได้ ทั้ง user ปัจจุบัน, inventory สด, ผลค้นหา ต้องใช้ adapter (ดูโมดูล rendering)
+
+```astro
+---
+// หน้านี้ render ต่อ request ดังนั้น fetch จึงสดทุกครั้งที่เข้ามา
+export const prerender = false;
+
+const res = await fetch('https://api.example.com/inventory');
+const inventory = await res.json();
+---
+<p>เหลือในสต็อกตอนนี้ {inventory.inStock} ชิ้น</p>
+```
+
+แบบทดสอบในใจ: **ข้อมูลนี้ต้องสดต่อผู้ชมแต่ละคน หรือ snapshot ตอน build ก็พอ?** snapshot พอ → ปล่อยให้ static ไว้ (เร็ว, cache ได้) ต้องสด → เปลี่ยน route นั้นให้ render แบบ on-demand การรีบไปใช้ on-demand ทั้งที่ snapshot ตอน build ก็พอ เป็นวิธีที่คนทิ้งความเร็วของ Astro ไปเปล่า ๆ บ่อยที่สุด
+
+<Mermaid title="fetch รันตอนไหน?" code={diagram} />
+
+export const diagram = `flowchart TB
+  q["ข้อมูลเปลี่ยนต่อ request ไหม?"]
+  q -->|ไม่| static["Static: fetch รันครั้งเดียวตอน build อบเข้า HTML"]
+  q -->|ใช่| ondemand["On-demand: prerender = false, fetch รันต่อ request"]
+  static --> cdn["เสิร์ฟจาก CDN เหมือนกันทุกคน"]
+  ondemand --> server["render บน server ต่อผู้ชม"]`;
+
+## Headless CMS
+
+headless CMS (Contentful, Sanity, Storyblok, WordPress API) ก็เป็นแค่แหล่งข้อมูลอีกที่ fetch มันใน component script บ่อยครั้งผ่าน SDK ของ CMS แล้ว map response ลง template สำหรับ content ที่เราเป็นเจ้าของและแก้เป็นไฟล์เอง ให้ใช้ **content collection** ที่มี loader ส่วน content ที่จัดการในระบบภายนอก ให้ fetch มัน (หรือใช้ community loader ที่ห่อ CMS ไว้หลัง collections API) ไม่ว่าทางไหนโค้ดหน้าเพจก็หน้าตาเหมือนกัน คือดึงข้อมูลบน server แล้ว render HTML
+
+## แล้ว Astro.glob() ล่ะ?
+
+โค้ด Astro รุ่นเก่าใช้ **`Astro.glob()`** ดึงไฟล์ในเครื่องหลายไฟล์ (Markdown ทั้งหมดในโฟลเดอร์) พร้อมกัน มันยังมีอยู่แต่ **ถูกแทนที่ด้วย content collection** ซึ่งให้พลัง "โหลดหลายไฟล์" แบบเดียวกัน *บวก* schema validation และ type ที่ generate ให้ สำหรับ content ในเครื่อง ให้ประกาศ collection ด้วย glob loader แทนที่จะไปคว้า `Astro.glob()` ส่วน `fetch` ดิบ ๆ เก็บไว้ใช้กับข้อมูลภายนอกจริง ๆ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+fetch ข้อมูลด้วย **top-level `await fetch()`** ใน component script มันรันบน server ความลับจึงปลอดภัยและไม่มี round-trip ฝั่ง client กุญแจอยู่ที่ *ตอนไหน* ที่มันรัน บนหน้า **static** fetch เกิด **ครั้งเดียวตอน build** แล้วอบเข้าไป ส่วนหน้า **on-demand** (`prerender = false`) รัน **ต่อ request** เพื่อข้อมูลสดต่อผู้ชม default เป็น static ไว้จนกว่าจะจำเป็นต้องสด และสำหรับโหลดไฟล์ในเครื่องหลายไฟล์ ให้ใช้ content collection แทน `Astro.glob()` รุ่นเก่า
+</Callout>
+
+export const quizFetching = [
+  {
+    q: 'fetch ข้อมูลภายนอกใน .astro component ยังไง?',
+    options: [
+      'ด้วย useEffect ฝั่ง client',
+      'ด้วย top-level await fetch() ใน component script มันรันบน server',
+      'ผ่าน plugin เท่านั้น',
+      'fetch ใน Astro ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'บนหน้า static (default) top-level fetch รันตอนไหน?',
+    options: [
+      'ทุก request',
+      'ครั้งเดียวตอน build response ถูกอบเข้าไฟล์ HTML',
+      'ในเบราว์เซอร์',
+      'ไม่รันเลย',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ต้องการข้อมูลสดต่อผู้ชมบนหน้าหนึ่ง ต้องตั้งอะไร?',
+    options: [
+      'ไม่ต้องตั้งอะไร หน้า static สดอยู่แล้ว',
+      'export const prerender = false เพื่อให้หน้า render แบบ on-demand และ fetch รันต่อ request',
+      'CSS media query',
+      'client:load บนหน้า',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'สำหรับโหลดไฟล์ Markdown ในเครื่องหลายไฟล์ อะไรดีกว่า Astro.glob()?',
+    options: [
+      'content collection ที่มี glob loader พลังเท่ากันบวก schema validation และ type',
+      'copy-paste ไฟล์เอา',
+      'fetch ฝั่ง client',
+      'ไม่มี ต้องใช้ Astro.glob() เท่านั้น',
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content-and-data/data-fetching" questions={quizFetching} />
+
+<ProgressTracker client:visible id="content-and-data/data-fetching" />

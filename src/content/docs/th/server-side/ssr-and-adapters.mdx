@@ -1,0 +1,132 @@
+---
+title: 'SSR & Adapters'
+description: 'on-demand rendering เชิงลึก — ติดตั้ง adapter, อ่าน request ที่เข้ามาด้วย Astro.request และ Astro.url, cookies และการกำหนดรูปแบบ response'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เปิด server
+
+on-demand rendering รัน component script ของคุณ **ต่อ request** คุณจึงอ่าน data ตอน request ได้ การจะรัน server code ต้องติดตั้ง **adapter** สำหรับแพลตฟอร์มปลายทางแล้วเพิ่มลง config:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),   // or cloudflare(), vercel(), netlify()
+});
+```
+
+พอมี adapter route จะ render on demand ตรงที่ต้องการ (หรือเมื่อคุณตั้ง `export const prerender = false` บน route) ถ้าไม่มี ฟีเจอร์ on-demand จะ build ไม่ผ่านพร้อมข้อความ *"an adapter is required"*
+
+<Mermaid title="request ไหลผ่าน render ไปสู่ response" code={flowDiagram} />
+
+export const flowDiagram = `sequenceDiagram
+  participant B as Browser
+  participant S as Astro server (adapter)
+  participant C as Component script
+  B->>S: GET /dashboard
+  S->>C: run script with request context
+  C->>C: read cookies, user, query params
+  C-->>S: HTML + response settings
+  S-->>B: Response (status, headers, body)`;
+
+## อ่าน request
+
+ภายใน on-demand page หรือ endpoint global `Astro` เปิดให้เข้าถึง request:
+
+```astro
+---
+export const prerender = false;
+
+const url = Astro.url;                       // a URL object
+const q = url.searchParams.get('q');         // query params
+const method = Astro.request.method;         // the raw Request
+const token = Astro.cookies.get('session')?.value;  // typed cookie access
+const { id } = Astro.params;                 // dynamic route params
+---
+<p>Searching for {q}</p>
+```
+
+- **`Astro.request`** คือ `Request` มาตรฐาน — headers, method และ `await Astro.request.formData()` หรือ `.json()` สำหรับ body
+- **`Astro.url`** คือ `URL` ที่ parse แล้ว — pathname และ `searchParams`
+- **`Astro.params`** เก็บ segment แบบ dynamic (`[id]`)
+- **`Astro.cookies`** อ่านและเขียน cookie ด้วย API แบบ typed (`.get`, `.set`, `.delete`, `.has`)
+
+## กำหนดรูปแบบ response
+
+โดย default หน้าจะ return HTML พร้อม status 200 คุณควบคุม response ผ่าน **`Astro.response`** (ตั้ง status และ headers) หรือ **return `Response`** ตรง ๆ:
+
+```astro
+---
+export const prerender = false;
+const user = Astro.cookies.get('session')?.value;
+
+// Not logged in? Redirect.
+if (!user) return Astro.redirect('/login');
+
+// Set a custom header on the HTML response.
+Astro.response.headers.set('Cache-Control', 'private, max-age=0');
+---
+<h1>Your dashboard</h1>
+```
+
+`Astro.redirect('/login')` return redirect `Response`; `Astro.response.headers` แก้ header ที่ส่งออก; และคุณ `return new Response(...)` เพื่อคุมเต็มที่ได้ (หน้า 404, custom status) นี่คือ model `Request`/`Response` เดียวกับที่ทั้ง web platform ใช้ — Astro ไม่ได้คิดของตัวเองขึ้นมาใหม่
+
+<Callout title="สรุปหนึ่งบรรทัด">
+on-demand rendering รัน script ต่อ request และต้องมี **adapter** (Node/Cloudflare/Vercel) ใน config ภายใน server route global `Astro` เปิดให้เข้าถึง request: **`Astro.request`** (`Request` มาตรฐาน + body), **`Astro.url`** (pathname & `searchParams`), **`Astro.params`** (dynamic segment) และ **`Astro.cookies`** (typed get/set) กำหนด reply ด้วย **`Astro.response`** (status/headers), `Astro.redirect(...)` หรือ return `Response` — เป็น model ของ web platform มาตรฐาน ไม่ใช่ของเฉพาะทาง
+</Callout>
+
+export const quizSsr = [
+  {
+    q: 'ต้อง config อะไรเพื่อให้ on-demand rendering ทำงาน?',
+    options: [
+      'database',
+      'adapter สำหรับแพลตฟอร์มปลายทาง (Node, Cloudflare, Vercel...)',
+      'service worker',
+      'ไม่ต้องเพิ่มอะไร',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณอ่าน query string ใน on-demand page อย่างไร?',
+    options: [
+      'จาก Astro.props',
+      'จาก `Astro.url.searchParams`',
+      'จากชื่อไฟล์',
+      'อ่าน query params ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณ redirect user ที่ยังไม่ auth จาก server page อย่างไร?',
+    options: [
+      'throw error',
+      'return `Astro.redirect(\'/login\')`',
+      'ตั้ง window.location',
+      'ลบหน้าทิ้ง',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`Astro.request` คืออะไร?',
+    options: [
+      'object เฉพาะของ Astro',
+      '`Request` มาตรฐานของ web platform (headers, method, body ผ่าน formData()/json())',
+      'connection ของ database',
+      'build config',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/ssr-and-adapters" questions={quizSsr} />
+
+<ProgressTracker client:visible id="server-side/ssr-and-adapters" />

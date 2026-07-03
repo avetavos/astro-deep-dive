@@ -1,0 +1,86 @@
+---
+title: 'Islands & Client Interactivity'
+description: 'How Astro adds interactivity without shipping a SPA — islands are framework components you deliberately hydrate, when to reach for each client directive, and the newer server islands.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## From static HTML to just enough interactivity
+
+The Foundations module made the case: Astro ships **zero JavaScript by default**. That's great for content, but real sites still need a search box, a cart, a theme toggle, a like button. This module is about adding exactly that much interactivity — and no more.
+
+The unit of interactivity in Astro is the **island**. An island is a framework component (React, Vue, Svelte, Solid, Preact) that you *deliberately hydrate* on the client with a **client directive**. Everything around it stays static HTML. You don't opt the page into being an app; you opt one component into being interactive.
+
+<Mermaid title="A static page with a few hydrated islands" code={diagram} />
+
+export const diagram = `flowchart TB
+  page["Page: static HTML, no JS"]
+  page --> header["header — static"]
+  page --> search["SearchBox — island (client:load)"]
+  page --> article["article — static"]
+  page --> cart["Cart — island (client:visible)"]
+  page --> footer["footer — static"]`;
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Client directives | The five `client:*` directives and when each hydrates |
+| Framework integrations | Using React/Vue/Svelte/Solid/Preact components as islands |
+| Sharing state | Islands are isolated — how to share data across them with nanostores and slots |
+| Server islands | `server:defer` — defer a slow or personalized component without slowing the page |
+
+## The mental model to carry through
+
+Two questions decide everything in this module:
+
+1. **Does this component need to be interactive at all?** If not, it's a plain `.astro` component and ships no JS. Most of the page.
+2. **If yes, *when* does it need to become interactive?** Immediately? When it scrolls into view? At a certain screen size? That "when" is exactly what a client directive expresses — and it's the difference between a fast page and a slow one.
+
+Keep asking those two questions and islands stop being a bag of directives and become a budget: every island is JavaScript you chose to ship, on purpose.
+
+<Callout title="The one-line takeaway">
+An **island** is a framework component you deliberately hydrate with a **client directive**; everything else on the page stays static HTML with no JavaScript. Interactivity in Astro is opt-in per component, not per page — so the design questions are "does this need to be interactive?" and, if so, "*when* should it hydrate?" The rest of this module answers the "when" (client directives), the "with what" (framework integrations), the "how do islands talk to each other" (sharing state), and the newer "render it on the server but defer it" (server islands).
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What is an island in Astro?',
+    options: [
+      'A separate server that runs your app',
+      'A framework component you deliberately hydrate on the client with a client directive, surrounded by static HTML',
+      'A CSS layout container',
+      'A folder in src/pages',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'By default, how much of a page with one island is interactive JavaScript?',
+    options: [
+      'The whole page becomes a SPA',
+      'Only the island ships and hydrates JavaScript; everything around it stays static HTML',
+      'Every component on the page',
+      'None — islands do not ship JavaScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a client directive primarily control?',
+    options: [
+      'The color theme of the component',
+      'Whether and *when* a component hydrates on the client',
+      'Which database the component reads',
+      'The component\'s CSS scope',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="islands/index" />

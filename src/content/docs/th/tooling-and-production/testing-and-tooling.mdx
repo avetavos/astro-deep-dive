@@ -1,0 +1,135 @@
+---
+title: 'Testing & Tooling'
+description: 'unit test ด้วย Vitest, component test ด้วย Astro Container API, end-to-end test ด้วย Playwright และ Astro Dev Toolbar สำหรับ debug'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## test สามชั้น
+
+เว็บ Astro ส่วนใหญ่เป็น HTML ที่ render บน server พร้อม island ไม่กี่ตัว ซึ่งกำหนดว่าคุณ test มันยังไง สามชั้นครอบคลุมทั้งหมด:
+
+| ชั้น | Tool | ตรวจอะไร |
+|-------|------|----------------|
+| Unit | Vitest | logic ล้วน — helper, data transform, schema parsing |
+| Component | Astro Container API (+ Vitest) | component render HTML ที่คาดหวังจาก props/slots ที่ให้ |
+| End-to-end | Playwright | หน้าจริงใน browser จริง รวมถึง island interactivity |
+
+หลักการคร่าว ๆ: ดัน logic เข้า function ล้วนแล้ว unit-test มัน, render-test component ที่ output สำคัญ และใช้ end-to-end test ไม่กี่ตัวสำหรับ flow ที่เกี่ยวกับ hydration และ navigation จริง
+
+## unit test ด้วย Vitest
+
+เพราะ Astro รันบน Vite **Vitest** จึงเป็น unit-test runner ที่เป็นธรรมชาติ — config เดียวกัน, เริ่มทันที อะไรที่เป็น TypeScript ล้วน (date formatter, filter, Zod schema) ก็ test แบบปกติ:
+
+```ts
+import { expect, test } from 'vitest';
+import { formatDate } from '../src/lib/format';
+
+test('formatDate renders a friendly date', () => {
+  expect(formatDate(new Date('2026-01-15'))).toBe('Jan 15, 2026');
+});
+```
+
+## component test ด้วย Container API
+
+เพื่อ test ว่า component `.astro` render HTML ถูกต้อง ใช้ **Astro Container API** — มัน render component เป็น string แบบแยกเดี่ยว ไม่ต้องมี browser ตอนนี้เปิดให้ใช้ในชื่อ `experimental_AstroContainer`:
+
+```ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Card from '../src/components/Card.astro';
+
+test('Card renders its title and slotted content', async () => {
+  const container = await AstroContainer.create();
+  const result = await container.renderToString(Card, {
+    props: { title: 'Hello' },
+    slots: { default: 'Body content' },
+  });
+
+  expect(result).toContain('Hello');
+  expect(result).toContain('Body content');
+});
+```
+
+คุณได้ HTML ที่ render เป็น string แล้ว assert กับมัน — เร็ว และมัน exercise component จริงรวมถึง props และ slot ของมัน
+
+## end-to-end ด้วย Playwright
+
+Container test render HTML แต่ไม่รัน island สำหรับพฤติกรรมที่ขึ้นกับ **hydration** — คลิก island ที่ interactive, client-side navigation ด้วย `<ClientRouter />`, การ submit form — ใช้ **Playwright** (หรือ Cypress) ขับ browser จริงกับเว็บที่ build แล้ว:
+
+```ts
+import { test, expect } from '@playwright/test';
+
+test('counter island increments on click', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Increment' }).click();
+  await expect(page.getByText('Count: 1')).toBeVisible();
+});
+```
+
+<Mermaid title="test ที่ชั้นซึ่งตรงกับความเสี่ยง" code={testDiagram} />
+
+export const testDiagram = `flowchart LR
+  logic["plain logic"] --> vitest["Vitest unit test"]
+  comp["component HTML output"] --> container["Container API test"]
+  flow["hydrated flows and navigation"] --> pw["Playwright e2e"]`;
+
+## Dev Toolbar
+
+ระหว่าง development Astro แสดง **Dev Toolbar** ที่ด้านล่างของหน้า — มันเตือนปัญหา accessibility, แสดงว่า component ไหนเป็น island (และ hydration directive ของมัน) และมี plugin สำหรับ audit และ debug เป็นวิธีที่เร็วที่สุดในการเห็นว่า *อะไรกลายเป็น island จริง ๆ* และจับปัญหา a11y ระหว่างสร้าง มันรันแค่ตอน dev และไม่ส่งขึ้น production
+
+<Callout title="สรุปหนึ่งบรรทัด">
+test เว็บ Astro ที่สามชั้น: **Vitest** สำหรับ logic ล้วน, **Astro Container API** (`experimental_AstroContainer`, `renderToString`) สำหรับ assert HTML ที่ component render แบบแยกเดี่ยว และ **Playwright** สำหรับ end-to-end flow ที่ต้องมี hydration และ navigation จริง Container test ไม่รัน island ดังนั้นพฤติกรรม interactive อยู่ที่ Playwright **Dev Toolbar** (เฉพาะ dev) ช่วยให้เห็นว่า component ไหนกลายเป็น island และจับปัญหา accessibility ระหว่างสร้าง
+</Callout>
+
+export const quizTesting = [
+  {
+    q: 'tool ไหน render component .astro เป็น HTML string แบบแยกเดี่ยวเพื่อ test?',
+    options: [
+      'Playwright',
+      'Astro Container API (experimental_AstroContainer)',
+      'astro check',
+      'Dev Toolbar',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้องมี Playwright เพิ่มจาก Container API test?',
+    options: [
+      'Container test เลิกใช้แล้ว',
+      'Container test render HTML แต่ไม่รัน island Playwright ขับ browser จริงเพื่อ test hydrated interactivity และ navigation',
+      'Playwright เร็วกว่าสำหรับ unit test',
+      'ไม่ต้อง — Container test ครอบคลุมทุกอย่าง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'unit-test runner ที่เป็นธรรมชาติของโปรเจกต์ Astro คืออะไร และทำไม?',
+    options: [
+      'Jest เพราะ Astro บังคับ',
+      'Vitest เพราะ Astro รันบน Vite (config ร่วมกัน, เริ่มเร็ว)',
+      'Mocha ตามธรรมเนียม',
+      'Astro ไม่มี unit testing',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Astro Dev Toolbar ช่วยเรื่องอะไร?',
+    options: [
+      'มัน deploy เว็บ',
+      'ระหว่าง development มันเตือนปัญหา accessibility และแสดงว่า component ไหนเป็น island พร้อม hydration directive',
+      'มันรันตอน production เพื่อ monitor error',
+      'มัน format code',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/testing-and-tooling" questions={quizTesting} />
+
+<ProgressTracker client:visible id="tooling-and-production/testing-and-tooling" />

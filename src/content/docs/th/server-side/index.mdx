@@ -1,0 +1,85 @@
+---
+title: 'Server-Side Astro'
+description: 'เมื่อไรและอย่างไรที่ควร opt เข้าสู่ server — on-demand rendering, API endpoints, type-safe Actions และ middleware กับ sessions สำหรับงาน request-time ที่ Astro ทำตอน build ไม่ได้'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ไอเดียในหนึ่งประโยค
+
+**Astro เป็น static โดย default แต่คุณ opt เข้าสู่ server เมื่อหน้านั้นต้องการงาน request-time** — user ที่ login อยู่, การ submit form, live data, การเช็ค auth Server เป็นเครื่องมือที่คุณหยิบมาใช้อย่างตั้งใจ ไม่ใช่พื้นฐานที่ใช้ตลอด
+
+ทุกอย่างในโมดูลนี้ว่าด้วยการ opt-in นั้น: render ต่อ request, จัดการ request ตรง ๆ, เรียก server logic แบบ type-safe และรัน code ก่อนทุก request
+
+## โมดูลนี้ครอบคลุมอะไร
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|--------|-------------------|
+| SSR & adapters | on-demand rendering, adapter และการอ่าน request |
+| Endpoints & API routes | `APIRoute` handler ที่ return `Response` |
+| Actions | type-safe server function ด้วย `defineAction` และ validation |
+| Middleware & sessions | `onRequest`, `context.locals` และ `Astro.session` |
+
+## สี่วิธีในการรัน server code
+
+<Mermaid title="พื้นผิวฝั่ง server ของ Astro" code={overviewDiagram} />
+
+export const overviewDiagram = `flowchart TB
+  req["Incoming request"] --> mw["Middleware onRequest\n(runs first, every request)"]
+  mw --> page["On-demand page\n(prerender false)"]
+  mw --> api["API endpoint\n(GET/POST handler)"]
+  mw --> act["Action handler\n(defineAction)"]
+  page --> resp["Response"]
+  api --> resp
+  act --> resp`;
+
+- **On-demand pages** render HTML ต่อ request จึงอ่าน cookies, user และ query params ได้
+- **API endpoints** เป็น route ที่ไม่ใช่ HTML — return JSON, ไฟล์, หรือ webhook reply เป็น `Response` ดิบ
+- **Actions** เป็น type-safe server function ที่เรียกจาก client พร้อม input ที่ validate แล้ว เหมาะกับ mutation และ form
+- **Middleware** รันก่อนทุก request เป็นที่สำหรับ auth, logging และ data ที่ share ต่อ request
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Server-side Astro เป็น **opt-in**: static โดย default คุณหยิบ server มาใช้เฉพาะเมื่อหน้านั้นต้องการ data หรือ logic ตอน request สี่เครื่องมือครอบคลุมได้หมด — **on-demand pages** (HTML ต่อ request), **API endpoints** (`Response` ดิบสำหรับ non-HTML), **Actions** (type-safe validated server function สำหรับ client) และ **middleware** (code ที่รันก่อนทุก request พร้อม session สำหรับ state ต่อ user) ทั้งหมดต้องมี adapter
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'default ของ Astro คืออะไร และเมื่อไรที่คุณ opt เข้าสู่ server?',
+    options: [
+      'server โดย default; opt เข้าสู่ static เพื่อความเร็ว',
+      'static โดย default; opt เข้าสู่ server เมื่อหน้าต้องการงาน request-time (auth, form, live data)',
+      'render บน server เสมอ',
+      'render บน client เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เครื่องมือไหนเหมาะกับ type-safe server function ที่เรียกจาก client พร้อม input ที่ validate แล้ว?',
+    options: [
+      'API endpoint',
+      'Action (`defineAction`)',
+      'Middleware',
+      'static page',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Middleware รันที่ไหน?',
+    options: [
+      'ตอน build เท่านั้น',
+      'ก่อนทุก request — เป็นที่สำหรับ auth, logging และ data ต่อ request',
+      'บน client เท่านั้น',
+      'หลังส่ง response แล้ว',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="server-side/index" />

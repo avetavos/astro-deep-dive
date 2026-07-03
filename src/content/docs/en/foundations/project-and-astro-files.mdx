@@ -1,0 +1,122 @@
+---
+title: 'Project & .astro Files'
+description: 'The Astro project layout, file-based routing in src/pages, and the anatomy of a .astro component — the frontmatter fence that runs on the server and the template that becomes HTML.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The project layout
+
+A typical Astro project has a small, conventional structure:
+
+```text
+my-site/
+├── astro.config.mjs      # config: integrations, adapter, output mode
+├── src/
+│   ├── pages/            # file-based routing — each file is a route
+│   ├── components/       # reusable .astro (and framework) components
+│   ├── layouts/          # shared page shells
+│   ├── content.config.ts # content collections config (Astro 5+)
+│   └── styles/
+└── public/               # static assets served as-is (favicon, robots.txt)
+```
+
+Two folders are load-bearing:
+
+- **`src/pages/`** is **file-based routing**: `src/pages/index.astro` → `/`, `src/pages/about.astro` → `/about`, `src/pages/blog/[slug].astro` → `/blog/:slug`. The file's location *is* the route.
+- **`public/`** is copied to the output verbatim — files here are served at the root, unprocessed.
+
+## Anatomy of a .astro file
+
+The `.astro` file is Astro's own component format. It has two parts separated by a **code fence** (`---`):
+
+```astro
+---
+// 1. The component script (frontmatter). Runs on the SERVER only.
+//    JavaScript/TypeScript here: imports, data fetching, props, logic.
+import Card from '../components/Card.astro';
+
+const title = "Latest posts";
+const posts = await fetch('https://api.example.com/posts').then((r) => r.json());
+---
+
+<!-- 2. The template. Becomes HTML. Uses { } to embed JS expressions. -->
+<h1>{title}</h1>
+<ul>
+  {posts.map((post) => <Card title={post.title} />)}
+</ul>
+```
+
+The key mental model:
+
+- Everything **above** the second `---` is the **component script** — it runs once, on the server, at build time (or per request for on-demand pages). This is where you fetch data, import components, and compute values. None of it ships to the browser.
+- Everything **below** is the **template** — HTML with `{ }` expressions that drop into JavaScript. This is what becomes the rendered HTML.
+
+<Mermaid title="The two halves of a .astro file" code={fileDiagram} />
+
+export const fileDiagram = `flowchart LR
+  script["--- frontmatter ---\ncomponent script\n(server only)"] --> compute["fetch data, compute props"]
+  compute --> template["template (HTML + { } expressions)"]
+  template --> html["rendered HTML"]`;
+
+Because the script runs on the server, you can `await` at the top level — fetch from an API or database directly in a component, with no `useEffect`, no loading state, no client round-trip. The data is already there when the HTML is built.
+
+## It's a superset of HTML
+
+An `.astro` template is *valid HTML plus JSX-like expressions*. If you paste plain HTML into a `.astro` file, it just works. You add dynamism with `{ }` (expressions), `{condition && <div/>}` (conditionals), and `{items.map(...)}` (loops) — the same expression syntax you saw in the landing example. Unlike JSX, you use standard HTML attribute names (`class`, not `className`).
+
+<Callout title="The one-line takeaway">
+An Astro project routes by files in **`src/pages/`** and serves `public/` verbatim. A **`.astro` file** has two parts split by `---`: the **component script** (frontmatter) that runs on the *server* — imports, top-level `await` data fetching, props, logic, none of which ships to the browser — and the **template** (HTML plus `{ }` expressions) that becomes the rendered HTML. It's a superset of HTML, so plain HTML just works.
+</Callout>
+
+export const quizFiles = [
+  {
+    q: 'How does routing work in Astro?',
+    options: [
+      'You register routes in a config file',
+      'File-based: a file’s location in src/pages/ is its route (src/pages/about.astro → /about)',
+      'All routes go through one index file',
+      'Routes are defined in the database',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What runs in the frontmatter (the code above the second `---`) of a .astro file?',
+    options: [
+      'Client-side JavaScript sent to the browser',
+      'The component script — runs on the server only (data fetching, imports, logic); it does not ship to the browser',
+      'CSS only',
+      'Nothing — it is a comment',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why can you use top-level `await` in a .astro component script?',
+    options: [
+      'Because Astro polyfills promises',
+      'Because the script runs on the server at build/request time, so it can fetch data directly with no client round-trip',
+      'Because await is synchronous in Astro',
+      'You cannot — await is not allowed',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is a .astro template, syntactically?',
+    options: [
+      'A custom template language unrelated to HTML',
+      'A superset of HTML plus JSX-like `{ }` expressions (with standard HTML attribute names like `class`)',
+      'Pure JavaScript',
+      'Markdown',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/project-and-astro-files" questions={quizFiles} />
+
+<ProgressTracker client:visible id="foundations/project-and-astro-files" />

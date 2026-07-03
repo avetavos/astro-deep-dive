@@ -1,0 +1,83 @@
+---
+title: 'พื้นฐานและ Mental Model ของ Astro'
+description: 'ไอเดียเดียวที่ Astro สร้างขึ้นมา — ส่ง HTML ไม่ใช่ JavaScript — พร้อม islands, .astro component และ static vs on-demand rendering เป็นเลนส์สำหรับทุกอย่างที่เหลือ'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ไอเดียในประโยคเดียว
+
+**Astro render หน้าเว็บเป็น HTML บน server (ตอน build หรือตอนแต่ละ request) แล้วส่ง JavaScript ไป browser เป็นศูนย์โดย default — คุณเลือกที่จะ *เปิด* interactivity เอง ทีละ island** เนื้อหาส่วนใหญ่ของ content site เป็น static อยู่แล้ว Astro เลยยึดตรงนั้นเป็น default และทำให้ส่วนที่ interactive ชัดเจนขึ้นมา
+
+ทุก feature ของ Astro — islands, client directives, content collections, server islands — เป็นผลพวงจากคำมั่นข้อเดียว: **ส่ง HTML ที่เสร็จแล้วไปให้ browser และส่งเฉพาะ JavaScript ที่จำเป็นจริง ๆ เท่านั้น**
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|--------|-------------------|
+| ทำไมต้อง Astro และ islands | islands architecture และแนวคิด zero-JS-by-default |
+| Project และ .astro files | โครงสร้างโปรเจกต์และ `.astro` component (frontmatter + template) |
+| The component model | Astro components, props, slots และ scoped styles |
+| Rendering และ output modes | Static (SSG) vs on-demand (SSR) และ build ทำงานยังไง |
+
+## เลนส์สำหรับทั้งคอร์ส
+
+สองไอเดียนี้อธิบายเกือบทุกอย่างที่ Astro ทำ:
+
+<Mermaid title="สองไอเดียที่ทุกอย่างต่อยอดมาจากมัน" code={lensDiagram} />
+
+export const lensDiagram = `flowchart TB
+  html["Server-first: render เป็น HTML\n(ตอน build หรือแต่ละ request)"] --> ship["ส่ง HTML ที่เสร็จแล้ว\nไม่มี JS โดย default"]
+  islands["Islands: เปิด interactivity\nต่อ component ไม่ใช่ต่อหน้า"] --> ship
+  ship --> fast["หน้าเว็บเร็ว\nJavaScript น้อยที่สุด"]`;
+
+- เพราะ Astro เป็น **server-first** component ของคุณจะรันเพื่อผลิต HTML — code ของ framework และ templating ไม่มีทางไปถึง browser
+- เพราะ interactivity เป็นแบบ opt-in ผ่าน **islands** หน้าหนึ่งจึงเป็น static HTML ได้ถึง 99% โดยมี widget เล็ก ๆ ตัวเดียวที่ hydrate แทนที่จะส่งทั้ง framework ไปรันทั้งหน้า
+
+จับสองข้อนี้ไว้ แล้วดีไซน์ของ Astro จะเลิกรู้สึกเหมือนกองของ directive สุ่ม ๆ และกลายเป็นการเดิมพันเดียวที่สอดคล้องกัน
+
+<Callout title="การเปลี่ยน mindset">
+มาจากสาย SPA framework (React/Vue เป็น *ทั้งแอป*) สัญชาตญาณคุณคือ "ทุกอย่างเป็น component ที่รันใน browser" Astro กลับด้าน: **หน้าคือ HTML ส่วน JavaScript คือข้อยกเว้นที่คุณตั้งใจเพิ่มเข้าไป** คุณจะเลิกถามว่า "จะ hydrate แอปนี้ยังไง" แล้วเริ่มถามว่า "มีไม่กี่ชิ้นไหนที่จำเป็นต้อง interactive จริง ๆ" — แล้วส่งไปแค่นั้น
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Astro ส่งอะไรไปที่ browser โดย default?',
+    options: [
+      'JavaScript bundle เต็ม ๆ สำหรับทั้งหน้า',
+      'HTML ที่เสร็จแล้วโดยไม่มี JavaScript — คุณเลือกเปิด interactivity ทีละ island',
+      'เฉพาะ CSS',
+      'เชลล์ของ single-page application',
+    ],
+    answer: 1,
+  },
+  {
+    q: '"islands architecture" คืออะไร?',
+    options: [
+      'การแยกแอปข้าม server หลายตัว',
+      'component ที่ interactive เป็น island แยกกันซึ่ง hydrate ทีละตัว บนหน้า HTML ที่เป็น static',
+      'ระบบ CSS layout',
+      'กลยุทธ์ database sharding',
+    ],
+    answer: 1,
+  },
+  {
+    q: '"server-first" ใน Astro หมายความว่าอะไร?',
+    options: [
+      'คุณต้องรัน server เอง',
+      'component render เป็น HTML บน server (ตอน build หรือแต่ละ request) โดย code templating ไม่ไปถึง browser',
+      'database รันก่อน',
+      'JavaScript รันก่อน HTML',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="foundations/index" />

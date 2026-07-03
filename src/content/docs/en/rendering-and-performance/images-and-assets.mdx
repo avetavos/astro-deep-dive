@@ -1,0 +1,117 @@
+---
+title: 'Images & Assets'
+description: 'Automatic image optimization with the Image and Picture components, local vs remote images, the astro:assets module, and optimized fonts.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Images are the low-hanging performance fruit
+
+On most pages, images are the largest bytes on the wire — an unoptimized hero photo can outweigh all your HTML, CSS, and JavaScript combined. Astro ships an image pipeline in the built-in **`astro:assets`** module so you get modern formats, correct dimensions, and lazy loading without manual work.
+
+## The `<Image />` component
+
+Import a local image and render it with `<Image />`. Astro processes it at build time — converting to an efficient format (like WebP/AVIF), and requiring width/height so the browser reserves space (no layout shift):
+
+```astro
+---
+import { Image } from 'astro:assets';
+import heroImage from '../assets/hero.png';   // a local import
+---
+<Image src={heroImage} alt="A mountain at sunrise" width={800} height={400} />
+```
+
+What `<Image />` does that a plain `<img>` doesn't:
+
+- **Optimizes the file** — re-encodes to a smaller modern format automatically.
+- **Prevents layout shift** — width/height are required (inferred from local imports), so the space is reserved before the image loads.
+- **Lazy-loads by default** — adds `loading="lazy"` and `decoding="async"` so off-screen images don't block the initial render.
+
+For a local import, Astro even knows the intrinsic dimensions, so you can omit width/height and it fills them in.
+
+## `<Picture />` for multiple formats and art direction
+
+When you want the browser to *choose* among formats, or serve a different crop at different breakpoints, use **`<Picture />`**. It renders a `<picture>` element with multiple `<source>` entries:
+
+```astro
+---
+import { Picture } from 'astro:assets';
+import hero from '../assets/hero.png';
+---
+<Picture src={hero} formats={['avif', 'webp']} alt="Sunrise" width={800} height={400} />
+```
+
+The browser picks the first format it supports (AVIF, then WebP), falling back to the original — best compression each visitor's browser can handle.
+
+## Local vs remote images
+
+- **Local images** (imported from `src/`) are fully optimized and their dimensions are known — always prefer these.
+- **`public/` images** are served as-is, unoptimized (Astro never touches `public/`). Use it only for things that must keep an exact path/name.
+- **Remote images** (a URL) can be optimized too, but you must list their domains as **authorized** in `astro.config.mjs` (`image.domains` or `image.remotePatterns`) — a safety measure so you don't proxy arbitrary hosts.
+
+<Mermaid title="Where an image comes from decides how it's handled" code={imgDiagram} />
+
+export const imgDiagram = `flowchart TB
+  local["Imported from src/"] --> opt["Optimized, dimensions known"]
+  remote["Remote URL"] --> auth["Optimized only if domain is authorized"]
+  pub["In public/"] --> asis["Served as-is, not optimized"]`;
+
+## Optimized fonts
+
+Fonts are the other big, render-blocking asset. Astro's Fonts API exposes a **`<Font />`** component (from `astro:assets`) that downloads, self-hosts, and optimizes web fonts at build time — generating the right `@font-face` rules and preloads — so you avoid a third-party font request and the layout shift that comes with it. You configure your font families in `astro.config.mjs` and drop `<Font />` in your head.
+
+<Callout title="The one-line takeaway">
+Use **`<Image />`** (from `astro:assets`) instead of a plain `<img>`: it auto-optimizes to a modern format, requires width/height so there's no layout shift, and lazy-loads by default. Reach for **`<Picture />`** when you want multiple formats or art-directed crops. Prefer **local imported images** (fully optimized, dimensions known) over `public/` (served as-is) and remote URLs (need authorized domains). And the **`<Font />`** component self-hosts and optimizes web fonts to cut a render-blocking third-party request.
+</Callout>
+
+export const quizImg = [
+  {
+    q: 'What does the `<Image />` component do that a plain `<img>` does not?',
+    options: [
+      'Nothing — it is just an alias',
+      'Auto-optimizes to a modern format, requires width/height to prevent layout shift, and lazy-loads by default',
+      'Only works with remote images',
+      'Disables lazy loading',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When should you use `<Picture />` instead of `<Image />`?',
+    options: [
+      'Never — they are identical',
+      'When you want the browser to choose among multiple formats, or serve different crops at different breakpoints',
+      'Only for SVGs',
+      'Only in server mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How are images placed in the `public/` folder handled?',
+    options: [
+      'Fully optimized like local imports',
+      'Served as-is, unoptimized — Astro never processes `public/`',
+      'Rejected at build time',
+      'Converted to base64',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'To optimize a remote image by URL, what is required?',
+    options: [
+      'Nothing, all URLs work',
+      'Its domain must be listed as authorized in the Astro config (`image.domains` / `image.remotePatterns`)',
+      'It must be smaller than 1KB',
+      'It must be an SVG',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/images-and-assets" questions={quizImg} />
+
+<ProgressTracker client:visible id="rendering-and-performance/images-and-assets" />

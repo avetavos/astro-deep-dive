@@ -1,0 +1,132 @@
+---
+title: 'SSR & Adapters'
+description: 'On-demand rendering in depth — installing an adapter, reading the incoming request with Astro.request and Astro.url, cookies, and shaping the response.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Turning on the server
+
+On-demand rendering runs your component script **per request**, so you can read request-time data. To run server code you install an **adapter** for your target platform and add it to the config:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),   // or cloudflare(), vercel(), netlify()
+});
+```
+
+With an adapter present, routes render on demand where they need to (or when you set `export const prerender = false` on a route). Without one, any on-demand feature fails to build with *"an adapter is required."*
+
+<Mermaid title="A request flows through render to a response" code={flowDiagram} />
+
+export const flowDiagram = `sequenceDiagram
+  participant B as Browser
+  participant S as Astro server (adapter)
+  participant C as Component script
+  B->>S: GET /dashboard
+  S->>C: run script with request context
+  C->>C: read cookies, user, query params
+  C-->>S: HTML + response settings
+  S-->>B: Response (status, headers, body)`;
+
+## Reading the request
+
+Inside an on-demand page or endpoint, the global `Astro` object exposes the request:
+
+```astro
+---
+export const prerender = false;
+
+const url = Astro.url;                       // a URL object
+const q = url.searchParams.get('q');         // query params
+const method = Astro.request.method;         // the raw Request
+const token = Astro.cookies.get('session')?.value;  // typed cookie access
+const { id } = Astro.params;                 // dynamic route params
+---
+<p>Searching for {q}</p>
+```
+
+- **`Astro.request`** is the standard `Request` — headers, method, and `await Astro.request.formData()` or `.json()` for the body.
+- **`Astro.url`** is a parsed `URL` — the pathname and `searchParams`.
+- **`Astro.params`** holds dynamic segments (`[id]`).
+- **`Astro.cookies`** reads and writes cookies with a typed API (`.get`, `.set`, `.delete`, `.has`).
+
+## Shaping the response
+
+By default a page returns its HTML with a 200 status. You control the response through **`Astro.response`** (set status and headers) or by **returning a `Response`** directly:
+
+```astro
+---
+export const prerender = false;
+const user = Astro.cookies.get('session')?.value;
+
+// Not logged in? Redirect.
+if (!user) return Astro.redirect('/login');
+
+// Set a custom header on the HTML response.
+Astro.response.headers.set('Cache-Control', 'private, max-age=0');
+---
+<h1>Your dashboard</h1>
+```
+
+`Astro.redirect('/login')` returns a redirect `Response`; `Astro.response.headers` mutates the outgoing headers; and you can `return new Response(...)` to take full control (a 404 page, a custom status). This is the same `Request`/`Response` model the whole web platform uses — Astro doesn't invent its own.
+
+<Callout title="The one-line takeaway">
+On-demand rendering runs your script per request and needs an **adapter** (Node/Cloudflare/Vercel) in the config. Inside a server route, the `Astro` global exposes the request: **`Astro.request`** (the standard `Request` + body), **`Astro.url`** (pathname & `searchParams`), **`Astro.params`** (dynamic segments), and **`Astro.cookies`** (typed get/set). Shape the reply with **`Astro.response`** (status/headers), `Astro.redirect(...)`, or by returning a `Response` — the standard web platform model, not a custom one.
+</Callout>
+
+export const quizSsr = [
+  {
+    q: 'What must be configured for on-demand rendering to work?',
+    options: [
+      'A database',
+      'An adapter for the target platform (Node, Cloudflare, Vercel...)',
+      'A service worker',
+      'Nothing extra',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you read the query string in an on-demand page?',
+    options: [
+      'From Astro.props',
+      'From `Astro.url.searchParams`',
+      'From the file name',
+      'You cannot read query params',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you redirect an unauthenticated user from a server page?',
+    options: [
+      'Throw an error',
+      'return `Astro.redirect(\'/login\')`',
+      'Set window.location',
+      'Delete the page',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is `Astro.request`?',
+    options: [
+      'A custom Astro-only object',
+      'The standard web platform `Request` (headers, method, body via formData()/json())',
+      'The database connection',
+      'The build config',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/ssr-and-adapters" questions={quizSsr} />
+
+<ProgressTracker client:visible id="server-side/ssr-and-adapters" />

@@ -1,0 +1,132 @@
+---
+title: 'View Transitions'
+description: 'Add SPA-like animated client-side navigation to a multi-page site with ClientRouter, transition directives, persisted elements, and lifecycle events.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The best of both worlds
+
+A traditional multi-page site does a full browser reload on every navigation — reliable, but the screen flashes white and scroll position resets. A SPA avoids that but pays for it with a heavy JavaScript router. Astro's **view transitions** give you the smooth feel of a SPA on top of a normal MPA, for a few kilobytes of script.
+
+You opt in by adding one component, **`<ClientRouter />`**, to your page `<head>` — usually in a shared layout so it applies site-wide:
+
+```astro
+---
+import { ClientRouter } from 'astro:transitions';
+---
+<html lang="en">
+  <head>
+    <title>My site</title>
+    <ClientRouter />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>
+```
+
+With that in place, navigations between pages on your site are intercepted and handled on the client: Astro fetches the next page, swaps in its content, and animates the change — no full reload. Browsers that don't support the underlying API simply fall back to a normal navigation, so nothing breaks.
+
+<Callout title="It is ClientRouter now, not ViewTransitions">
+In older Astro the component was called `<ViewTransitions />`. Current Astro renamed it to **`<ClientRouter />`** (imported from `astro:transitions`) to better describe what it does — enable client-side routing. If you find `<ViewTransitions />` in an old tutorial, mentally substitute `<ClientRouter />`.
+</Callout>
+
+## How a navigation works
+
+<Mermaid title="ClientRouter swaps content instead of reloading" code={navDiagram} />
+
+export const navDiagram = `flowchart LR
+  click["User clicks a link"] --> intercept["ClientRouter intercepts (no full reload)"]
+  intercept --> fetch["Fetch the next page HTML"]
+  fetch --> swap["Swap in the new content, animate"]
+  swap --> event["Fire astro:page-load"]`;
+
+## Transition directives
+
+By default Astro cross-fades the page. You control animations per element with directives:
+
+- **`transition:name`** — give an element the same name on both pages so Astro morphs one into the other (a shared-element transition, like a thumbnail growing into a hero image).
+- **`transition:animate`** — choose the animation (`fade`, `slide`, or a custom one). Import helpers from `astro:transitions`.
+- **`transition:persist`** — keep a component's DOM and state across the navigation instead of re-rendering it. Perfect for a playing video or an audio player that shouldn't restart.
+
+```astro
+---
+import { slide } from 'astro:transitions';
+---
+<!-- This heading slides between pages; the player keeps playing across nav. -->
+<h1 transition:name="page-title" transition:animate={slide({ duration: 200 })}>Title</h1>
+<video controls autoplay transition:name="player" transition:persist />
+```
+
+## Lifecycle events
+
+Because navigation no longer triggers a full page load, scripts that ran on `DOMContentLoaded` won't re-run on client-side navigations. Astro fires its own events so you can re-initialize:
+
+- **`astro:page-load`** — fires after every navigation (initial load *and* client-side swaps). Put initialization here instead of `DOMContentLoaded`.
+- **`astro:after-swap`** — fires right after the new DOM is swapped in, before it paints (good for restoring theme/state to avoid a flash).
+
+```js
+document.addEventListener('astro:page-load', () => {
+  // runs on first load AND after every client-side navigation
+  initAnalytics();
+});
+```
+
+This is the most common view-transitions gotcha: an init script that works on first load but "stops working" after navigating, because it was bound to `DOMContentLoaded`. Move it to `astro:page-load`.
+
+<Callout title="The one-line takeaway">
+Add **`<ClientRouter />`** (from `astro:transitions`) to your `<head>` — ideally in a shared layout — to turn a normal MPA into one with smooth, SPA-like animated navigation, with a full-reload fallback for unsupported browsers. Control animations with `transition:name` (shared elements), `transition:animate`, and `transition:persist` (keep state across nav). Because there is no full reload, move initialization from `DOMContentLoaded` to the **`astro:page-load`** event.
+</Callout>
+
+export const quizVT = [
+  {
+    q: 'How do you enable view transitions in Astro?',
+    options: [
+      'Install a SPA router',
+      'Add `<ClientRouter />` (from `astro:transitions`) to the page `<head>`, usually in a shared layout',
+      'Set output to server',
+      'Add a client:load directive to every component',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the current name of the component (older Astro called it something else)?',
+    options: [
+      '`<ViewTransitions />`',
+      '`<ClientRouter />` — it was renamed from `<ViewTransitions />`',
+      '`<Router />`',
+      '`<Transition />`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `transition:persist` do?',
+    options: [
+      'Saves the page to localStorage',
+      'Keeps a component’s DOM and state across a navigation instead of re-rendering it (e.g. a playing video)',
+      'Persists data to a database',
+      'Disables animations',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'An init script bound to `DOMContentLoaded` stops working after a client-side navigation. What is the fix?',
+    options: [
+      'Disable view transitions',
+      'Move the initialization to the `astro:page-load` event, which fires after every navigation',
+      'Use client:only',
+      'Reload the whole page manually',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/view-transitions" questions={quizVT} />
+
+<ProgressTracker client:visible id="rendering-and-performance/view-transitions" />

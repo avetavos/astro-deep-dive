@@ -1,0 +1,155 @@
+---
+title: 'Schemas & References'
+description: 'Validating frontmatter with Zod schemas, generating TypeScript types from them, and linking collections together with reference().'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why validate content at all
+
+Content is data that lives *outside* your code — Markdown files edited by hand, JSON from a CMS. Nothing stops a typo: a missing `title`, a `pubDate` written as `"soon"`, a tag that should be an array but is a string. Without validation, that mistake surfaces as a confusing runtime error deep in a template, or worse, a silently broken page.
+
+A **schema** moves that check to the **content boundary**: when Astro loads a collection, it validates every entry against the schema *before* your pages ever see it. A bad entry fails the build with a precise message ("`pubDate` expected a date"), not a mystery crash. Validated content is also **typed** content — which is the second payoff.
+
+## Zod schemas
+
+Astro uses **Zod** for schemas. You get Zod from `astro/zod` and describe the frontmatter shape field by field:
+
+```ts
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string().max(80),
+    description: z.string().optional(),          // may be omitted
+    pubDate: z.coerce.date(),                     // "2026-01-01" becomes a Date
+    draft: z.boolean().default(false),            // fills in if absent
+    tags: z.array(z.string()).default([]),
+    status: z.enum(['draft', 'published', 'archived']),
+  }),
+});
+
+export const collections = { blog };
+```
+
+The common building blocks:
+
+- **Types** — `z.string()`, `z.number()`, `z.boolean()`, `z.array(...)`, `z.enum([...])`.
+- **`.optional()`** — the field may be missing; its type becomes `T | undefined`.
+- **`.default(value)`** — if the field is absent, fill in this value (so downstream code never handles `undefined`).
+- **`z.coerce.date()`** — parse a date string from frontmatter into a real `Date`.
+
+Refinements like `.max(80)` or `.url()` let you enforce real constraints — a title length, a valid URL — so bad content is caught at build.
+
+## Schemas generate types
+
+Because a schema fully describes the frontmatter, Astro **generates TypeScript types** from it. When you write `post.data.`, your editor autocompletes `title`, `pubDate`, `tags` — with the right types. `post.data.pubDate` is a `Date`; `post.data.status` is the union `'draft' | 'published' | 'archived'`. You never hand-write a `Post` interface; the schema *is* the source of truth for both validation and types.
+
+<Mermaid title="One schema, two payoffs" code={diagram} />
+
+export const diagram = `flowchart TB
+  schema["Zod schema in content.config.ts"] --> validate["validate every entry at build"]
+  schema --> types["generate TypeScript types"]
+  validate --> safe["bad content fails the build early"]
+  types --> dx["autocomplete and type-checked entry.data"]`;
+
+## Linking collections with reference()
+
+Content is rarely flat. A blog post has an author; a doc page belongs to a category. Rather than copy the author's details into every post, you keep an `authors` collection and have each post **reference** an author by id. Zod's **`reference()`** (from `astro:content`) expresses that link and validates it:
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob, file } from 'astro/loaders';
+
+const authors = defineCollection({
+  loader: file('./src/data/authors.json'),
+  schema: z.object({ name: z.string(), bio: z.string() }),
+});
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string(),
+    author: reference('authors'),          // must match an id in the authors collection
+    related: z.array(reference('blog')).default([]),
+  }),
+});
+
+export const collections = { authors, blog };
+```
+
+`reference('authors')` stores the author's id and guarantees it points at a real entry. To turn that reference into the actual data, resolve it with `getEntry`:
+
+```astro
+---
+import { getEntry, getCollection } from 'astro:content';
+
+const post = (await getCollection('blog'))[0];
+const author = await getEntry(post.data.author);   // pass the reference straight in
+---
+<p>By {author.data.name}</p>
+```
+
+This keeps content normalized — author details live in one place — while giving each post a validated, resolvable link.
+
+<Callout title="The one-line takeaway">
+A **Zod schema** (from `astro/zod`) validates every collection entry at the content boundary, so bad frontmatter fails the build with a clear message instead of crashing a page — and the same schema **generates the TypeScript types** for `entry.data`, so you never hand-write interfaces. Use `.optional()`, `.default()`, `z.coerce.date()`, and `z.enum()` to describe fields, and **`reference()`** to link collections (resolve the link with `getEntry`).
+</Callout>
+
+export const quizSchemas = [
+  {
+    q: 'What does a schema give you beyond catching bad content?',
+    options: [
+      'Faster builds',
+      'Generated TypeScript types for entry.data, so fields autocomplete and are type-checked',
+      'Smaller HTML',
+      'Automatic styling',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does .default(false) do on a schema field?',
+    options: [
+      'Makes the field required',
+      'Fills in false when the field is absent, so downstream code never sees undefined',
+      'Deletes the field',
+      'Marks it as a boolean only in dev',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is reference() used for?',
+    options: [
+      'Importing components',
+      'Linking one collection to another (e.g. a post to an author) with a validated id you resolve via getEntry',
+      'Referencing CSS files',
+      'Caching data',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where does content validation happen?',
+    options: [
+      'In the browser at runtime',
+      'At the content boundary when Astro loads the collection at build time — a bad entry fails the build',
+      'Only when you call render()',
+      'It never happens automatically',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/schemas-and-references" questions={quizSchemas} />
+
+<ProgressTracker client:visible id="content-and-data/schemas-and-references" />

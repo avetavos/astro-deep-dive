@@ -1,0 +1,116 @@
+---
+title: 'Server Islands'
+description: 'server:defer render component บน server แต่ defer ไว้ — หน้าออกทันทีพร้อม fallback แล้วดึง HTML จริงมาสลับใส่ ทำให้ cache เปลือกและ defer ส่วนที่ personalize หรือช้าได้.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาที่ server islands แก้
+
+client island เป็นเรื่องของ interactivity ฝั่ง *client* ส่วน **server islands** แก้ปัญหาอีกแบบ: หน้าที่ส่วนใหญ่ cache ได้และ static แต่มีส่วนหนึ่งที่ **personalize หรือช้า** — avatar ของ user ที่ login อยู่, แถบ "แนะนำสำหรับคุณ", ราคาสด ๆ ที่ต้อง query ใหม่
+
+ถ้าไม่มี server islands คุณจะถูกบังคับให้เลือก: render ทั้งหน้าแบบ on demand (เสีย cache ของ 95% ที่ไม่เคยเปลี่ยน) หรือยอมทิ้งส่วนที่ personalize server islands ให้คุณได้ทั้งคู่ — **cache เปลือก แล้ว defer ส่วนที่ dynamic**
+
+## `server:defer`
+
+เพิ่ม directive **`server:defer`** ให้ `.astro` component ตัวไหนก็ได้ เพื่อเปลี่ยนมันเป็น **server island** จากนั้น Astro จะ render ส่วนที่เหลือของหน้าทันที — โดยไม่รอ component ตัวนั้น — แล้ว HTML จริงของ component ที่ defer ไว้จะถูกดึงมาแยกต่างหากและสลับเข้ามาเมื่อพร้อม
+
+```astro
+---
+import Avatar from '../components/Avatar.astro';
+---
+<Avatar server:defer />
+```
+
+HTML เริ่มต้นของหน้าออกทันทีและ cache ที่ edge ได้ ส่วน `Avatar` render **บน server** — จึงอ่าน cookie, session หรือ database ได้อย่างปลอดภัย — แต่ทำ *นอกรอบ* บน request ของตัวเอง หลังจากเปลือกอยู่บนจอแล้ว
+
+## fallback content ด้วย `slot="fallback"`
+
+เพราะ content จริงมาช้ากว่าเล็กน้อย คุณจึงใส่ **fallback** content ให้แสดงระหว่างรอ — skeleton, spinner หรือ placeholder กลาง ๆ — ด้วย `slot="fallback"`:
+
+```astro
+---
+import Avatar from '../components/Avatar.astro';
+import GenericAvatar from '../components/GenericAvatar.astro';
+---
+<Avatar server:defer>
+  <GenericAvatar slot="fallback" />
+</Avatar>
+```
+
+`GenericAvatar` render เข้าไปในเปลือกที่ cache ไว้ทันที ส่วน `Avatar` ที่ personalize จะเข้ามาแทนเมื่อ server render ของมันเองส่งกลับมา
+
+<Mermaid title="หน้าออกพร้อม fallback แล้วดึง island ที่ defer มาสลับใส่" code={diagram} />
+
+export const diagram = `flowchart TB
+  req["request the page"] --> shell["server renders shell instantly (cacheable)"]
+  shell --> fb["fallback shown in place of the island"]
+  fb --> fetch["browser fetches the deferred island"]
+  fetch --> srv["island renders on the server (cookies, session, db)"]
+  srv --> swap["real HTML swapped in over the fallback"]`;
+
+## ใช้เมื่อไหร่ (และเรื่อง adapter ที่ต้องมี)
+
+server islands เป็นเครื่องมือที่ใช่เมื่อหน้าหนึ่ง **cache ได้ ยกเว้นส่วน dynamic เล็ก ๆ**:
+
+- หน้า marketing หรือหน้าสินค้าที่เหมือนกันสำหรับทุกคน *ยกเว้น* คำทักทายที่ personalize หรือ cart
+- หน้าที่ส่วนใหญ่ static แต่มี query ที่ **ช้า** อยู่หนึ่งอันที่คุณไม่อยากให้บล็อก first paint
+- ส่วน auth-gated บนหน้าที่เป็น public และ CDN-cache
+
+จำไว้สองอย่าง อย่างแรก `server:defer` render **บน server** จึงต้องติดตั้ง **adapter** (Cloudflare, Node, Vercel...) — เงื่อนไขเดียวกับ on-demand rendering ทุกแบบ ถ้าไม่มีจะเจอ error "an adapter is required" อย่างที่สอง มันไม่ใช่สำหรับ client interactivity — ถ้าส่วนนั้นต้องตอบสนอง click นั่นคือ *client* island (client directive) อาจต้องใช้เพิ่มเติม server island เป็นเรื่องของการ defer output ที่ **render บน server** ไม่ใช่การ hydrate JavaScript
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`server:defer` เปลี่ยน `.astro` component เป็น **server island**: เปลือกของหน้า render และออกทันที (จึง cache ได้) ส่วน component ที่ defer ไว้ render **บน server บน request ของตัวเอง** แล้ว HTML ของมันถูกสลับเข้ามาแทน placeholder `slot="fallback"` เมื่อพร้อม มันคือคำตอบของ "หน้านี้ cache ได้ ยกเว้นส่วนที่ personalize หรือช้าอยู่ส่วนหนึ่ง" — cache เปลือก defer ส่วน dynamic มัน render บน server จึง **ต้องมี adapter** และเป็นเรื่องการ defer output จาก server ไม่ใช่ client interactivity
+</Callout>
+
+export const quizServer = [
+  {
+    q: 'server:defer ทำอะไร?',
+    options: [
+      'hydrate React component บน client',
+      'เปลี่ยน .astro component เป็น server island — หน้าออกทันทีและ component render บน server นอกรอบ แล้ว HTML ของมันถูกสลับเข้ามา',
+      'หน่วง render ทั้งหน้าจนกว่าข้อมูลจะพร้อม',
+      'cache component ไว้ใน localStorage',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'use case หลักของ server island คืออะไร?',
+    options: [
+      'ปุ่ม interactive ใด ๆ',
+      'หน้าที่ส่วนใหญ่ cache ได้แต่มีส่วนหนึ่งที่ personalize หรือช้า — cache เปลือก defer ส่วน dynamic',
+      'โหลดรูปแบบ lazy',
+      'แชร์ state ระหว่าง client island',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะแสดงอะไรระหว่างที่ component server:defer กำลังโหลด?',
+    options: [
+      'ไม่แสดงอะไรเลย',
+      'ใส่ fallback content ด้วย slot="fallback" (เช่น skeleton หรือ placeholder กลาง ๆ) ซึ่งถูกสลับออกเมื่อ HTML จริงมาถึง',
+      'ใช้ client:load',
+      'มี CSS animation ถูกเพิ่มให้อัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'server island ต้องมีอะไรถึงจะรันได้?',
+    options: [
+      'ไม่ต้องมีอะไรเพิ่ม',
+      'adapter (Cloudflare, Node, Vercel...) เพราะมัน render บน server แบบ on demand',
+      'client directive',
+      'nanostore',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/server-islands" questions={quizServer} />
+
+<ProgressTracker client:visible id="islands/server-islands" />

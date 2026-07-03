@@ -1,0 +1,60 @@
+---
+title: Astro Deep Dive
+description: Master Astro from first principles — islands architecture and zero-JS by default, the .astro component model, client directives, content collections with the Content Layer API, SSR & adapters, Actions, server islands, view transitions, and production — for Astro 6.
+template: splash
+hero:
+  tagline: A standalone, intermediate→advanced course on Astro 6. From islands architecture and the .astro component to client directives, content collections, on-demand rendering, Actions, server islands, and view transitions — taught through annotated code and diagrams that show what Astro ships to the browser and why.
+  actions:
+    - text: Start here
+      link: /astro/en/foundations/
+      icon: right-arrow
+      variant: primary
+    - text: Jump to Islands
+      link: /astro/en/islands/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What you'll learn
+
+<CardGrid>
+  <Card title="Foundations & Mental Model" icon="rocket">
+    Islands architecture, zero-JS by default, the .astro component, and static vs on-demand rendering. [Start →](/astro/en/foundations/)
+  </Card>
+  <Card title="Components & Templating" icon="seti:html">
+    Astro syntax, scoped styles & scripts, slots & composition, and Markdown/MDX. [Compose →](/astro/en/components/)
+  </Card>
+  <Card title="Islands & Client Interactivity" icon="random">
+    Client directives, UI framework integrations, sharing state, and server islands. [Hydrate →](/astro/en/islands/)
+  </Card>
+  <Card title="Content & Data" icon="seti:json">
+    Content collections & the Content Layer API, Zod schemas, data fetching, and dynamic routes. [Model →](/astro/en/content-and-data/)
+  </Card>
+  <Card title="Server-Side Astro" icon="seti:config">
+    SSR & adapters, API endpoints, Actions, and middleware & sessions. [Serve →](/astro/en/server-side/)
+  </Card>
+  <Card title="Rendering, Performance & UX" icon="approve-check">
+    View transitions with ClientRouter, images & assets, the zero-JS default, and caching. [Optimize →](/astro/en/rendering-and-performance/)
+  </Card>
+  <Card title="Tooling, Integrations & Production" icon="puzzle">
+    Config & integrations, TypeScript & content types, testing, and deployment. [Ship →](/astro/en/tooling-and-production/)
+  </Card>
+</CardGrid>
+
+## How this course works
+
+<CardGrid>
+  <Card title="The model first, then the code" icon="rocket">
+    Every topic starts from a model — islands, the server-first render, the content pipeline — so Astro's choices stop feeling arbitrary and start feeling inevitable.
+  </Card>
+  <Card title="Astro 6, verified" icon="seti:html">
+    Written against Astro 6 and checked against the official docs — the Content Layer API (`src/content.config.ts` with loaders), `<ClientRouter />`, server islands, Actions, and sessions are covered as they exist today.
+  </Card>
+  <Card title="Design, not just syntax" icon="approve-check">
+    Not "here's a client directive" but "here's why you ship an island instead of hydrating the page, and which directive fits." You'll reason about what reaches the browser with confidence.
+  </Card>
+  <Card title="Diagrams that explain" icon="puzzle">
+    Islands hydration, the render pipeline, the content collection flow, and server islands as theme-aware Mermaid diagrams. Bilingual (English / ไทย) with saved quiz progress.
+  </Card>
+</CardGrid>

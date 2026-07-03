@@ -1,0 +1,119 @@
+---
+title: 'Rendering และ Output Modes'
+description: 'Static (SSG) vs on-demand (SSR) rendering, การ prerender ต่อ route, เมื่อไหร่ที่ต้องใช้ adapter และ build ผลิตเว็บของคุณยังไง'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## สองวิธีในการผลิต HTML ของหน้า
+
+Astro render HTML ของ route ได้ในสองจังหวะที่ต่างกัน และตัวเลือกนี้เป็นแกนกลางของวิธี deploy:
+
+- **Static (SSG)** — HTML ถูก build **ครั้งเดียว ตอน build time** แล้ว serve เป็นไฟล์ธรรมดา เร็ว cache ได้ deploy ไปยัง static host หรือ CDN ไหนก็ได้ เหมาะกับ content ที่เหมือนกันสำหรับทุกคน
+- **On-demand (SSR)** — HTML ถูก build **แต่ละ request บน server** จึงใช้ข้อมูลตอน request ได้ (user ที่ login อยู่, cookies, query params, ข้อมูล live) ต้องมี runtime ซึ่งแปลว่าต้องมี **adapter**
+
+<Mermaid title="Static build ครั้งเดียว; on-demand render แต่ละ request" code={modeDiagram} />
+
+export const modeDiagram = `flowchart TB
+  subgraph static["Static (SSG)"]
+    b["build time"] --> f["ไฟล์ HTML"] --> cdn["serve จาก CDN"]
+  end
+  subgraph ssr["On-demand (SSR)"]
+    r["แต่ละ request"] --> srv["server render HTML"] --> resp["response"]
+  end`;
+
+ค่า default คือ static คุณ opt โปรเจกต์ (หรือ route เดียว) เข้าสู่ on-demand rendering เมื่อหน้านั้นจำเป็นต้องใช้ข้อมูลตอน request จริง ๆ
+
+## ควบคุมทีละ route ด้วย `prerender`
+
+คุณไม่ได้เลือก mode เดียวสำหรับทั้งเว็บ ในโปรเจกต์ที่เปิด server ไว้ **แต่ละ route ตัดสินใจ** เองด้วย `export const prerender`:
+
+```astro
+---
+// เว็บที่ส่วนใหญ่เป็น static แต่มีหนึ่ง route ที่ dynamic:
+export const prerender = false;  // render หน้านี้แบบ on-demand แต่ละ request
+const user = await getUser(Astro.request);  // ต้องใช้ request ที่เข้ามา
+---
+<p>Welcome, {user.name}</p>
+```
+
+- `export const prerender = true` → build route นี้เป็นไฟล์ static (แม้จะอยู่ในโปรเจกต์ที่เปิด server)
+- `export const prerender = false` → render route นี้แบบ on-demand (แม้จะอยู่ในโปรเจกต์ที่ส่วนใหญ่เป็น static)
+
+นี่คือทางสายกลางที่ทรงพลัง: เว็บที่ 95% เป็นไฟล์ static พร้อม route แบบ on-demand ไม่กี่ตัว (dashboard, form handler) โดยแต่ละตัว render เฉพาะเมื่อจำเป็น มักเรียกว่า **hybrid** rendering
+
+## Adapters: on-demand รันได้ยังไง
+
+Static output ไม่ต้องการอะไรนอกจาก file host ส่วน on-demand rendering ต้องการ **runtime** เพื่อรัน server code ของคุณแต่ละ request — และนั่นคือที่ที่ **adapter** เข้ามา คุณติดตั้ง adapter สำหรับ platform เป้าหมายแล้วตั้งค่าใน config:
+
+```js
+// astro.config.mjs — เปิด on-demand rendering บน Cloudflare
+import { defineConfig } from 'astro/config';
+import cloudflare from '@astrojs/cloudflare';
+
+export default defineConfig({
+  adapter: cloudflare(),   // หรือ node(), vercel(), netlify()...
+});
+```
+
+adapter แปลง server rendering ของ Astro ให้เป็น format ของ platform (Cloudflare Worker, Node server, Vercel function) ถ้าไม่มี adapter feature แบบ on-demand (SSR routes, server islands, Actions endpoints) จะรันไม่ได้ — เป็น error ที่เจอบ่อยตอน deploy ครั้งแรก: *"an adapter is required"*
+
+## build ผลิตอะไรออกมา
+
+`astro build` รัน component script ของคุณ, render HTML, bundle CSS และ island JavaScript ใด ๆ แล้วเขียน output ไปที่ `dist/` สำหรับ static site นั่นคือโฟลเดอร์ของไฟล์ `.html` และ asset ที่คุณโยนลง CDN ไหนก็ได้ สำหรับ hybrid/server site `dist/` ยังมี server entry ที่ adapter รันด้วย ไม่ว่าทางไหน browser ก็ได้รับ HTML ที่เสร็จแล้วบวกเฉพาะ island JS — คำมั่นพื้นฐานที่ build ส่งมอบให้
+
+<Callout title="สรุปบรรทัดเดียว">
+Astro render HTML ของ route แบบ **static** (ครั้งเดียวตอน build → ไฟล์บน CDN) หรือ **on-demand** (แต่ละ request บน server สำหรับข้อมูลตอน request) ค่า default คือ static คุณ opt แต่ละ route เข้าหรือออกด้วย `export const prerender` — เปิดทางให้เว็บแบบ **hybrid** ที่ส่วนใหญ่เป็น static พร้อม route dynamic ไม่กี่ตัว on-demand rendering ต้องมี **adapter** (Cloudflare/Node/Vercel/…) เพื่อรัน server code แต่ละ request ลืมมันคือ deploy error คลาสสิก "an adapter is required"
+</Callout>
+
+export const quizModes = [
+  {
+    q: 'ความต่างระหว่าง static กับ on-demand rendering คืออะไร?',
+    options: [
+      'Static ใช้ CSS, on-demand ใช้ JavaScript',
+      'Static build HTML ครั้งเดียวตอน build (serve เป็นไฟล์); on-demand render แต่ละ request บน server (สำหรับข้อมูลตอน request)',
+      'Static ช้ากว่า',
+      'มันเหมือนกัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณจะทำให้ route เดียว render แบบ on-demand ในโปรเจกต์ที่ส่วนอื่นเป็น static ยังไง?',
+    options: [
+      'ย้ายมันไปโฟลเดอร์อื่น',
+      'เพิ่ม `export const prerender = false` ให้ route นั้น',
+      'เปลี่ยนชื่อเป็น .server.astro',
+      'ทำไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'adapter มีไว้ทำอะไร?',
+    options: [
+      'แปลง Markdown เป็น HTML',
+      'ให้ runtime เพื่อรัน on-demand server rendering บน platform เป้าหมาย (Cloudflare, Node, Vercel...)',
+      'optimize รูปภาพ',
+      'จัดการ CSS',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณ deploy เว็บที่มี SSR route แต่ไม่ได้ตั้งค่า adapter จะเกิดอะไรขึ้น?',
+    options: [
+      'ทำงานได้ปกติ',
+      'build/deploy error — on-demand rendering ต้องมี adapter',
+      'route กลายเป็น static เองอัตโนมัติ',
+      'ทั้งเว็บ build ไม่ผ่านแม้แต่หน้า static',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/rendering-and-output-modes" questions={quizModes} />
+
+<ProgressTracker client:visible id="foundations/rendering-and-output-modes" />

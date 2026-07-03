@@ -1,0 +1,73 @@
+---
+title: 'Rendering, Performance & UX'
+description: 'Astro ทำให้หน้าเว็บเร็วและ navigation ลื่นได้ยังไง — view transitions ด้วย ClientRouter, image และ asset ที่ optimize, baseline แบบ zero-JS และ caching ที่ edge'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เร็วตั้งแต่ default ลื่นเมื่อเราเลือก
+
+Astro ให้เราเริ่มที่ baseline ที่เร็วอยู่แล้ว: static HTML, zero JavaScript, หน้าเล็ก โมดูลนี้ว่าด้วยการรักษา baseline นั้นไว้ตอนที่เราเพิ่มความ polish — navigation แบบ client-side ที่ลื่น, image ที่ optimize และ caching — โดยไม่แอบเอาความอืดที่ Astro ตั้งใจหลีกเลี่ยงกลับเข้ามา
+
+ธีมตลอดโมดูล: **ทุกการเพิ่ม feature ควรใช้ JavaScript และ bytes ให้น้อยที่สุด** view transition, image, cached response — แต่ละอย่างมี "วิธีที่ถูก" ที่รักษา baseline ที่เร็วไว้ และโมดูลนี้จะสอนวิธีเหล่านั้น
+
+## โมดูลนี้ครอบคลุมอะไร
+
+| บทเรียน | สิ่งที่จะได้เรียน |
+|--------|-------------------|
+| View transitions | `<ClientRouter />` สำหรับ navigation แบบ SPA ที่มี animation |
+| Images & assets | component `<Image />` และ `<Picture />` กับ `astro:assets` |
+| Performance & zero-JS | เลือก directive และ prefetch เพื่อส่ง JavaScript ให้น้อยลง |
+| Caching & edge | Cache-Control, edge caching และ shell ที่ cache ได้ |
+
+## Mental model เรื่อง performance
+
+<Mermaid title="รักษา baseline ที่เร็วไว้ตอนเพิ่ม feature" code={perfDiagram} />
+
+export const perfDiagram = `flowchart TB
+  base["Baseline: static HTML, zero JS"] --> nav["Add smooth nav: ClientRouter (small JS)"]
+  base --> img["Add images: astro:assets (optimized, lazy)"]
+  base --> cache["Add caching: Cache-Control at the edge"]
+  nav --> fast["Still fast: minimal JS, cacheable"]
+  img --> fast
+  cache --> fast`;
+
+- **Navigation** รู้สึกเหมือนทันทีได้ด้วย `<ClientRouter />` และ prefetch — ด้วยไม่กี่กิโลไบต์ ไม่ใช่ทั้ง SPA framework
+- **Images** มักเป็นสิ่งที่หนักที่สุดในหน้า `astro:assets` optimize ให้อัตโนมัติ
+- **Caching** เปลี่ยน render ให้เป็นการ lookup — response ที่เร็วที่สุดคืออันที่เราไม่ต้องคำนวณ
+
+<Callout title="สรุปบรรทัดเดียว">
+โมดูลนี้รักษา baseline ที่เร็วของ Astro (static HTML, zero JS) ไว้ พร้อมเพิ่มความ polish ด้าน UX: `<ClientRouter />` สำหรับ navigation ที่ลื่น, `astro:assets` สำหรับ image ที่ optimize และ edge caching สำหรับ response ที่ทันที — แต่ละอย่างเลือกให้เพิ่ม JavaScript และ bytes น้อยที่สุด
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'ธีมหลักของโมดูลนี้คืออะไร?',
+    options: [
+      'เพิ่ม feature ให้มากที่สุดเท่าที่ทำได้',
+      'เพิ่มความ polish ด้าน UX โดยรักษา baseline ที่เร็วไว้ — ใช้ JavaScript และ bytes น้อยที่สุดในแต่ละการเพิ่ม',
+      'ใช้ server-side rendering เสมอ',
+      'หลีกเลี่ยง image ทั้งหมด',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในหน้าเว็บทั่วไป อะไรมักเป็นสิ่งที่หนักที่สุดที่ต้องโหลด?',
+    options: [
+      'HTML',
+      'Images',
+      'CSS reset',
+      'favicon',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="rendering-and-performance/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="rendering-and-performance/index" />

@@ -1,0 +1,161 @@
+---
+title: 'Dynamic Routes'
+description: 'File-based dynamic routes, generating pages from a collection with getStaticPaths(), rest params, pagination with paginate(), and on-demand params.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Routes with a variable part
+
+You have a collection of 50 blog posts and want a page for each — but you're not going to write 50 files. A **dynamic route** is one file whose name has a variable segment in square brackets, and it stands in for many URLs:
+
+- `src/pages/blog/[slug].astro` → matches `/blog/anything`
+- `src/pages/[category]/[id].astro` → two variables
+- `src/pages/docs/[...path].astro` → a **rest** param, matching `/docs/a/b/c` (any depth)
+
+The value in the brackets arrives at runtime on `Astro.params` (`Astro.params.slug`). But for a *static* site, Astro also needs to know **which** slugs exist so it can build a file for each — that's what `getStaticPaths()` is for.
+
+## getStaticPaths(): one page per entry
+
+In a static build, a dynamic route file exports **`getStaticPaths()`**, which returns the list of pages to generate. Each item is `{ params, props }` — `params` fills the bracketed segment, `props` passes data to the page:
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({
+    params: { slug: post.id },   // fills [slug] — one page per post
+    props: { post },             // hand the whole entry to the page
+  }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <time>{post.data.pubDate.toDateString()}</time>
+  <Content />
+</article>
+```
+
+At build time Astro calls `getStaticPaths()`, sees (say) 50 entries, and writes 50 HTML files — `/blog/hello-world`, `/blog/second-post`, and so on. The `params` key **must** match the bracket name (`slug` here); the `props` are your escape hatch to pass the already-loaded entry so the page body needn't re-query.
+
+<Mermaid title="getStaticPaths turns entries into pages" code={diagram} />
+
+export const diagram = `flowchart LR
+  coll["getCollection('blog') — 50 entries"] --> map["map each to params + props"]
+  map --> paths["getStaticPaths returns 50 paths"]
+  paths --> build["build writes 50 HTML files"]`;
+
+## Pagination with paginate()
+
+For a long list you want numbered pages — `/blog/1`, `/blog/2`. `getStaticPaths` receives a **`paginate`** helper that slices a list into pages and generates the routes for you. Name the route file with the page param, usually `src/pages/blog/[page].astro`:
+
+```astro
+---
+// src/pages/blog/[page].astro
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths({ paginate }) {
+  const posts = await getCollection('blog');
+  return paginate(posts, { pageSize: 10 });   // 10 posts per page
+}
+
+const { page } = Astro.props;   // paginate injects a `page` prop
+---
+<ul>
+  {page.data.map((post) => <li>{post.data.title}</li>)}
+</ul>
+<nav>
+  {page.url.prev && <a href={page.url.prev}>Previous</a>}
+  <span>Page {page.currentPage} of {page.lastPage}</span>
+  {page.url.next && <a href={page.url.next}>Next</a>}
+</nav>
+```
+
+`paginate` hands each page a `page` prop with `data` (this page's slice), `currentPage`, `lastPage`, and `url.prev`/`url.next` — everything you need for the list and the prev/next links.
+
+## Static params vs on-demand params
+
+There are two ways a dynamic route learns its params, and they mirror the two rendering modes:
+
+- **Static:** you enumerate every param ahead of time with `getStaticPaths()`, and Astro builds a file per path. Fast, cacheable, but the set of pages is fixed at build.
+- **On-demand:** set `export const prerender = false` and *drop* `getStaticPaths()` — instead read `Astro.params` live and query on the fly. This handles URLs you can't know at build time (a user id, a search term):
+
+```astro
+---
+// src/pages/blog/[slug].astro — on-demand version
+export const prerender = false;
+import { getEntry, render } from 'astro:content';
+
+const { slug } = Astro.params;
+const post = await getEntry('blog', slug);
+if (!post) return Astro.redirect('/404');
+
+const { Content } = await render(post);
+---
+<h1>{post.data.title}</h1>
+<Content />
+```
+
+Rule of thumb: a **known, finite** set of pages (all your blog posts) → `getStaticPaths()` and stay static. An **open-ended** set (any user profile, arbitrary search) → `prerender = false` and read `Astro.params` per request.
+
+<Callout title="The one-line takeaway">
+A **dynamic route** is a file with a bracketed segment (`[slug].astro`, or `[...path]` for a rest param). In a static build it exports **`getStaticPaths()`** returning `{ params, props }` for each page — one HTML file per collection entry — and `paginate()` slices a long list into numbered pages. For URLs you can't enumerate at build, set **`prerender = false`**, skip `getStaticPaths`, and read **`Astro.params`** live per request.
+</Callout>
+
+export const quizRoutes = [
+  {
+    q: 'What does getStaticPaths() return for a static dynamic route?',
+    options: [
+      'The rendered HTML',
+      'A list of { params, props } — one entry per page Astro should build',
+      'A single string',
+      'A database query',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In [slug].astro, what must the params key be named?',
+    options: [
+      'Always "id"',
+      'It must match the bracket name — params: { slug } for [slug].astro',
+      'Anything you like',
+      'It must be "path"',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the paginate() helper give each generated page?',
+    options: [
+      'Only the total count',
+      'A page prop with data (this slice), currentPage, lastPage, and url.prev/url.next',
+      'The full unsliced list',
+      'Just a page number',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You need routes for arbitrary user ids you cannot know at build time. What do you do?',
+    options: [
+      'List every possible id in getStaticPaths',
+      'Set prerender = false, drop getStaticPaths, and read Astro.params live per request',
+      'Use a rest param and nothing else',
+      'It is impossible in Astro',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/dynamic-routes" questions={quizRoutes} />
+
+<ProgressTracker client:visible id="content-and-data/dynamic-routes" />

@@ -1,0 +1,69 @@
+---
+title: 'Tooling, Integrations & Production'
+description: 'The config file, the integrations system, TypeScript and generated content types, testing an Astro site, and getting it deployed — the machinery around your components.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What sits around your components
+
+You've learned how Astro renders pages and hydrates islands. This module is the machinery that surrounds that: the config that wires everything together, the integrations that add capabilities, the TypeScript that keeps you honest, the tests that prove it works, and the build that ships it.
+
+None of this is exotic — Astro sits on top of **Vite**, so most of it is familiar tooling with a thin Astro layer. The goal here is to know which knob does what.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Config & integrations | `astro.config.mjs`, the integrations system, and Vite underneath |
+| TypeScript & content types | Typing props and locals, and the types generated from your content schemas |
+| Testing & tooling | Vitest, the Container API, Playwright, and the Dev Toolbar |
+| Deployment & ecosystem | Static vs on-demand deploys, and the Astro ecosystem |
+
+## The pipeline from source to site
+
+<Mermaid title="From project to deployed site" code={pipelineDiagram} />
+
+export const pipelineDiagram = `flowchart LR
+  config["astro.config.mjs\n(integrations, adapter)"] --> build["astro check + astro build"]
+  src["src/ (pages, components, content)"] --> build
+  build --> dist["dist/ (HTML, assets, server entry)"]
+  dist --> deploy["deploy: static CDN or adapter runtime"]`;
+
+Everything flows through the config and the build. Get comfortable with those two and the rest is detail.
+
+<Callout title="The one-line takeaway">
+This module covers the tooling **around** your components: `astro.config.mjs` (which wires integrations and the adapter), the **integrations** that add features, **TypeScript** with the types Astro generates from your content schemas, **testing** (Vitest + the Container API + Playwright), and **deployment** (static to a CDN, or on-demand via an adapter). Astro is built on Vite, so most of this is familiar tooling with a thin Astro layer.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What build tool does Astro sit on top of?',
+    options: [
+      'Webpack',
+      'Vite',
+      'Rollup only',
+      'esbuild only',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where is a project’s integrations and adapter configured?',
+    options: [
+      'In package.json',
+      'In astro.config.mjs',
+      'In each page’s frontmatter',
+      'In a .env file',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling-and-production/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="tooling-and-production/index" />

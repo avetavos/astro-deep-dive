@@ -1,0 +1,145 @@
+---
+title: 'Actions'
+description: 'Astro Actions — type-safe server function ที่ define ด้วย defineAction, เรียกจาก client พร้อม input ที่ validate แล้ว, เชื่อมกับ form พร้อม progressive enhancement'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาที่ Actions แก้
+
+การจะเรียก server logic จาก client แบบเดิม คุณต้องเขียน endpoint, คิด URL, `fetch()` มัน, stringify body, เดา type ของ response และ validate input ด้วยมือบน server **Actions** ยุบทั้งหมดนั้นเหลือ function ที่ typed ตัวเดียว: define บน server แล้วเรียกจาก client ด้วย type-safety เต็มและ validation อัตโนมัติ
+
+## define action
+
+Action อยู่ใน `src/actions/index.ts` export เป็น object ชื่อ `server` แต่ละตัวคือ `defineAction` ที่มี schema **`input`** (Zod) และ **`handler`**:
+
+```ts
+// src/actions/index.ts
+import { defineAction } from 'astro:actions';
+import { z } from 'astro/zod';
+
+export const server = {
+  createComment: defineAction({
+    input: z.object({
+      postId: z.string(),
+      body: z.string().min(1).max(2000),
+    }),
+    handler: async (input, context) => {
+      // input is fully typed and already validated against the schema.
+      const comment = await db.comments.create({
+        postId: input.postId,
+        body: input.body,
+        userId: context.locals.user?.id,   // per-request data from middleware
+      });
+      return comment;                       // the return type flows to the client
+    },
+  }),
+};
+```
+
+สองอย่างเป็นอัตโนมัติ: input ถูก **validate** กับ Zod schema ก่อน handler รัน และ return type ของ handler ถูก **infer ไปจนถึงผู้เรียก** — ไม่ต้อง type response ด้วยมือ
+
+## เรียก action จาก client
+
+ฝั่ง client ให้ import `actions` จาก `astro:actions` แล้วเรียกใช้ ทุกการเรียก return `{ data, error }` — Astro ไม่ throw ข้าม boundary:
+
+```ts
+import { actions, isInputError } from 'astro:actions';
+
+const { data, error } = await actions.createComment({
+  postId: '42',
+  body: 'Nice post!',
+});
+
+if (isInputError(error)) {
+  // Validation failed — error.fields has per-field messages.
+  console.log(error.fields.body);
+} else if (data) {
+  console.log('Created comment', data.id);   // data is typed
+}
+```
+
+<Mermaid title="การเรียกจาก client รัน handler ที่ validate แล้ว" code={actionDiagram} />
+
+export const actionDiagram = `sequenceDiagram
+  participant C as Client
+  participant A as Astro Action
+  participant H as handler
+  C->>A: actions.createComment(input)
+  A->>A: validate input against Zod schema
+  A->>H: run handler(input, context)
+  H-->>A: return value (typed)
+  A-->>C: { data, error }`;
+
+## form และ progressive enhancement
+
+Action เชื่อมกับ HTML `<form>` ตรง ๆ ได้ด้วยการส่ง `action.name` — มันทำงานเป็น form POST ปกติแม้ JavaScript ยังไม่โหลด แล้วอัปเกรดเป็น client call เมื่อ hydrate นี่คือ **progressive enhancement**: form submit ได้ทั้งสองทาง
+
+```astro
+---
+import { actions } from 'astro:actions';
+---
+<form method="POST" action={actions.createComment}>
+  <input type="hidden" name="postId" value="42" />
+  <textarea name="body"></textarea>
+  <button type="submit">Comment</button>
+</form>
+```
+
+คุณยังเรียก action จาก component script ได้ด้วย `Astro.callAction(actions.createComment, input)` เมื่อต้องการผลตอน server render handler ที่ validate แล้วตัวเดียวกันจะรันในทุกกรณี
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**Actions** คือ type-safe server function: define ใน `src/actions/index.ts` ด้วย `defineAction({ input: zodSchema, handler })` export บน object `server` เรียก `actions.name(input)` จาก client — input ถูก **validate อัตโนมัติ** กับ schema, return type ถูก **infer ไปถึงผู้เรียก** และทุกการเรียก return `{ data, error }` (เช็ค `isInputError(error)` เพื่อดู `error.fields`) เชื่อมกับ `<form action={actions.name}>` เพื่อ **progressive enhancement** หรือรันตอน render ด้วย `Astro.callAction`
+</Callout>
+
+export const quizActions = [
+  {
+    q: 'define action ที่ไหน และแต่ละตัวต้องมีอะไร?',
+    options: [
+      'ใน src/pages/ ต้องมี URL',
+      'ใน src/actions/index.ts บน object `server` แต่ละตัวมี schema `input` (Zod) และ `handler`',
+      'ใน astro.config.mjs',
+      'ใน .astro component เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'input ของ action เกิดอะไรก่อน handler รัน?',
+    options: [
+      'ไม่มีอะไร — คุณ validate เอง',
+      'ถูก validate อัตโนมัติกับ Zod `input` schema',
+      'ถูกแปลงเป็น string',
+      'ถูกทิ้ง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'การเรียก action จาก client return อะไร?',
+    options: [
+      'data ตรง ๆ และ throw เมื่อ error',
+      'object `{ data, error }` — Astro ไม่ throw ข้าม boundary (เช็ค isInputError(error))',
+      'Promise ที่ไม่ resolve เลย',
+      'HTML string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณได้อะไรจากการเชื่อม action กับ `<form action={actions.name}>`?',
+    options: [
+      'ไม่ได้อะไร',
+      'progressive enhancement — form submit เป็น POST ปกติได้โดยไม่มี JS แล้วอัปเกรดเป็น client call เมื่อ hydrate',
+      'มันปิด validation',
+      'มันทำให้ form เป็น static',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/actions" questions={quizActions} />
+
+<ProgressTracker client:visible id="server-side/actions" />

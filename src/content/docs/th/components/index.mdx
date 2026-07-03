@@ -1,0 +1,79 @@
+---
+title: 'Components & Templating'
+description: 'เจาะภาษา template ของ .astro แบบใกล้ ๆ — expression, style กับ script, slot กับ composition และ Markdown/MDX วิธีที่คุณเขียน HTML ที่ Astro ส่งออกไปจริง ๆ'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## จาก "component คืออะไร" ไปสู่ "เขียนมันยังไง"
+
+โมดูล Foundations ให้ mental model กับคุณไปแล้ว — component `.astro` คือฟังก์ชันที่รับ props แล้ว render เป็น HTML บน server โมดูลนี้จะซูมเข้าไปที่ตัว **ภาษา template** เอง — syntax ที่คุณใช้เปลี่ยนข้อมูลให้เป็น markup, จัด style, ใส่ behavior ฝั่ง browser นิดหน่อย และประกอบ component เข้าด้วยกัน
+
+ไม่มีอะไรในนี้ที่ hydrate หรือส่ง framework ลง browser เลย นั่นเป็นเรื่องของโมดูลถัดไป (Islands) ตรงนี้เราอยู่ฝั่ง server ล้วน ๆ — expression, style, slot และ Markdown ที่ผลิต HTML ของคุณออกมา
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|--------|-------------------|
+| Astro syntax deep dive | expression, conditional, loop, Fragment, `set:html`, spread attribute |
+| Styles & scripts | scoped vs global CSS, `define:vars` และ `<script>` ทำงานยังไงจริง ๆ |
+| Slots & composition | named slot, fallback content, เช็ค slot, สร้าง layout |
+| Markdown & MDX | หน้า Markdown, ใส่ layout และการใช้ component ใน `.mdx` |
+
+<Mermaid title="อะไรที่เปลี่ยน template ของคุณเป็น HTML ที่ส่งออกไป" code={diagram} />
+
+export const diagram = `flowchart LR
+  data["props and data"] --> tmpl["template: expressions, loops, slots"]
+  css["scoped styles"] --> tmpl
+  tmpl --> html["rendered HTML plus scoped CSS"]
+  html --> ship["shipped to the browser, zero JS by default"]`;
+
+## เส้นเรื่องหลัก
+
+ทุกฟีเจอร์ในโมดูลนี้คือวิธีอธิบาย HTML ให้แสดงออกได้มากขึ้น ในขณะที่ยังรักษาสัญญา zero-JS-by-default ไว้ expression กับ loop ให้ข้อมูลขับ markup ได้ scoped style เก็บ CSS ไว้เฉพาะที่โดยไม่ต้องพิธีรีตอง slot ให้ component ห่อ content ที่มันยังไม่รู้ล่วงหน้าได้ และ Markdown/MDX ให้คุณเขียน content เป็นร้อยแก้วแต่ยังหย่อน component ลงไปตรงที่ต้องการได้
+
+<Callout title="สรุปหนึ่งบรรทัด">
+โมดูลนี้คือ **ภาษา template ของ `.astro` แบบใกล้ ๆ**: expression และ control flow ที่เปลี่ยนข้อมูลเป็น markup, scoped style กับ script, slot สำหรับ composition และ Markdown/MDX สำหรับ content ทั้งหมดทำงานบน **server** เพื่อผลิต HTML ส่วนความ interactive ค่อยมาทีหลังในโมดูล Islands
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'โมดูลนี้โฟกัสที่เลเยอร์ไหนของ Astro?',
+    options: [
+      'การ hydrate ฝั่ง client และ framework island',
+      'ภาษา template ของ .astro ที่ผลิต HTML บน server — expression, style, slot, Markdown',
+      'การ deploy และ adapter',
+      'การเข้าถึง database',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โดย default templating ที่พูดถึงในนี้ส่งอะไรไปที่ browser?',
+    options: [
+      'JavaScript bundle ของแต่ละ component',
+      'HTML ที่ render แล้วบวกกับ scoped CSS โดยไม่มี JavaScript เลยเป็น default',
+      'แค่ frontmatter',
+      'ไม่มีอะไรจนกว่าจะ hydrate',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'หัวข้อไหนเป็นของโมดูล *ถัดไป* ไม่ใช่โมดูลนี้?',
+    options: [
+      'scoped style',
+      'named slot',
+      'การ hydrate island ที่ interactive ด้วย client directive',
+      'การวน loop ข้อมูลด้วย `{items.map(...)}`',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="components/index" />

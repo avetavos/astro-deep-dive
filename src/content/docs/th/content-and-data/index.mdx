@@ -1,0 +1,79 @@
+---
+title: 'Content & Data'
+description: 'Astro เปลี่ยน Markdown ไฟล์ และ external API ให้เป็น content ที่มี type และ query ได้อย่างไร ผ่าน Content Layer API, Zod schema, การ fetch ข้อมูล และ dynamic route.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาเรื่อง content
+
+เว็บ Astro ส่วนใหญ่เป็น content site อยู่แล้ว ทั้งบล็อกที่มีโพสต์เป็นสิบ, docs ที่มีหน้าเป็นร้อย, หรือ catalog สินค้าที่ดึงมาจาก CMS คำถามที่โมดูลนี้ตอบคือ **จะเอา content พวกนั้น ไม่ว่าจะเป็นไฟล์ Markdown, JSON, หรือ API ปลายทาง เข้ามาเป็นข้อมูลที่มี type และผ่าน validation แล้ว query ได้ในหน้าเพจของเราได้ยังไง?**
+
+คำตอบของ Astro คือ **Content Layer API** เราประกาศ collection ขึ้นมา แต่ละอันมี `loader` ที่อ่าน content จากที่ไหนสักที่ (ไฟล์ในเครื่อง หรือ endpoint ปลายทาง) และมี `schema` ที่ validate โครงสร้าง จากนั้นก็ query collection ด้วย `getCollection` และ `getEntry` แล้ว render body ของแต่ละ entry ด้วย `render` ผลลัพธ์คือ content ที่ทำงานเหมือน database เล็ก ๆ ที่มี type สร้างขึ้นตอน build
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่จะได้เรียน |
+|--------|-------------------|
+| Content collections | Content Layer API: `defineCollection`, `loader`, `getCollection` และ `render` |
+| Schemas & references | validate frontmatter ด้วย Zod และเชื่อม collection ด้วย `reference()` |
+| Data fetching | top-level `await fetch()`, ข้อมูลแบบ build-time vs request-time, headless CMS |
+| Dynamic routes | route แบบ file-based `[slug].astro`, `getStaticPaths()` และ pagination |
+
+<Mermaid title="จาก content ดิบสู่หน้าเพจที่ render แล้ว" code={diagram} />
+
+export const diagram = `flowchart LR
+  files["Markdown / JSON / API"] --> loader["loader (glob / file)"]
+  loader --> schema["schema validate (Zod)"]
+  schema --> query["getCollection / getEntry"]
+  query --> page["page render HTML"]`;
+
+## เรื่องใหญ่ที่สุดที่ต้องรู้
+
+ถ้าคุณเคยใช้ Astro ก่อนเวอร์ชัน 5 การเปลี่ยนแปลงที่ใหญ่ที่สุดคือ **collection ไม่ใช่โฟลเดอร์เวทมนตร์อีกต่อไป** เมื่อก่อนแค่โยน Markdown ลงใน `src/content/blog/` มันก็กลายเป็น collection ให้อัตโนมัติ แต่ใน Astro 6 **ทุก collection ต้องประกาศ `loader`** ใน `src/content.config.ts` วิธีนี้ชัดเจนกว่า และทรงพลังกว่ามาก เพราะ API เดียวกันโหลดได้ทั้งไฟล์ในเครื่อง *และ* ข้อมูลจากปลายทาง ผ่าน interface ที่มี type ตัวเดียว
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Astro เปลี่ยน content ให้เป็น **layer ที่มี type และ query ได้** เราประกาศ collection ใน `src/content.config.ts` แต่ละอันมี `loader` (content มาจากไหน) และ `schema` (โครงสร้างที่ validate แล้ว) จากนั้น query ด้วย `getCollection`/`getEntry` แล้ว render body ด้วย `render` ใน Astro 6 ทุก collection ต้องมี loader เพราะโฟลเดอร์ content แบบ auto-magic ของเดิมถูกยกเลิกไปแล้ว
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Content Layer API มีไว้ทำอะไร?',
+    options: [
+      'ไว้ตกแต่งหน้า content',
+      'เปลี่ยน content (ไฟล์ในเครื่องหรือข้อมูลปลายทาง) ให้เป็น layer ที่มี type, query ได้, และ validate แล้ว เข้าถึงด้วย getCollection/getEntry',
+      'ทำ routing ฝั่ง client',
+      'bundle JavaScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'collection ใน Astro 6 เปลี่ยนไปจากเวอร์ชันเก่ายังไง?',
+    options: [
+      'collection ถูกยกเลิก',
+      'ทุก collection ต้องประกาศ loader ใน src/content.config.ts โฟลเดอร์ src/content/ แบบ auto-magic ของเดิมหายไปแล้ว',
+      'collection ต้องใช้ database แล้ว',
+      'ไม่มีอะไรเปลี่ยน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'defineCollection รวมสองอย่างอะไรเข้าด้วยกัน?',
+    options: [
+      'route กับ layout',
+      'loader (content มาจากไหน) กับ schema (โครงสร้างที่ validate แล้ว)',
+      'component กับ style',
+      'server กับ client',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="content-and-data/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="content-and-data/index" />

@@ -1,0 +1,170 @@
+---
+title: 'Styles & Scripts'
+description: 'scoped vs global CSS, ส่งค่าด้วย define:vars และ script tag ธรรมดาทำงานยังไงจริง ๆ — มันรันบน browser แต่ไม่ใช่ island'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## scoped style เป็น default
+
+บล็อก `<style>` ในไฟล์ `.astro` จะถูก **scope ไว้เฉพาะ component นั้น** โดยอัตโนมัติ Astro เขียน selector ของคุณใหม่ (เติม hash ต่อ component) ดังนั้น rule ของ `h1` ตรงนี้จะไปเลอะ `h1` ของอีก component ไม่ได้
+
+```astro
+<h1>Title</h1>
+<p>Body</p>
+<style>
+  h1 { color: rebeccapurple; }   /* only THIS component's h1 */
+  p  { line-height: 1.6; }
+</style>
+```
+
+คุณเขียน selector ธรรมดาตรงไปตรงมา แล้วได้ CSS เฉพาะ component — ไม่ต้องมี naming convention ไม่ต้อง CSS-in-JS นี่คือ default ที่คุณจะใช้แทบทุกที่
+
+## opt out ด้วย `is:global`
+
+บางครั้งคุณอยากให้ rule มีผลทั้งไซต์จริง ๆ — CSS reset, typography พื้นฐาน, theme เติม `is:global` เพื่อ opt ทั้งบล็อกออกจาก scoping
+
+```astro
+<style is:global>
+  :root { --brand: #883AEA; }
+  body { margin: 0; font-family: system-ui; }
+</style>
+```
+
+คุณยัง escape scope ทีละ selector ได้ด้วยฟังก์ชัน `:global()` ภายในบล็อกที่ scoped ตามปกติ
+
+```astro
+<style>
+  /* scoped, except this one rule reaches into slotted/child content */
+  :global(.markdown-body a) { color: var(--brand); }
+</style>
+```
+
+## ส่งค่าเข้า CSS ด้วย `define:vars`
+
+ค่าใน frontmatter อยู่ฝั่ง server ส่วน CSS เป็น text นิ่ง ๆ เพื่อเชื่อมสองอย่างนี้ `define:vars` จะฉีดค่า JavaScript เข้าไปเป็น **CSS custom property** บนบล็อก style
+
+```astro
+---
+const accent = "#883AEA";
+const gap = "1.5rem";
+---
+<div class="card">Styled by props</div>
+<style define:vars={{ accent, gap }}>
+  .card {
+    border: 2px solid var(--accent);
+    padding: var(--gap);
+  }
+</style>
+```
+
+Astro จะออก inline style ที่พก `--accent` กับ `--gap` มาด้วย ดังนั้น prop ขับ style ได้โดยไม่ต้องมี JavaScript ฝั่ง client เลย เป็นวิธีสะอาด ๆ ในการทำให้สีหรือ spacing ของ component ปรับได้ผ่าน props
+
+## `<script>` tag: ถูก process และ bundle โดย default
+
+`<script>` ในไฟล์ `.astro` **รันบน browser** — แต่ Astro มองมันเป็น module: มันถูก process, bundle, compile TypeScript และ resolve import เหมือน JS อื่น ๆ ใน build ของคุณ
+
+```astro
+<button id="menu">Menu</button>
+<script>
+  // Bundled module script. Runs in the browser.
+  import { toggle } from '../scripts/menu';
+  document.getElementById('menu')?.addEventListener('click', toggle);
+</script>
+```
+
+นี่คือ client JavaScript จริง ๆ — จุดเดียวในโมดูลนี้ที่โค้ดไปถึง browser เหมาะกับงาน DOM แบบ imperative เล็ก ๆ: ต่อ event listener, อ่าน `localStorage`, init widget จากภายนอก
+
+### opt out ด้วย `is:inline`
+
+ถ้าคุณต้องการให้ script ออกมา **ตรงตามที่เขียนเป๊ะ ๆ** — ไม่ถูก bundle หรือ process (เช่น snippet analytics แบบ inline หรือ script ที่ต้องรันก่อน hydration) ให้เติม `is:inline`
+
+```astro
+<script is:inline>
+  window.dataLayer = window.dataLayer || [];
+</script>
+```
+
+inline script ข้าม bundling ดังนั้น `import` ในนั้นจะไม่ถูก resolve และไม่ถูก dedupe ข้ามทั้งหน้า ใช้เฉพาะตอนที่คุณต้องการ tag ดิบ ๆ ไม่ถูกแตะจริง ๆ
+
+## จุดสำคัญ: script ไม่ใช่ island
+
+จุดนี้ทำมือใหม่งงบ่อย `<script>` รันบน browser แต่มัน **ไม่** ทำให้ component รอบ ๆ กลายเป็น island ไม่มีการ hydrate component ไม่มี framework ไม่มี re-render — มันแค่ script ธรรมดาที่แก้ DOM ที่ Astro ผลิตออกมาแล้ว
+
+```astro
+<!-- This runs, but nothing is "hydrated". It's a script, not an island. -->
+<div id="counter">0</div>
+<script>
+  let n = 0;
+  const el = document.getElementById('counter');
+  document.getElementById('inc')?.addEventListener('click', () => {
+    el.textContent = String(++n);
+  });
+</script>
+```
+
+เมื่อคุณอยากได้ความ interactive ระดับ **component** — component React/Vue/Svelte ที่มี state แล้ว hydrate — นั่นคือ **island** สร้างด้วย client directive และเป็นเนื้อหาทั้งโมดูลถัดไป กฎง่าย ๆ: หยิบ `<script>` มาใช้กับงาน DOM แบบ imperative เล็ก ๆ; หยิบ island มาใช้เมื่ออยากได้ UI component ที่มี state รันบน client
+
+<Mermaid title="script กับ island — คนละเรื่องกัน" code={diagram} />
+
+export const diagram = `flowchart TB
+  scr["plain script tag"] --> dom["runs in browser, manipulates existing DOM"]
+  dom --> nohy["no component hydration"]
+  isl["island with a client directive"] --> hyd["framework component hydrates"]
+  hyd --> state["has its own state and re-renders"]`;
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`<style>` ของ component เป็น **scoped โดย default**; opt out ด้วย `<style is:global>` หรือ selector `:global()` และส่ง props เข้า CSS ด้วย `define:vars` ส่วน `<script>` **รันบน browser** และถูก bundle/process โดย default (`is:inline` opt out) — แต่มัน **ไม่ใช่ island**: มันแก้ DOM ที่มีอยู่โดยไม่มีการ hydrate component ถ้าอยากได้ UI component ที่มี state และ hydrate คุณต้องใช้ island (โมดูลถัดไป)
+</Callout>
+
+export const quizStyles = [
+  {
+    q: 'โดย default บล็อก `<style>` ใน component .astro มี scope แค่ไหน?',
+    options: [
+      'global ทั้งไซต์',
+      'scoped เฉพาะ component นั้น — Astro เขียน selector ใหม่ไม่ให้รั่ว',
+      'มีผลเฉพาะ dev mode',
+      'inline บนทุก element',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณส่งค่าจาก frontmatter เข้า CSS ของ component ยังไง?',
+    options: [
+      'ทำไม่ได้ — CSS เป็นค่านิ่ง',
+      '`define:vars={{ ... }}` บนบล็อก style ซึ่งฉีด CSS custom property เข้าไป',
+      'import ค่าเข้าไปในไฟล์ CSS',
+      'ใช้ client script ตั้งค่า style',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`<script>` tag ธรรมดาใน component .astro...',
+    options: [
+      'เปลี่ยน component ให้เป็น island ที่ hydrate',
+      'รันบน browser และถูก bundle โดย default แต่ *ไม่* hydrate component (ไม่ใช่ island)',
+      'ไม่รันบน browser เลย',
+      'รันบน server เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'การเติม `is:inline` ให้ script ทำอะไร?',
+    options: [
+      'รันมันบน server',
+      'ออกมาตามที่เขียน — ข้าม bundling/processing ดังนั้น import ในนั้นไม่ถูก resolve',
+      'scope มันไว้กับ component',
+      'ทำให้มันเป็น island',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/styles-and-scripts" questions={quizStyles} />
+
+<ProgressTracker client:visible id="components/styles-and-scripts" />

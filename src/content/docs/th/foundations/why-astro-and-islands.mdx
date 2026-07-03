@@ -1,0 +1,115 @@
+---
+title: 'ทำไมต้อง Astro และ Islands'
+description: 'ปัญหาของการส่ง SPA ทั้งตัวไปทำ content site, islands architecture และแนวคิด zero-JS-by-default ที่ทำให้ Astro เร็ว'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหา: ส่งทั้ง framework ไปเพื่อ render ตัวหนังสือ
+
+เว็บส่วนใหญ่คือ content: blog, docs, marketing site, รายการสินค้า e-commerce การสร้างของพวกนี้ด้วย SPA ที่ render ฝั่ง client แปลว่า browser ต้องโหลด JavaScript bundle ก้อนใหญ่ boot framework ขึ้นมา แล้ว re-render — บน client — HTML ที่ทีแรกก็ส่งเป็น HTML ธรรมดาได้อยู่แล้ว
+
+ต้นทุนมันจริง: first paint ช้าลง, interactivity มาช้า (เข้าสู่ "uncanny valley" ที่หน้าดูเหมือนพร้อมแต่กดอะไรไม่ได้) และเสีย CPU ไปเยอะกับการ hydrate ส่วนที่ไม่เคย interactive เลย — footer, เนื้อบทความ, nav bar
+
+Insight ที่ Astro สร้างขึ้นมา: **สำหรับ content site แล้ว HTML คือตัวสินค้า JavaScript ควรเป็นข้อยกเว้น ไม่ใช่ฐานราก**
+
+## islands architecture
+
+Astro render ทั้งหน้าเป็น static HTML แล้วมองแต่ละ component ที่ interactive เป็น **island** — ชิ้นเล็ก ๆ ที่ hydrate แยกกันในทะเลของ static HTML
+
+<Mermaid title="หนึ่งหน้าคือ static HTML ที่มี island hydrate ไม่กี่ตัว" code={islandDiagram} />
+
+export const islandDiagram = `flowchart TB
+  page["Page: static HTML (ไม่มี JS)"]
+  page --> nav["nav — static"]
+  page --> article["เนื้อบทความ — static"]
+  page --> search["SearchBox — island (hydrated)"]
+  page --> cart["CartWidget — island (hydrated)"]
+  page --> footer["footer — static"]`;
+
+สองคุณสมบัติที่นิยาม island:
+
+- **แยกเป็นอิสระ** แต่ละ island hydrate ด้วยตัวเอง มี JavaScript ของตัวเอง เป็นอิสระจากตัวอื่น carousel ที่โหลดช้าไม่ block search box
+- **Opt-in** ไม่มีอะไร interactive จนกว่าคุณจะ *ทำเครื่องหมาย* ให้มัน (ด้วย client directive — มีบทเรียนทั้งบททีหลัง) ค่า default คือ static HTML ที่ไม่มี JavaScript เลย
+
+เทียบกับ SPA ที่ *ทั้งหน้า* เป็น JavaScript application ก้อนเดียวซึ่งต้อง boot ให้เสร็จก่อนถึงจะทำอะไรได้ ส่วน islands ส่ง JavaScript เฉพาะ component ที่ต้องใช้ และส่งแค่เท่าที่ต้องใช้
+
+## Zero JS by default
+
+นี่คือพาดหัว: Astro component โดย default ผลิต **HTML กับ CSS และไม่มี JavaScript** เขียน component ที่มีปุ่มและ `onClick` — เว้นแต่คุณจะเปลี่ยนมันเป็น island — ปุ่มจะ render แต่ handler ไม่ถูกส่งไป นั่นไม่ใช่ข้อจำกัด มันคือประเด็น: คุณถูกบังคับให้ตั้งใจว่าอะไรจะรันบน client
+
+```astro
+---
+// component นี้รันบน server เพื่อผลิต HTML
+// JavaScript พวกนี้ไม่ถูกส่งไป browser เลย
+const posts = await getPosts();
+---
+<ul>
+  {posts.map((post) => <li>{post.title}</li>)}
+</ul>
+<!-- ส่ง: HTML <ul> ส่ง: ไม่มี JavaScript -->
+```
+
+ผลลัพธ์คือหน้าเว็บที่เร็วตั้งแต่โครงสร้าง: browser ได้ HTML ที่ paint ได้ทันที และโหลด JavaScript เฉพาะ island ที่คุณเลือกเปิดเองอย่างชัดเจน
+
+## Astro เหมาะ (และไม่เหมาะ) ตอนไหน
+
+Astro โดดเด่นกับ **content-driven site**: blog, documentation, marketing, portfolio, e-commerce, อะไรก็ตามที่ส่วนใหญ่ของหน้าเป็น content และ interactivity อยู่เฉพาะจุด
+
+มันเหมาะน้อยกว่ากับ **UI ที่เหมือนแอปและ interactive สูง** — editor สไตล์ figma, trading dashboard, เครื่องมือ collaborate แบบ realtime — ที่เกือบทุกอย่างมี state และ interactive ตรงนั้น SPA framework เต็มตัว (หรือ Astro ที่มี island ใหญ่มาก ซึ่งขัดกับจุดประสงค์) จะเข้าท่ากว่า และ Astro ยังให้คุณฝัง component ของ framework พวกนั้นเป็น island ได้เมื่อจำเป็น
+
+<Callout title="สรุปบรรทัดเดียว">
+Astro render หน้าเป็น static HTML และส่ง **JavaScript เป็นศูนย์โดย default** interactivity ถูกเพิ่มอย่างตั้งใจในรูปของ **islands** — component เล็ก ๆ ที่แยกอิสระและ hydrate ทีละตัวบนหน้าที่เป็น static นั่นทำให้ content site เร็วตั้งแต่โครงสร้าง (paint HTML ทันที โหลด JS เฉพาะไม่กี่ชิ้นที่ interactive) มันเป็นเครื่องมือที่ใช่สำหรับ content-driven site และเหมาะน้อยกว่ากับ UI ที่เหมือนแอปและ interactive ทั้งหน้า
+</Callout>
+
+export const quizWhy = [
+  {
+    q: 'ต้นทุนหลักของการสร้าง content site เป็น SPA ที่ render ฝั่ง client คืออะไร?',
+    options: [
+      'มันใช้ CSS ไม่ได้',
+      'browser ต้องโหลดและ boot framework เพื่อ render HTML ที่ทีแรกก็ส่งเป็น HTML ธรรมดาได้ ทำให้ first paint และ time-to-interactive แย่ลง',
+      'มันต้องมี database',
+      'มันทำงานได้เฉพาะตอน offline',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'สองคุณสมบัติที่นิยาม island คืออะไร?',
+    options: [
+      'Global และ mutable',
+      'แยกอิสระ (hydrate เป็นอิสระ) และ opt-in (ไม่มีอะไร interactive จนกว่าจะทำเครื่องหมาย)',
+      'Server-only และ cached',
+      'Encrypted และ compressed',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โดย default Astro component ส่ง JavaScript ไปเท่าไหร่?',
+    options: [
+      'ทั้ง framework',
+      'ไม่ส่งเลย — มันผลิต HTML กับ CSS โดยไม่มี client JavaScript เว้นแต่คุณจะทำให้เป็น island',
+      'หนึ่ง bundle ต่อหน้า',
+      'เฉพาะ event handlers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โปรเจกต์แบบไหน เหมาะกับ Astro น้อยที่สุด?',
+    options: [
+      'เว็บ documentation',
+      'หน้า marketing landing',
+      'editor แบบ collaborate realtime ที่เกือบทุกอย่าง interactive',
+      'blog',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="foundations/why-astro-and-islands" questions={quizWhy} />
+
+<ProgressTracker client:visible id="foundations/why-astro-and-islands" />

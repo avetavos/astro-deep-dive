@@ -1,0 +1,85 @@
+---
+title: 'Server-Side Astro'
+description: 'When and how to opt into the server — on-demand rendering, API endpoints, type-safe Actions, and middleware with sessions — for request-time work Astro cannot do at build time.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The idea in one sentence
+
+**Astro is static by default, but you opt into the server whenever a page needs request-time work** — the logged-in user, a form submission, live data, an auth check. The server is a tool you reach for deliberately, not the default substrate.
+
+Everything in this module is about that opt-in: rendering per request, handling requests directly, calling server logic type-safely, and running code before every request.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| SSR & adapters | On-demand rendering, adapters, and reading the request |
+| Endpoints & API routes | `APIRoute` handlers that return a `Response` |
+| Actions | Type-safe server functions with `defineAction` and validation |
+| Middleware & sessions | `onRequest`, `context.locals`, and `Astro.session` |
+
+## Four ways to run server code
+
+<Mermaid title="The server-side surface of Astro" code={overviewDiagram} />
+
+export const overviewDiagram = `flowchart TB
+  req["Incoming request"] --> mw["Middleware onRequest\n(runs first, every request)"]
+  mw --> page["On-demand page\n(prerender false)"]
+  mw --> api["API endpoint\n(GET/POST handler)"]
+  mw --> act["Action handler\n(defineAction)"]
+  page --> resp["Response"]
+  api --> resp
+  act --> resp`;
+
+- **On-demand pages** render HTML per request, so they can read cookies, the user, and query params.
+- **API endpoints** are non-HTML routes — return JSON, a file, a webhook reply — as a raw `Response`.
+- **Actions** are type-safe server functions you call from the client with validated input, ideal for mutations and forms.
+- **Middleware** runs before every request, the place for auth, logging, and shared per-request data.
+
+<Callout title="The one-line takeaway">
+Server-side Astro is **opt-in**: static by default, you reach for the server only when a page needs request-time data or logic. Four tools cover it — **on-demand pages** (HTML per request), **API endpoints** (raw `Response` for non-HTML), **Actions** (type-safe validated server functions for the client), and **middleware** (code that runs before every request, with sessions for per-user state). All of them require an adapter.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What is Astro’s default, and when do you opt into the server?',
+    options: [
+      'Server by default; opt into static for speed',
+      'Static by default; opt into the server when a page needs request-time work (auth, forms, live data)',
+      'It is always server-rendered',
+      'It is always client-rendered',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which tool is best for a type-safe server function called from the client with validated input?',
+    options: [
+      'An API endpoint',
+      'An Action (`defineAction`)',
+      'Middleware',
+      'A static page',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where does middleware run?',
+    options: [
+      'Only at build time',
+      'Before every request — the place for auth, logging, and per-request data',
+      'Only on the client',
+      'After the response is sent',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-side/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="server-side/index" />

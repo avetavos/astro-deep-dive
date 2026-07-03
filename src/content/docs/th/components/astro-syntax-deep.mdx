@@ -1,0 +1,191 @@
+---
+title: 'Astro Syntax Deep Dive'
+description: 'template expression, conditional กับ loop, Fragment, set:html กับ set:text, spread attribute และ dynamic tag — syntax แบบ JSX ที่เปลี่ยนข้อมูลให้เป็น markup'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Expression: `{ }` หย่อนเข้าไปใน JavaScript
+
+ที่ไหนก็ได้ใน template `{ }` จะฝัง JavaScript expression แล้ว render ค่าที่ได้ออกมา ตัวแปรจาก frontmatter ใช้ได้เลย
+
+```astro
+---
+const name = "Ada";
+const count = 3;
+---
+<h1>Hello, {name}</h1>
+<p>You have {count} messages.</p>
+<p>Total: {count * 2}</p>
+```
+
+ข้างใน `{ }` ใส่ได้เฉพาะ **expression** เท่านั้น — อะไรที่ประเมินออกมาเป็นค่า ส่วน statement (บล็อก `if`, loop `for`) ต้องอยู่ใน frontmatter ใน template คุณเขียน control flow ในรูปของ expression ตามที่จะเห็นด้านล่าง
+
+## Conditional
+
+ใช้สำนวน logical-AND เพื่อ render บางอย่างเฉพาะตอนเงื่อนไขเป็นจริง และใช้ ternary เพื่อเลือกระหว่างสองทาง
+
+```astro
+---
+const isLoggedIn = true;
+const user = { name: "Ada", role: "admin" };
+---
+{isLoggedIn && <p>Welcome back, {user.name}</p>}
+
+{user.role === "admin"
+  ? <a href="/admin">Admin panel</a>
+  : <a href="/account">Your account</a>}
+```
+
+`{cond && <div/>}` จะ render element เมื่อ `cond` เป็น truthy และไม่ render อะไรเลยถ้าไม่ใช่ ส่วน ternary จะ render หนึ่งในสองทางเสมอ
+
+## Loop
+
+ไม่มี directive สำหรับ loop โดยเฉพาะ — คุณ `map` array ให้เป็น markup เหมือน JSX เป๊ะ ๆ
+
+```astro
+---
+const posts = [
+  { id: 1, title: "First" },
+  { id: 2, title: "Second" },
+];
+---
+<ul>
+  {posts.map((post) => <li>{post.title}</li>)}
+</ul>
+```
+
+Astro ไม่ต้องใช้ prop `key` แบบที่ React ต้องใช้ — นี่คือ server rendering ไม่มี reconciliation แค่ map, return element, จบ
+
+## Fragment: จัดกลุ่มโดยไม่ต้องมี wrapper
+
+เวลาที่คุณต้อง return หลาย element โดยไม่อยากเพิ่ม DOM node ห่อ ให้ใช้ **Fragment** Astro รองรับทั้งแบบมีชื่อ `<Fragment>` และแบบย่อ `<>`
+
+```astro
+---
+const items = ["a", "b"];
+---
+<Fragment>
+  <dt>Term</dt>
+  <dd>Definition</dd>
+</Fragment>
+
+{items.map((x) => (
+  <>
+    <span>{x}</span>
+    <br />
+  </>
+))}
+```
+
+Fragment ยังเป็นที่วาง directive `set:*` เวลาที่คุณไม่มี element ให้แปะด้วย (เดี๋ยวจะพูดถึง)
+
+## Render HTML ดิบ: `set:html` กับ `set:text`
+
+โดย default expression ที่ให้ค่าออกมาเป็น string จะถูก **escape** — Astro render มันเป็น text ดังนั้น `<b>hi</b>` จะโชว์ tag ออกมาตรง ๆ นั่นปลอดภัย เมื่อไหร่ที่คุณมี string HTML ที่เชื่อถือได้และอยากให้ render เป็น markup จริง ๆ (เช่น HTML จาก CMS ที่คุณคุมเอง) ให้ใช้ `set:html`
+
+```astro
+---
+const fromCms = "<strong>Bold from the CMS</strong>";
+const plain = "<not a tag>";
+---
+<div set:html={fromCms} />     <!-- renders as real bold markup -->
+<div set:text={plain} />       <!-- renders the characters, escaped -->
+<Fragment set:html={fromCms} /> <!-- no wrapper element -->
+```
+
+`set:html` **ข้าม escaping** — ใช้กับ content ที่เชื่อถือได้เท่านั้น ไม่งั้นคุณเปิดช่องโหว่ XSS ส่วน `set:text` บังคับให้ค่าถูกมองเป็น plain text (คือ default ที่ปลอดภัยเขียนออกมาให้ชัด)
+
+## Spread attribute
+
+เมื่อคุณมี object ของ attribute ให้ spread มันลงบน element ด้วย `{...obj}` — สะดวกเวลาส่ง props ต่อ
+
+```astro
+---
+const attrs = { id: "cta", class: "btn", "data-track": "signup" };
+---
+<a href="/join" {...attrs}>Join</a>
+```
+
+## Dynamic tag name
+
+คุณคำนวณได้ว่าจะ render *element ตัวไหน* กำหนดตัวแปรที่ขึ้นต้นด้วยตัวใหญ่ให้เป็นชื่อ tag แล้วใช้มัน
+
+```astro
+---
+const level = 2;
+const Heading = `h${level}`;   // "h2"
+---
+<Heading>Dynamic heading</Heading>   <!-- renders <h2>Dynamic heading</h2> -->
+```
+
+ตัวแปรต้อง **ขึ้นต้นด้วยตัวใหญ่** เพื่อให้ Astro มองว่าเป็น reference ไปยัง component/tag ไม่ใช่ HTML tag ที่เขียนตรง ๆ
+
+<Mermaid title="template expression กลายเป็น HTML ได้ยังไง" code={diagram} />
+
+export const diagram = `flowchart LR
+  expr["expression in curly braces"] --> eval["evaluated on the server"]
+  eval --> esc["string values are escaped by default"]
+  esc --> html["safe HTML output"]
+  eval --> raw["set:html bypasses escaping for trusted HTML"]
+  raw --> html`;
+
+## ชื่อ attribute แบบ HTML ไม่ใช่แบบ JSX
+
+จุดต่างที่ละเอียดแต่สำคัญจาก React: template ของ Astro ใช้ **ชื่อ attribute แบบ HTML มาตรฐาน** เป็น `class` ไม่ใช่ `className`; เป็น `for` ไม่ใช่ `htmlFor` คุณกำลังเขียน superset ของ HTML ดังนั้นชื่อแบบ HTML คือชื่อจริง
+
+<Callout title="สรุปหนึ่งบรรทัด">
+templating ของ Astro คล้าย JSX แต่เป็น HTML-native: `{ }` ฝัง expression, `{cond && <el/>}` กับ ternary จัดการ conditional, `{items.map(...)}` จัดการ loop (ไม่ต้องใช้ `key`) และ `<Fragment>` / `<>` จัดกลุ่มโดยไม่ต้องมี wrapper `set:html` render string HTML ที่ **เชื่อถือได้** แบบดิบ (ข้าม escaping — เสี่ยง XSS ถ้า input ไม่น่าเชื่อถือ), `set:text` บังคับเป็น plain text และ `{...obj}` spread attribute ใช้ชื่อ attribute แบบ HTML จริง — `class` ไม่ใช่ `className`
+</Callout>
+
+export const quizSyntax = [
+  {
+    q: 'คุณ render list จาก array ใน template ของ Astro ยังไง?',
+    options: [
+      'directive พิเศษ <For>',
+      '`{items.map((item) => <li>{item}</li>)}` — map ด้วย JS ธรรมดา ไม่ต้องมี key',
+      'loop for ใน template',
+      'วน loop ใน template ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`set:html` ทำอะไร และเสี่ยงอะไร?',
+    options: [
+      'มัน escape HTML ไม่มีความเสี่ยง',
+      'มัน render string เป็น HTML ดิบ ข้าม escaping — เสี่ยง XSS ถ้า content ไม่น่าเชื่อถือ',
+      'มันตั้งค่า id ของ element',
+      'มัน import ไฟล์ HTML',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณอยากคืน element พี่น้องสองตัวโดยไม่เพิ่ม wrapper node ใช้อะไร?',
+    options: [
+      '`<div>`',
+      'Fragment — `<Fragment>` หรือแบบย่อ `<>`',
+      '`<span>`',
+      'component แยกสองอัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ชื่อ attribute ไหนถูกต้องใน template ของ Astro?',
+    options: [
+      '`className`',
+      '`class` — Astro ใช้ชื่อ attribute แบบ HTML มาตรฐาน ไม่ใช่ชื่อแบบ JSX',
+      '`htmlFor`',
+      'ทั้ง className และ class ใช้ได้เหมือนกัน',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/astro-syntax-deep" questions={quizSyntax} />
+
+<ProgressTracker client:visible id="components/astro-syntax-deep" />

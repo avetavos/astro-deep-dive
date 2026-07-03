@@ -1,0 +1,151 @@
+---
+title: 'The Component Model'
+description: 'Astro components, passing and typing props, slots for composition, and scoped styles — the reusable building blocks that render on the server.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Components are server-rendered functions
+
+An Astro component is a `.astro` file you can import and use in another. It takes **props** and returns HTML. Because it renders on the server, a component is essentially a function from props to markup — with no client-side lifecycle.
+
+```astro
+---
+// src/components/Card.astro
+interface Props {
+  title: string;
+  href: string;
+}
+const { title, href } = Astro.props;   // props arrive on Astro.props
+---
+<a class="card" href={href}>
+  <h3>{title}</h3>
+</a>
+```
+
+Using it:
+
+```astro
+---
+import Card from '../components/Card.astro';
+---
+<Card title="Hello" href="/hello" />
+```
+
+Props come in through **`Astro.props`**, and you type them by declaring a `Props` interface in the frontmatter — Astro uses it to type-check usage. There is no `useState` here; a component runs once to produce HTML.
+
+## Slots: composition by passing markup
+
+A component often needs to wrap *content it doesn't know in advance*. That's what **slots** are for — the child markup you put between the component's tags is rendered where `<slot />` appears.
+
+```astro
+---
+// src/components/Panel.astro
+const { heading } = Astro.props;
+---
+<section class="panel">
+  <h2>{heading}</h2>
+  <slot />          <!-- children go here -->
+</section>
+```
+
+```astro
+<Panel heading="Notes">
+  <p>Any markup here lands in the slot.</p>
+</Panel>
+```
+
+For more than one insertion point, use **named slots**:
+
+```astro
+<!-- Layout.astro -->
+<header><slot name="header" /></header>
+<main><slot /></main>            <!-- the default slot -->
+<footer><slot name="footer" /></footer>
+```
+
+```astro
+<Layout>
+  <h1 slot="header">Title</h1>
+  <p>Body goes in the default slot.</p>
+  <small slot="footer">© 2026</small>
+</Layout>
+```
+
+<Mermaid title="Slots let a parent inject markup into a component" code={slotDiagram} />
+
+export const slotDiagram = `flowchart LR
+  parent["Parent passes markup\nbetween the tags"] --> slot["Component renders it\nat <slot />"]
+  slot --> out["composed HTML"]`;
+
+Slots are the backbone of **layouts**: a `Layout.astro` defines the page shell (head, nav, footer) with a `<slot />` for the page body, and every page wraps its content in that layout.
+
+## Scoped styles
+
+A `<style>` tag inside a `.astro` component is **scoped to that component by default** — Astro rewrites the selectors so they don't leak out or clash with other components.
+
+```astro
+<h1>Title</h1>
+<style>
+  /* This h1 rule applies ONLY to this component's h1, not others on the page. */
+  h1 { color: rebeccapurple; }
+</style>
+```
+
+You get component-local CSS with plain selectors — no CSS-in-JS, no BiCSS naming ceremony. When you *do* want a rule to apply globally, you opt out with `<style is:global>` (covered in the styles lesson).
+
+<Callout title="The one-line takeaway">
+An Astro component is a **server-rendered function of props** — props arrive via `Astro.props` and are typed with a `Props` interface; there's no client state or lifecycle. **Slots** enable composition: markup passed between a component's tags renders at `<slot />` (with named slots for multiple insertion points), which is how layouts wrap pages. And a component's `<style>` is **scoped by default**, giving you component-local CSS with plain selectors.
+</Callout>
+
+export const quizComponents = [
+  {
+    q: 'How does an Astro component receive its props?',
+    options: [
+      'Through function arguments',
+      'Through `Astro.props`, typed with a `Props` interface in the frontmatter',
+      'Through global variables',
+      'Through the URL',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is a slot used for?',
+    options: [
+      'Fetching data',
+      'Letting a parent inject markup into a component, rendered where `<slot />` appears (the basis of layouts)',
+      'Scoping CSS',
+      'Client-side routing',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'By default, where does a `<style>` block in a .astro component apply?',
+    options: [
+      'Globally to the whole site',
+      'Scoped to that component only — Astro rewrites the selectors so they do not leak',
+      'Only in development',
+      'Nowhere until imported',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you provide multiple insertion points in one component?',
+    options: [
+      'Multiple components',
+      'Named slots — `<slot name="header" />` filled with `<el slot="header">`',
+      'CSS grid',
+      'You cannot',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/the-component-model" questions={quizComponents} />
+
+<ProgressTracker client:visible id="foundations/the-component-model" />

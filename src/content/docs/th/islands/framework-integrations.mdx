@@ -1,0 +1,141 @@
+---
+title: 'Framework Integrations'
+description: 'ใช้ component ของ React, Vue, Svelte, Solid และ Preact เป็น island — เพิ่ม integration, ผสม framework หลายตัวในหน้าเดียว และกฎ props ต้อง serializable เมื่อส่งข้อมูลจาก server.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เอา framework ที่คุณถนัดมาใช้
+
+Astro ไม่มี client-side component runtime ของตัวเอง — แต่ให้คุณใช้ UI framework ที่คุณรู้จักอยู่แล้วกับส่วนที่ต้อง interactive แทน ทั้ง React, Vue, Svelte, Solid และ Preact ใช้เป็น island ได้หมด ผ่าน **integration** อย่างเป็นทางการ
+
+เพิ่ม integration ด้วย CLI ซึ่งจะติดตั้ง package และตั้งค่า config ให้:
+
+```bash
+npx astro add react
+```
+
+คำสั่งนั้นอัปเดต `astro.config.mjs` ให้เอง:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+
+export default defineConfig({
+  integrations: [react()],
+});
+```
+
+ตอนนี้ component `.jsx` สามารถ import เข้ามาในไฟล์ `.astro` และ hydrate ด้วย client directive ได้แล้ว
+
+## import framework component มาเป็น island
+
+island เขียนด้วยสไตล์ปกติของ framework นั้น ส่วนไฟล์ `.astro` เป็นตัว import และตัดสินใจว่ามัน hydrate เมื่อไหร่
+
+```jsx
+// src/components/Counter.jsx — a plain React component
+import { useState } from 'react';
+
+export default function Counter({ start }) {
+  const [count, setCount] = useState(start);
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
+}
+```
+
+```astro
+---
+// src/pages/index.astro
+import Counter from '../components/Counter.jsx';   // 1. import the framework component
+---
+<h1>Welcome</h1>
+<Counter start={0} client:visible />               <!-- 2. hydrate it as an island -->
+```
+
+ถ้าไม่มี `client:visible` เจ้า `Counter` นั้นจะ render เป็น static HTML (มีปุ่ม แต่ `onClick` ไม่ทำงาน) directive คือสิ่งที่ส่ง JavaScript ของมัน
+
+## ผสม framework หลายตัวในหน้าเดียว
+
+เพราะแต่ละ island เป็นอิสระต่อกัน คุณจึงใช้ **framework คนละตัวในหน้าเดียวกันได้** — widget React อยู่ข้าง ๆ widget Svelte — ขอแค่ติดตั้ง integration ทั้งสองไว้ อันนี้มีประโยชน์จริงตอน migrate ทีละส่วน หรือตอนหยิบ component ที่มีเฉพาะใน ecosystem เดียวมาใช้
+
+<Mermaid title="หน้าเดียว มี island จาก framework ต่างตัวกัน" code={diagram} />
+
+export const diagram = `flowchart TB
+  page["Astro page (static HTML)"]
+  page --> r["React island — client:load"]
+  page --> s["Svelte island — client:visible"]
+  page --> v["Vue island — client:idle"]`;
+
+## props ต้อง serializable
+
+เมื่อคุณส่ง props จากไฟล์ `.astro` เข้าไปใน island มันจะถูก render บน server แล้ว **serialize** ลงใน HTML เพื่อให้ client rehydrate ด้วยค่าเดิมได้ นั่นตั้งกฎเหล็กไว้ข้อหนึ่ง: **props ของ island ต้อง serializable** — string, number, boolean, array, plain object สิ่งที่ *ส่งไม่ได้*:
+
+- **function** (รวมถึง event handler) เพราะไม่มีทาง serialize function ข้ามเส้น server/client
+- class instance, `Date` object ในบางกรณี และค่าที่ไม่ใช่ plain value อื่น ๆ
+
+```astro
+---
+import Chart from '../components/Chart.jsx';
+const data = await getMetrics();   // fetched on the server
+---
+<Chart data={data} client:visible />   <!-- fine: data is a plain array/object -->
+<!-- <Chart onPoint={(p) => ...} /> — NOT allowed: functions cannot be serialized -->
+```
+
+ถ้าคุณต้องการ behavior แทนที่จะเป็นข้อมูล ให้เอา logic นั้นไปไว้ *ข้างใน* island หรือส่ง children ที่ render บน server เข้าไปผ่าน **slot** (บทหน้า) มุมมองที่ช่วยให้ไม่พลาด: ไฟล์ `.astro` ส่ง **ข้อมูล** ให้ island ไม่ใช่ **callback**
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Astro ใช้ UI framework ที่คุณมีอยู่แล้วสำหรับ interactivity: เพิ่ม integration (`npx astro add react` ซึ่งตั้งค่า `astro.config.mjs` ให้) แล้ว import component `.jsx`/`.vue`/`.svelte` เข้ามาในไฟล์ `.astro` และ hydrate ด้วย client directive island เป็นอิสระต่อกัน จึง **ใช้ framework หลายตัวในหน้าเดียวได้** กฎเดียวตอนส่ง props จาก server เข้า island: ต้อง **serializable** — เป็น plain data ไม่มี function หรือ class instance — เพราะ props ถูก serialize ลงใน HTML เพื่อ rehydrate
+</Callout>
+
+export const quizIntegrations = [
+  {
+    q: 'จะเพิ่มการรองรับ component React ในโปรเจกต์ Astro อย่างไร?',
+    options: [
+      'ไม่ต้องทำอะไร — React ใช้ได้เลย',
+      'ติดตั้ง integration (เช่น `npx astro add react`) ซึ่งเพิ่ม `@astrojs/react` เข้าไปใน integrations array ใน astro.config.mjs',
+      'เปลี่ยนชื่อไฟล์เป็น .astro',
+      'import react จาก CDN ใน HTML',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใช้ React island กับ Svelte island ในหน้าเดียวกันได้ไหม?',
+    options: [
+      'ไม่ได้ ใช้ได้ framework เดียวต่อโปรเจกต์',
+      'ได้ — island เป็นอิสระต่อกัน จึงใช้ framework ต่างตัวในหน้าเดียวได้ ขอแค่ติดตั้ง integration ทั้งสอง',
+      'ได้เฉพาะถ้าอยู่คนละโฟลเดอร์',
+      'ได้เฉพาะใน development mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมส่ง function (เช่น event handler) เป็น prop ให้ island จากไฟล์ .astro ไม่ได้?',
+    options: [
+      'function ใหญ่เกินไป',
+      'props ของ island ถูก serialize ลงใน HTML เพื่อ rehydrate และ function serialize ข้ามเส้น server/client ไม่ได้',
+      'Astro ห้าม props ทั้งหมด',
+      'ส่งได้ — ไม่มีข้อจำกัด',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'framework component ที่ import เข้ามาในไฟล์ .astro โดยไม่มี client directive จะ:',
+    options: [
+      'throw error',
+      'render เป็น static HTML ที่ไม่มี client-side JavaScript (เช่น ปุ่มที่ render ได้แต่ onClick ไม่ถูกส่ง)',
+      'hydrate ทันทีโดย default',
+      'ถูกตัดออกจาก build',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/framework-integrations" questions={quizIntegrations} />
+
+<ProgressTracker client:visible id="islands/framework-integrations" />

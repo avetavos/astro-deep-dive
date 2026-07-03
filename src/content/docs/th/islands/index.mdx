@@ -1,0 +1,86 @@
+---
+title: 'Islands กับ Client Interactivity'
+description: 'Astro เพิ่ม interactivity โดยไม่ต้องส่ง SPA ทั้งก้อนได้อย่างไร — island คือ framework component ที่เราตั้งใจ hydrate เอง เลือก client directive แต่ละตัวเมื่อไหร่ และ server islands ที่มาใหม่.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## จาก static HTML สู่ interactivity เท่าที่จำเป็น
+
+โมดูล Foundations วางหลักไว้แล้วว่า Astro ส่ง JavaScript **เป็นศูนย์โดย default** ซึ่งดีมากสำหรับ content แต่เว็บจริงก็ยังต้องมี search box, cart, ปุ่ม toggle theme, ปุ่ม like อยู่ดี โมดูลนี้คือการเพิ่ม interactivity เท่านั้น — และไม่มากไปกว่านั้น
+
+หน่วยของ interactivity ใน Astro คือ **island** โดย island คือ framework component (React, Vue, Svelte, Solid, Preact) ที่เรา *ตั้งใจ hydrate* บน client ด้วย **client directive** ส่วนทุกอย่างรอบ ๆ มันยังเป็น static HTML เราไม่ได้เปลี่ยนทั้งหน้าให้กลายเป็น app แต่เลือก component แค่ตัวเดียวให้กลายเป็น interactive
+
+<Mermaid title="หน้า static ที่มี island ถูก hydrate อยู่ไม่กี่ตัว" code={diagram} />
+
+export const diagram = `flowchart TB
+  page["Page: static HTML, no JS"]
+  page --> header["header — static"]
+  page --> search["SearchBox — island (client:load)"]
+  page --> article["article — static"]
+  page --> cart["Cart — island (client:visible)"]
+  page --> footer["footer — static"]`;
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่จะได้เรียนรู้ |
+|--------|-------------------|
+| Client directives | client directive ทั้งห้าตัว (`client:*`) และแต่ละตัว hydrate เมื่อไหร่ |
+| Framework integrations | ใช้ component ของ React/Vue/Svelte/Solid/Preact เป็น island |
+| Sharing state | island แยกตัวจากกัน — จะแชร์ข้อมูลข้าม island ด้วย nanostores และ slot ได้อย่างไร |
+| Server islands | `server:defer` — defer component ที่ช้าหรือ personalize โดยไม่ทำให้หน้าช้า |
+
+## มุมมองหลักที่ต้องถือไว้ตลอดโมดูล
+
+มีสองคำถามที่ตัดสินทุกอย่างในโมดูลนี้:
+
+1. **component นี้ต้อง interactive จริงไหม?** ถ้าไม่ มันก็เป็น `.astro` component ธรรมดาที่ไม่ส่ง JS เลย — ซึ่งเป็นส่วนใหญ่ของหน้า
+2. **ถ้าต้อง แล้ว *เมื่อไหร่* มันถึงต้องกลายเป็น interactive?** ทันทีเลย? ตอน scroll เข้ามาในจอ? ตอนหน้าจอขนาดหนึ่ง? คำว่า "เมื่อไหร่" นี่แหละคือสิ่งที่ client directive บอก — และมันคือความต่างระหว่างหน้าที่เร็วกับหน้าที่ช้า
+
+ถ้าถามสองคำถามนี้ไปเรื่อย ๆ island จะเลิกเป็นกอง directive ที่งง ๆ และกลายเป็น budget แทน: ทุก island คือ JavaScript ที่เราเลือกจะส่งเอง อย่างตั้งใจ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**island** คือ framework component ที่เราตั้งใจ hydrate ด้วย **client directive** ส่วนที่เหลือบนหน้ายังเป็น static HTML ที่ไม่มี JavaScript เลย interactivity ใน Astro เป็น opt-in ต่อ component ไม่ใช่ต่อหน้า — คำถามในการออกแบบจึงเป็น "อันนี้ต้อง interactive ไหม?" และถ้าต้อง "*เมื่อไหร่* มันควร hydrate?" ที่เหลือของโมดูลนี้ตอบเรื่อง "เมื่อไหร่" (client directives), "ด้วยอะไร" (framework integrations), "island คุยกันยังไง" (sharing state) และ "render บน server แต่ defer ไว้" ที่มาใหม่ (server islands)
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'island ใน Astro คืออะไร?',
+    options: [
+      'server แยกที่รัน app ของเรา',
+      'framework component ที่เราตั้งใจ hydrate บน client ด้วย client directive โดยมี static HTML ล้อมรอบ',
+      'container สำหรับจัด layout CSS',
+      'โฟลเดอร์ใน src/pages',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โดย default หน้าที่มี island หนึ่งตัว มี interactive JavaScript เท่าไหร่?',
+    options: [
+      'ทั้งหน้ากลายเป็น SPA',
+      'มีแค่ island ที่ส่งและ hydrate JavaScript ส่วนรอบ ๆ ยังเป็น static HTML',
+      'ทุก component บนหน้า',
+      'ไม่มีเลย — island ไม่ส่ง JavaScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'client directive ควบคุมอะไรเป็นหลัก?',
+    options: [
+      'สี theme ของ component',
+      'ว่า component จะ hydrate บน client หรือไม่ และ *เมื่อไหร่*',
+      'ว่า component อ่าน database ตัวไหน',
+      'CSS scope ของ component',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="islands/index" />
