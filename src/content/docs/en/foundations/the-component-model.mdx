@@ -97,7 +97,7 @@ A `<style>` tag inside a `.astro` component is **scoped to that component by def
 </style>
 ```
 
-You get component-local CSS with plain selectors — no CSS-in-JS, no BiCSS naming ceremony. When you *do* want a rule to apply globally, you opt out with `<style is:global>` (covered in the styles lesson).
+You get component-local CSS with plain selectors — no CSS-in-JS, no BEM naming ceremony. When you *do* want a rule to apply globally, you opt out with `<style is:global>` (covered in the styles lesson).
 
 <Callout title="The one-line takeaway">
 An Astro component is a **server-rendered function of props** — props arrive via `Astro.props` and are typed with a `Props` interface; there's no client state or lifecycle. **Slots** enable composition: markup passed between a component's tags renders at `<slot />` (with named slots for multiple insertion points), which is how layouts wrap pages. And a component's `<style>` is **scoped by default**, giving you component-local CSS with plain selectors.

@@ -64,7 +64,7 @@ export const diagram = `flowchart TB
 
 ## Linking collections with reference()
 
-Content is rarely flat. A blog post has an author; a doc page belongs to a category. Rather than copy the author's details into every post, you keep an `authors` collection and have each post **reference** an author by id. Zod's **`reference()`** (from `astro:content`) expresses that link and validates it:
+Content is rarely flat. A blog post has an author; a doc page belongs to a category. Rather than copy the author's details into every post, you keep an `authors` collection and have each post **reference** an author by id. Astro's **`reference()`** helper (from `astro:content`) expresses that link and validates it:
 
 ```ts
 // src/content.config.ts

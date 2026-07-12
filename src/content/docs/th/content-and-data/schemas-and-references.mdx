@@ -64,7 +64,7 @@ export const diagram = `flowchart TB
 
 ## เชื่อม collection ด้วย reference()
 
-content แทบไม่เคยแบน โพสต์บล็อกหนึ่งอันมี author, หน้า doc อยู่ในหมวดหนึ่ง แทนที่จะ copy ข้อมูล author ไปทุกโพสต์ เราเก็บ collection `authors` ไว้ แล้วให้แต่ละโพสต์ **reference** author ด้วย id ของ Zod นั่นเอง **`reference()`** (จาก `astro:content`) เขียนความเชื่อมโยงนั้นและ validate มันให้:
+content แทบไม่เคยแบน โพสต์บล็อกหนึ่งอันมี author, หน้า doc อยู่ในหมวดหนึ่ง แทนที่จะ copy ข้อมูล author ไปทุกโพสต์ เราเก็บ collection `authors` ไว้ แล้วให้แต่ละโพสต์ **reference** author ด้วย id — helper **`reference()`** ของ Astro (จาก `astro:content`) เขียนความเชื่อมโยงนั้นและ validate ให้:
 
 ```ts
 // src/content.config.ts

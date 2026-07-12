@@ -46,7 +46,7 @@ npx astro add react
 npx astro add mdx sitemap
 ```
 
-integration ทางการที่พบบ่อย (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework island), `mdx` (component ใน Markdown), `sitemap`, `rss` และ adapter ของแต่ละ platform (`cloudflare`, `node`, `vercel`, `netlify`)
+integration ทางการที่พบบ่อย (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework island), `mdx` (component ใน Markdown), `sitemap` และ adapter ของแต่ละ platform (`cloudflare`, `node`, `vercel`, `netlify`) หมายเหตุ: `@astrojs/rss` *ไม่ใช่* integration — มันเป็น helper package ที่ import ใน endpoint เพื่อ generate feed จึงไม่มี `astro add rss` และไม่ต้องใส่ใน array `integrations`
 
 ## Astro สร้างบน Vite
 
