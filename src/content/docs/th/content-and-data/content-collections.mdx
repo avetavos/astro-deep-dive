@@ -34,7 +34,7 @@ const blog = defineCollection({
 export const collections = { blog };
 ```
 
-กฎสำคัญของ Astro 6 คือ **ทุก collection ต้องประกาศ `loader`** พฤติกรรมเก่าที่แค่โยนไฟล์ลง `src/content/blog/` แล้วมันเก็บให้อัตโนมัติ หายไปแล้ว การเขียนให้ชัดเจนแปลว่า API เดียวกันโหลดไฟล์ในเครื่องได้วันนี้ และโหลด API ปลายทางได้พรุ่งนี้ โดยวิธี query ไม่ต้องเปลี่ยนเลย
+กฎสำคัญของ Astro 6 คือ **ทุก collection ต้องประกาศ `loader`** พฤติกรรมเก่าที่แค่โยนไฟล์ลง `src/content/blog/` แล้ว Astro เก็บให้อัตโนมัติ หายไปแล้ว การเขียนให้ชัดเจนแปลว่า API เดียวกันโหลดไฟล์ในเครื่องได้วันนี้ และโหลด API ปลายทางได้พรุ่งนี้ โดยวิธี query ไม่ต้องเปลี่ยนเลย
 
 ## loader: content มาจากไหน
 
@@ -43,7 +43,7 @@ Astro มี loader มาให้สองตัวจาก `astro/loaders`:
 - **`glob()`** — โหลดหลายไฟล์ที่ตรง pattern แต่ละไฟล์กลายเป็นหนึ่ง entry ใช้กับโฟลเดอร์ที่มีโพสต์บล็อกหรือหน้า docs: `glob({ pattern: '**/*.md', base: './src/data/blog' })`
 - **`file()`** — โหลดหลาย entry จากไฟล์ข้อมูล *ไฟล์เดียว* (array JSON หรือ YAML) ใช้กับข้อมูลที่มีโครงสร้างอย่าง author หรือ product: `file('./src/data/authors.json')`
 
-pattern `**/[^_]*.{md,mdx}` น่าอ่านให้เข้าใจ มันตรงกับไฟล์ `.md` และ `.mdx` ในทุก subfolder แต่ `[^_]` ตัดไฟล์ที่ขึ้นต้นด้วย underscore ออก ซึ่งเป็น convention ที่สะดวกสำหรับ draft
+pattern `**/[^_]*.{md,mdx}` น่าอ่านให้เข้าใจ pattern นี้ตรงกับไฟล์ `.md` และ `.mdx` ในทุก subfolder แต่ `[^_]` ตัดไฟล์ที่ขึ้นต้นด้วย underscore ออก ที่เป็น convention ที่สะดวกสำหรับ draft
 
 นอกจากนี้ loader เป็น interface ที่มีเอกสารกำกับ ecosystem จึงมี loader สำหรับ CMS และ API ต่าง ๆ และคุณเขียนเองเพื่อดึงจากแหล่งไหนก็ได้
 
@@ -85,7 +85,7 @@ const featured = await getEntry('blog', 'hello-world');
 
 ## render body ของ entry
 
-การ query ให้ frontmatter ของ entry แต่ *body* ที่เป็น Markdown ยังไม่ใช่ HTML ถ้าจะ render มันต้องเรียก **`render`** (จาก `astro:content`) บน entry มันจะคืน component `<Content />` ที่เราเอาไปวางใน template ได้:
+การ query ให้ frontmatter ของ entry แต่ *body* ที่เป็น Markdown ยังไม่ใช่ HTML ถ้าจะ render body ต้องเรียก **`render`** (จาก `astro:content`) บน entry จะคืน component `<Content />` ที่เราเอาไปวางใน template ได้:
 
 ```astro
 ---
@@ -106,7 +106,7 @@ const { Content } = await render(post);
 `render` คอมไพล์ Markdown/MDX ของ entry ให้เป็น component ดังนั้น `<Content />` จึงพ่น HTML สำเร็จรูปออกมา ทั้งหัวข้อ, code block, และ component ที่ใช้ใน MDX render ครบ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-collection คือ `defineCollection({ loader, schema })` ใน **`src/content.config.ts`** โดย `loader` (`glob` สำหรับหลายไฟล์, `file` สำหรับไฟล์ข้อมูลไฟล์เดียว) บอกว่า content อยู่ที่ไหน ส่วน `schema` validate มัน query ด้วย `getCollection` (หลายอัน) และ `getEntry` (อันเดียว) แต่ละ entry มี `id` และ `data` ที่มี type ถ้าจะพ่น body ให้เรียก `render(entry)` แล้ววาง `<Content />` ที่ได้ลง template ใน Astro 6 ทุก collection ต้องมี loader
+collection คือ `defineCollection({ loader, schema })` ใน **`src/content.config.ts`** โดย `loader` (`glob` สำหรับหลายไฟล์, `file` สำหรับไฟล์ข้อมูลไฟล์เดียว) บอกว่า content อยู่ที่ไหน ส่วน `schema` validate ข้อมูลนั้น query ด้วย `getCollection` (หลายอัน) และ `getEntry` (อันเดียว) แต่ละ entry มี `id` และ `data` ที่มี type ถ้าจะพ่น body ให้เรียก `render(entry)` แล้ววาง `<Content />` ที่ได้ลง template ใน Astro 6 ทุก collection ต้องมี loader
 </Callout>
 
 export const quizCollections = [
@@ -136,7 +136,7 @@ export const quizCollections = [
       'print entry.body ตรง ๆ',
       'เรียก render(entry) แล้วใช้ component <Content /> ที่คืนมา',
       'ใช้ dangerouslySetInnerHTML',
-      'มัน render ให้เองอัตโนมัติ',
+      'render ให้เองอัตโนมัติ',
     ],
     answer: 1,
   },

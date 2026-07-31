@@ -87,7 +87,7 @@ Fragment ยังเป็นที่วาง directive `set:*` เวลา�
 
 ## Render HTML ดิบ: `set:html` กับ `set:text`
 
-โดย default expression ที่ให้ค่าออกมาเป็น string จะถูก **escape** — Astro render มันเป็น text ดังนั้น `<b>hi</b>` จะโชว์ tag ออกมาตรง ๆ นั่นปลอดภัย เมื่อไหร่ที่คุณมี string HTML ที่เชื่อถือได้และอยากให้ render เป็น markup จริง ๆ (เช่น HTML จาก CMS ที่คุณคุมเอง) ให้ใช้ `set:html`
+โดย default expression ที่ให้ค่าออกมาเป็น string จะถูก **escape** — Astro render เป็น text ดังนั้น `<b>hi</b>` จะโชว์ tag ออกมาตรง ๆ นั่นปลอดภัย เมื่อไหร่ที่คุณมี string HTML ที่เชื่อถือได้และอยากให้ render เป็น markup จริง ๆ (เช่น HTML จาก CMS ที่คุณคุมเอง) ให้ใช้ `set:html`
 
 ```astro
 ---
@@ -103,7 +103,7 @@ const plain = "<not a tag>";
 
 ## Spread attribute
 
-เมื่อคุณมี object ของ attribute ให้ spread มันลงบน element ด้วย `{...obj}` — สะดวกเวลาส่ง props ต่อ
+เมื่อคุณมี object ของ attribute ให้ spread ลงบน element ด้วย `{...obj}` — สะดวกเวลาส่ง props ต่อ
 
 ```astro
 ---
@@ -114,7 +114,7 @@ const attrs = { id: "cta", class: "btn", "data-track": "signup" };
 
 ## Dynamic tag name
 
-คุณคำนวณได้ว่าจะ render *element ตัวไหน* กำหนดตัวแปรที่ขึ้นต้นด้วยตัวใหญ่ให้เป็นชื่อ tag แล้วใช้มัน
+คุณคำนวณได้ว่าจะ render *element ตัวไหน* กำหนดตัวแปรที่ขึ้นต้นด้วยตัวใหญ่ให้เป็นชื่อ tag แล้วเรียกใช้ตัวแปรนั้นได้เลย
 
 ```astro
 ---
@@ -157,10 +157,10 @@ export const quizSyntax = [
   {
     q: '`set:html` ทำอะไร และเสี่ยงอะไร?',
     options: [
-      'มัน escape HTML ไม่มีความเสี่ยง',
-      'มัน render string เป็น HTML ดิบ ข้าม escaping — เสี่ยง XSS ถ้า content ไม่น่าเชื่อถือ',
-      'มันตั้งค่า id ของ element',
-      'มัน import ไฟล์ HTML',
+      'escape HTML ไม่มีความเสี่ยง',
+      'render string เป็น HTML ดิบ ข้าม escaping — เสี่ยง XSS ถ้า content ไม่น่าเชื่อถือ',
+      'ตั้งค่า id ของ element',
+      'import ไฟล์ HTML',
     ],
     answer: 1,
   },

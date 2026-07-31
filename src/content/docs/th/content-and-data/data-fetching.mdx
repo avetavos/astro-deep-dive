@@ -26,7 +26,7 @@ const products = await res.json();
 </ul>
 ```
 
-pattern เดียวกันใช้ได้กับ REST API, database client, หรือ SDK ของ headless CMS เพราะรันบน server ความลับ (API key) จึงอยู่ฝั่ง server ไม่ถูกส่งไปเบราว์เซอร์
+pattern เดียวกันใช้ได้กับ REST API, database client, หรือ SDK ของ headless CMS เพราะรันบน server ความลับ (API key) จึงอยู่ฝั่ง server ไม่ถูกส่งไป browser
 
 ## build-time vs request-time: ความต่างที่สำคัญมาก
 
@@ -59,14 +59,14 @@ export const diagram = `flowchart TB
 
 ## Headless CMS
 
-headless CMS (Contentful, Sanity, Storyblok, WordPress API) ก็เป็นแค่แหล่งข้อมูลอีกที่ fetch มันใน component script บ่อยครั้งผ่าน SDK ของ CMS แล้ว map response ลง template สำหรับ content ที่เราเป็นเจ้าของและแก้เป็นไฟล์เอง ให้ใช้ **content collection** ที่มี loader ส่วน content ที่จัดการในระบบภายนอก ให้ fetch มัน (หรือใช้ community loader ที่ห่อ CMS ไว้หลัง collections API) ไม่ว่าทางไหนโค้ดหน้าเพจก็หน้าตาเหมือนกัน คือดึงข้อมูลบน server แล้ว render HTML
+headless CMS (Contentful, Sanity, Storyblok, WordPress API) ก็เป็นแค่แหล่งข้อมูลอีกแหล่ง fetch ใน component script ได้เลย บ่อยครั้งผ่าน SDK ของ CMS แล้ว map response ลง template สำหรับ content ที่เราเป็นเจ้าของและแก้เป็นไฟล์เอง ให้ใช้ **content collection** ที่มี loader ส่วน content ที่จัดการในระบบภายนอก ให้ fetch เอาเอง (หรือใช้ community loader ที่ห่อ CMS ไว้หลัง collections API) ไม่ว่าทางไหนโค้ดหน้าเพจก็หน้าตาเหมือนกัน คือดึงข้อมูลบน server แล้ว render HTML
 
 ## แล้ว Astro.glob() ล่ะ?
 
-โค้ด Astro รุ่นเก่าใช้ **`Astro.glob()`** ดึงไฟล์ในเครื่องหลายไฟล์ (Markdown ทั้งหมดในโฟลเดอร์) พร้อมกัน มันยังมีอยู่แต่ **ถูกแทนที่ด้วย content collection** ซึ่งให้พลัง "โหลดหลายไฟล์" แบบเดียวกัน *บวก* schema validation และ type ที่ generate ให้ สำหรับ content ในเครื่อง ให้ประกาศ collection ด้วย glob loader แทนที่จะไปคว้า `Astro.glob()` ส่วน `fetch` ดิบ ๆ เก็บไว้ใช้กับข้อมูลภายนอกจริง ๆ
+โค้ด Astro รุ่นเก่าใช้ **`Astro.glob()`** ดึงไฟล์ในเครื่องหลายไฟล์ (Markdown ทั้งหมดในโฟลเดอร์) พร้อมกัน ตอนนี้ `Astro.glob()` ยังใช้ได้อยู่แต่ **ถูกแทนที่ด้วย content collection** ซึ่งให้พลัง "โหลดหลายไฟล์" แบบเดียวกัน *บวก* schema validation และ type ที่ generate ให้ สำหรับ content ในเครื่อง ให้ประกาศ collection ด้วย glob loader แทนที่จะไปคว้า `Astro.glob()` ส่วน `fetch` ดิบ ๆ เก็บไว้ใช้กับข้อมูลภายนอกจริง ๆ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-fetch ข้อมูลด้วย **top-level `await fetch()`** ใน component script มันรันบน server ความลับจึงปลอดภัยและไม่มี round-trip ฝั่ง client กุญแจอยู่ที่ *ตอนไหน* ที่มันรัน บนหน้า **static** fetch เกิด **ครั้งเดียวตอน build** แล้วอบเข้าไป ส่วนหน้า **on-demand** (`prerender = false`) รัน **ต่อ request** เพื่อข้อมูลสดต่อผู้ชม default เป็น static ไว้จนกว่าจะจำเป็นต้องสด และสำหรับโหลดไฟล์ในเครื่องหลายไฟล์ ให้ใช้ content collection แทน `Astro.glob()` รุ่นเก่า
+fetch ข้อมูลด้วย **top-level `await fetch()`** ใน component script โค้ดส่วนนี้รันบน server ความลับจึงปลอดภัยและไม่มี round-trip ฝั่ง client กุญแจอยู่ที่ *ตอนไหน* ที่รัน บนหน้า **static** fetch เกิด **ครั้งเดียวตอน build** แล้วอบเข้าไป ส่วนหน้า **on-demand** (`prerender = false`) รัน **ต่อ request** เพื่อข้อมูลสดต่อผู้ชม default เป็น static ไว้จนกว่าจะจำเป็นต้องสด และสำหรับโหลดไฟล์ในเครื่องหลายไฟล์ ให้ใช้ content collection แทน `Astro.glob()` รุ่นเก่า
 </Callout>
 
 export const quizFetching = [
@@ -74,7 +74,7 @@ export const quizFetching = [
     q: 'fetch ข้อมูลภายนอกใน .astro component ยังไง?',
     options: [
       'ด้วย useEffect ฝั่ง client',
-      'ด้วย top-level await fetch() ใน component script มันรันบน server',
+      'ด้วย top-level await fetch() ใน component script ซึ่งรันบน server',
       'ผ่าน plugin เท่านั้น',
       'fetch ใน Astro ไม่ได้',
     ],
@@ -85,7 +85,7 @@ export const quizFetching = [
     options: [
       'ทุก request',
       'ครั้งเดียวตอน build response ถูกอบเข้าไฟล์ HTML',
-      'ในเบราว์เซอร์',
+      'ใน browser',
       'ไม่รันเลย',
     ],
     answer: 1,

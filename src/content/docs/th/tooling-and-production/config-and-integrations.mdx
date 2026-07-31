@@ -46,7 +46,7 @@ npx astro add react
 npx astro add mdx sitemap
 ```
 
-integration ทางการที่พบบ่อย (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework island), `mdx` (component ใน Markdown), `sitemap` และ adapter ของแต่ละ platform (`cloudflare`, `node`, `vercel`, `netlify`) หมายเหตุ: `@astrojs/rss` *ไม่ใช่* integration — มันเป็น helper package ที่ import ใน endpoint เพื่อ generate feed จึงไม่มี `astro add rss` และไม่ต้องใส่ใน array `integrations`
+integration ทางการที่พบบ่อย (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework island), `mdx` (component ใน Markdown), `sitemap` และ adapter ของแต่ละ platform (`cloudflare`, `node`, `vercel`, `netlify`) หมายเหตุ: `@astrojs/rss` *ไม่ใช่* integration — เป็น helper package ที่ import ใน endpoint เพื่อ generate feed จึงไม่มี `astro add rss` และไม่ต้องใส่ใน array `integrations`
 
 ## Astro สร้างบน Vite
 
@@ -100,12 +100,12 @@ export const quizConfig = [
       'แก้ config สามไฟล์ด้วยมือ',
       'รัน `npx astro add react` ซึ่งติดตั้งและแก้ config ให้',
       'copy ไปไว้ใน public/',
-      'import มันในทุกหน้า',
+      'import React ในทุกหน้า',
     ],
     answer: 1,
   },
   {
-    q: 'build tool ตัวไหนอยู่ใต้ Astro และเข้าถึงมันตรง ๆ ยังไง?',
+    q: 'build tool ตัวไหนอยู่ใต้ Astro และเข้าถึงตรง ๆ ยังไง?',
     options: [
       'Webpack ผ่าน webpack.config.js',
       'Vite — เข้าถึงผ่าน key `vite` ใน astro.config.mjs',

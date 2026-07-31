@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Middleware: ประตูหน้าทุก request
 
-Middleware คือ function ตัวเดียวที่รัน **ก่อนทุก request** ถูกจัดการ มันอยู่ใน `src/middleware.ts` และ export `onRequest(context, next)` — คุณทำงาน แล้วเรียก `next()` เพื่อไปต่อยัง page หรือ endpoint (หรือ short-circuit ด้วย `Response` ของตัวเอง)
+Middleware คือ function ตัวเดียวที่รัน **ก่อนทุก request** ถูกจัดการ ตัว middleware อยู่ใน `src/middleware.ts` และ export `onRequest(context, next)` — คุณทำงาน แล้วเรียก `next()` เพื่อไปต่อยัง page หรือ endpoint (หรือ short-circuit ด้วย `Response` ของตัวเอง)
 
 ```ts
 // src/middleware.ts
@@ -49,7 +49,7 @@ export const mwDiagram = `sequenceDiagram
 
 ## context.locals: data ที่ share ต่อ request
 
-หัวใจของ middleware คือ **`context.locals`** — object ที่อยู่ตลอดหนึ่ง request อะไรก็ตามที่คุณ set ไว้ (user ปัจจุบัน, request id, feature flag) อ่านได้ในทุก page, endpoint และ action ของ request นั้นผ่าน `Astro.locals` / `context.locals` ของ action มันคือวิธีที่ middleware ส่ง data ที่คำนวณแล้วให้ส่วนที่เหลือของ request โดยไม่ใช้ global state
+หัวใจของ middleware คือ **`context.locals`** — object ที่อยู่ตลอดหนึ่ง request อะไรก็ตามที่คุณ set ไว้ (user ปัจจุบัน, request id, feature flag) อ่านได้ในทุก page, endpoint และ action ของ request นั้นผ่าน `Astro.locals` / `context.locals` ของ action นี่คือวิธีที่ middleware ส่ง data ที่คำนวณแล้วให้ส่วนที่เหลือของ request โดยไม่ใช้ global state
 
 ```astro
 ---

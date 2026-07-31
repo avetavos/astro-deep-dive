@@ -34,7 +34,7 @@ import { ClientRouter } from 'astro:transitions';
 พอมีตัวนี้แล้ว การ navigate ระหว่างหน้าในเว็บของเราจะถูก intercept และจัดการฝั่ง client: Astro fetch หน้าถัดไป, swap content เข้ามา และ animate การเปลี่ยน — ไม่มี full reload browser ที่ไม่รองรับ API เบื้องหลังจะ fallback ไปเป็น navigation ปกติ ทุกอย่างจึงไม่พัง
 
 <Callout title="ตอนนี้ชื่อ ClientRouter แล้ว ไม่ใช่ ViewTransitions">
-ใน Astro รุ่นเก่า component นี้ชื่อ `<ViewTransitions />` Astro ปัจจุบันเปลี่ยนชื่อเป็น **`<ClientRouter />`** (import จาก `astro:transitions`) เพื่อสื่อความหมายให้ชัดขึ้นว่ามันทำอะไร — เปิด client-side routing ถ้าเจอ `<ViewTransitions />` ใน tutorial เก่า ให้แทนที่ด้วย `<ClientRouter />` ในใจ
+ใน Astro รุ่นเก่า component นี้ชื่อ `<ViewTransitions />` Astro ปัจจุบันเปลี่ยนชื่อเป็น **`<ClientRouter />`** (import จาก `astro:transitions`) เพื่อสื่อความหมายให้ชัดขึ้นว่าทำอะไร — เปิด client-side routing ถ้าเจอ `<ViewTransitions />` ใน tutorial เก่า ให้แทนที่ด้วย `<ClientRouter />` ในใจ
 </Callout>
 
 ## navigation ทำงานยังไง
@@ -78,7 +78,7 @@ document.addEventListener('astro:page-load', () => {
 });
 ```
 
-นี่คือ gotcha ที่พบบ่อยที่สุดของ view transitions: init script ที่ทำงานตอน load ครั้งแรกแต่ "หยุดทำงาน" หลัง navigate เพราะมันผูกกับ `DOMContentLoaded` ให้ย้ายไปที่ `astro:page-load`
+นี่คือ gotcha ที่พบบ่อยที่สุดของ view transitions: init script ที่ทำงานตอน load ครั้งแรกแต่ "หยุดทำงาน" หลัง navigate เพราะผูกกับ `DOMContentLoaded` ให้ย้ายไปที่ `astro:page-load`
 
 <Callout title="สรุปบรรทัดเดียว">
 เพิ่ม **`<ClientRouter />`** (จาก `astro:transitions`) เข้าไปใน `<head>` — ควรวางใน layout ที่ใช้ร่วมกัน — เพื่อเปลี่ยน MPA ธรรมดาให้มี navigation ที่ลื่นและมี animation คล้าย SPA พร้อม full-reload fallback สำหรับ browser ที่ไม่รองรับ คุม animation ด้วย `transition:name` (shared element), `transition:animate` และ `transition:persist` (เก็บ state ข้าม nav) และเพราะไม่มี full reload ให้ย้าย initialization จาก `DOMContentLoaded` ไปที่ event **`astro:page-load`**

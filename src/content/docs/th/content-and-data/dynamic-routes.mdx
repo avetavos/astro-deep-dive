@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## route ที่มีส่วนแปรผัน
 
-คุณมี collection ของโพสต์บล็อก 50 อัน และอยากได้หน้าเพจต่ออัน แต่คงไม่นั่งเขียนไฟล์ 50 ไฟล์ **dynamic route** คือไฟล์เดียวที่ชื่อมีส่วนแปรผันอยู่ในวงเล็บเหลี่ยม และมันแทน URL ได้หลายอัน:
+คุณมี collection ของโพสต์บล็อก 50 อัน และอยากได้หน้าเพจต่ออัน แต่คงไม่นั่งเขียนไฟล์ 50 ไฟล์ **dynamic route** คือไฟล์เดียวที่ชื่อมีส่วนแปรผันอยู่ในวงเล็บเหลี่ยม และแทน URL ได้หลายอัน:
 
 - `src/pages/blog/[slug].astro` → ตรงกับ `/blog/anything`
 - `src/pages/[category]/[id].astro` → สองตัวแปร
@@ -86,7 +86,7 @@ const { page } = Astro.props;   // paginate ยัด prop `page` ให้
 
 ## static param vs on-demand param
 
-dynamic route รู้ param ของตัวเองได้สองทาง และมันสะท้อน rendering mode สองแบบ:
+dynamic route รู้ param ของตัวเองได้สองทาง และสะท้อน rendering mode สองแบบ:
 
 - **Static:** คุณระบุทุก param ล่วงหน้าด้วย `getStaticPaths()` แล้ว Astro build ไฟล์ต่อ path เร็ว, cache ได้ แต่ชุดหน้าถูกล็อกตอน build
 - **On-demand:** ตั้ง `export const prerender = false` แล้ว *เอา* `getStaticPaths()` ออก แทนที่ด้วยการอ่าน `Astro.params` สด ๆ แล้ว query ทันที วิธีนี้รองรับ URL ที่รู้ตอน build ไม่ได้ (user id, คำค้น):
@@ -110,7 +110,7 @@ const { Content } = await render(post);
 หลักคิด: ชุดหน้าที่ **รู้แน่และจำกัด** (โพสต์บล็อกทั้งหมด) → `getStaticPaths()` แล้วอยู่แบบ static ส่วนชุดที่ **เปิดกว้าง** (profile ของใครก็ได้, ค้นหาอะไรก็ได้) → `prerender = false` แล้วอ่าน `Astro.params` ต่อ request
 
 <Callout title="สรุปหนึ่งบรรทัด">
-**dynamic route** คือไฟล์ที่มีส่วนในวงเล็บ (`[slug].astro` หรือ `[...path]` สำหรับ rest param) ใน static build มัน export **`getStaticPaths()`** ที่คืน `{ params, props }` ต่อหน้า หนึ่งไฟล์ HTML ต่อหนึ่ง entry ของ collection และ `paginate()` หั่น list ยาวเป็นหน้าแบบมีเลข สำหรับ URL ที่ระบุล่วงหน้าไม่ได้ ให้ตั้ง **`prerender = false`** ข้าม `getStaticPaths` แล้วอ่าน **`Astro.params`** สดต่อ request
+**dynamic route** คือไฟล์ที่มีส่วนในวงเล็บ (`[slug].astro` หรือ `[...path]` สำหรับ rest param) ใน static build ไฟล์นี้ต้อง export **`getStaticPaths()`** ที่คืน `{ params, props }` ต่อหน้า หนึ่งไฟล์ HTML ต่อหนึ่ง entry ของ collection และ `paginate()` หั่น list ยาวเป็นหน้าแบบมีเลข สำหรับ URL ที่ระบุล่วงหน้าไม่ได้ ให้ตั้ง **`prerender = false`** ข้าม `getStaticPaths` แล้วอ่าน **`Astro.params`** สดต่อ request
 </Callout>
 
 export const quizRoutes = [

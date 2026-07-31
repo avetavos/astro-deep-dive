@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Performance ที่เริ่มมาพร้อม ไม่ใช่มาแปะทีหลัง
 
-framework ส่วนใหญ่ทำให้เราต้องไล่ทวง performance คืน: build app เสร็จ มันช้า แล้วค่อย optimize Astro กลับด้าน — เรา *เริ่ม* ที่ baseline ที่เร็ว (static HTML, zero JavaScript) และงานของเราคือไม่ทำมันหาย ทุกกิโลไบต์ของ client JavaScript คืออันที่เราเพิ่มเข้าไปเอง คำถามจึงเป็น "อันนี้จำเป็นต้องส่งไปจริงไหม" เสมอ
+framework ส่วนใหญ่ทำให้เราต้องไล่ทวง performance คืน: build app เสร็จ ปรากฏว่าช้า แล้วค่อย optimize Astro กลับด้าน — เรา *เริ่ม* ที่ baseline ที่เร็ว (static HTML, zero JavaScript) และงานของเราคือรักษา baseline นั้นไว้ ทุกกิโลไบต์ของ client JavaScript คืออันที่เราเพิ่มเข้าไปเอง คำถามจึงเป็น "อันนี้จำเป็นต้องส่งไปจริงไหม" เสมอ
 
 ## เลือก client directive ที่ถูกที่สุด
 
@@ -36,7 +36,7 @@ export const dirDiagram = `flowchart LR
 
 ## Prefetch สำหรับ navigation ที่ทันที
 
-load แรกเร็วเป็นแค่ครึ่งเรื่อง *navigation* ที่เร็วคืออีกครึ่ง Astro **prefetch** HTML ของหน้าได้ก่อนที่ user จะคลิก หน้าถัดไปจึงแทบจะทันที เปิดใน config แล้วมันจะ prefetch link ตอน hover/เข้าจอโดย default หรือ opt in ต่อ link แบบชัดเจน:
+load แรกเร็วเป็นแค่ครึ่งเรื่อง *navigation* ที่เร็วคืออีกครึ่ง Astro **prefetch** HTML ของหน้าได้ก่อนที่ user จะคลิก หน้าถัดไปจึงแทบจะทันที เปิดใน config แล้ว Astro จะ prefetch link ตอน hover หรือตอนเข้าจอให้โดย default หรือ opt in ต่อ link แบบชัดเจน:
 
 ```astro
 <a href="/pricing" data-astro-prefetch>Pricing</a>
@@ -51,10 +51,10 @@ load แรกเร็วเป็นแค่ครึ่งเรื่อง
 - **island ที่เราส่งไป** build เว็บแล้วเช็คว่า component ไหนกลายเป็น island จริง (และด้วย directive อะไร) component ที่คิดว่า static แต่ hydrate อยู่คือ JavaScript ที่เสียเปล่า ส่วน `client:load` ที่ควรเป็น `client:visible` คือ cost ที่วางผิดที่
 - **Lighthouse / Core Web Vitals** รัน Lighthouse (ใน Chrome DevTools) กับเว็บที่ build แล้ว จับตา Largest Contentful Paint (มักเป็น hero image — ดูบทเรียน asset), Cumulative Layout Shift (จองพื้นที่ image/font) และ Total Blocking Time (JavaScript ของ island)
 
-baseline ของ Astro มักได้คะแนนเกือบเต็มตั้งแต่แรก เมื่อคะแนนตก มันมักเป็นหนึ่งใน: image ที่ไม่ optimize, font ที่ทำให้ shift หรือ island ที่ hydrate เร็วกว่าที่จำเป็น
+baseline ของ Astro มักได้คะแนนเกือบเต็มตั้งแต่แรก เมื่อคะแนนตก สาเหตุมักเป็นหนึ่งใน: image ที่ไม่ optimize, font ที่ทำให้ shift หรือ island ที่ hydrate เร็วกว่าที่จำเป็น
 
 <Callout title="สรุปบรรทัดเดียว">
-Astro ให้ baseline ที่เร็ว (static HTML, zero JS) งานด้าน performance คือรักษามันไว้ เลือก **client directive ที่ถูกที่สุด** — `client:visible`/`client:idle` แทน `client:load` — เพื่อให้ JavaScript ของ island อยู่นอก critical path ใช้ **prefetch** (กับ `<ClientRouter />`) เพื่อให้ navigation รู้สึกทันที และ **วัดผล** — เช็คว่า island ไหนถูกส่งจริงและรัน Lighthouse — เพราะการถอยหลังมักเป็น image ที่ไม่ optimize, font ที่ shift หรือ `client:load` ที่กระตือรือร้นเกินไป
+Astro ให้ baseline ที่เร็ว (static HTML, zero JS) งานด้าน performance คือรักษา baseline นั้นไว้ เลือก **client directive ที่ถูกที่สุด** — `client:visible`/`client:idle` แทน `client:load` — เพื่อให้ JavaScript ของ island อยู่นอก critical path ใช้ **prefetch** (กับ `<ClientRouter />`) เพื่อให้ navigation รู้สึกทันที และ **วัดผล** — เช็คว่า island ไหนถูกส่งจริงและรัน Lighthouse — เพราะการถอยหลังมักเป็น image ที่ไม่ optimize, font ที่ shift หรือ `client:load` ที่กระตือรือร้นเกินไป
 </Callout>
 
 export const quizPerf = [
@@ -62,7 +62,7 @@ export const quizPerf = [
     q: 'ปรัชญาด้าน performance ของ Astro คืออะไร?',
     options: [
       'build ก่อน optimize ทีหลัง',
-      'เริ่มที่ baseline ที่เร็ว (static HTML, zero JS) และเลี่ยงการทำมันหาย — ทุกกิโลไบต์ของ client JS ถูกเพิ่มอย่างตั้งใจ',
+      'เริ่มที่ baseline ที่เร็ว (static HTML, zero JS) และรักษา baseline นั้นไว้ไม่ให้หาย — ทุกกิโลไบต์ของ client JS ถูกเพิ่มอย่างตั้งใจ',
       'ส่ง JavaScript ให้มากที่สุดเพื่อ feature',
       'performance ไม่สำคัญสำหรับเว็บ content',
     ],
@@ -72,7 +72,7 @@ export const quizPerf = [
     q: 'client directive ไหนเป็น default ที่ดีที่สุดสำหรับ island ที่อยู่ below-the-fold?',
     options: [
       '`client:load`',
-      '`client:visible` — มันส่ง/รัน JavaScript เฉพาะตอนที่ island scroll เข้ามาในจอ',
+      '`client:visible` — ส่งและรัน JavaScript เฉพาะตอนที่ island scroll เข้ามาในจอ',
       '`client:only`',
       'ไม่ใส่ directive เลย',
     ],

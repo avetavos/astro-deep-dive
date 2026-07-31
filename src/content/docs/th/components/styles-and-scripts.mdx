@@ -1,6 +1,6 @@
 ---
 title: 'Styles & Scripts'
-description: 'scoped vs global CSS, ส่งค่าด้วย define:vars และ script tag ธรรมดาทำงานยังไงจริง ๆ — มันรันบน browser แต่ไม่ใช่ island'
+description: 'scoped vs global CSS, ส่งค่าด้วย define:vars และ script tag ธรรมดาทำงานยังไงจริง ๆ — script รันบน browser แต่ไม่ใช่ island'
 sidebar:
   order: 3
 ---
@@ -67,7 +67,7 @@ Astro จะออก inline style ที่พก `--accent` กับ `--gap` 
 
 ## `<script>` tag: ถูก process และ bundle โดย default
 
-`<script>` ในไฟล์ `.astro` **รันบน browser** — แต่ Astro มองมันเป็น module: มันถูก process, bundle, compile TypeScript และ resolve import เหมือน JS อื่น ๆ ใน build ของคุณ
+`<script>` ในไฟล์ `.astro` **รันบน browser** — แต่ Astro มองเป็น module: script จะถูก process, bundle, compile TypeScript และ resolve import เหมือน JS อื่น ๆ ใน build ของคุณ
 
 ```astro
 <button id="menu">Menu</button>
@@ -94,7 +94,7 @@ inline script ข้าม bundling ดังนั้น `import` ในนั�
 
 ## จุดสำคัญ: script ไม่ใช่ island
 
-จุดนี้ทำมือใหม่งงบ่อย `<script>` รันบน browser แต่มัน **ไม่** ทำให้ component รอบ ๆ กลายเป็น island ไม่มีการ hydrate component ไม่มี framework ไม่มี re-render — มันแค่ script ธรรมดาที่แก้ DOM ที่ Astro ผลิตออกมาแล้ว
+จุดนี้ทำมือใหม่งงบ่อย `<script>` รันบน browser แต่ **ไม่** ทำให้ component รอบ ๆ กลายเป็น island ไม่มีการ hydrate component ไม่มี framework ไม่มี re-render — เป็นแค่ script ธรรมดาที่แก้ DOM ที่ Astro ผลิตออกมาแล้ว
 
 ```astro
 <!-- This runs, but nothing is "hydrated". It's a script, not an island. -->
@@ -119,7 +119,7 @@ export const diagram = `flowchart TB
   hyd --> state["has its own state and re-renders"]`;
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`<style>` ของ component เป็น **scoped โดย default**; opt out ด้วย `<style is:global>` หรือ selector `:global()` และส่ง props เข้า CSS ด้วย `define:vars` ส่วน `<script>` **รันบน browser** และถูก bundle/process โดย default (`is:inline` opt out) — แต่มัน **ไม่ใช่ island**: มันแก้ DOM ที่มีอยู่โดยไม่มีการ hydrate component ถ้าอยากได้ UI component ที่มี state และ hydrate คุณต้องใช้ island (โมดูลถัดไป)
+`<style>` ของ component เป็น **scoped โดย default**; opt out ด้วย `<style is:global>` หรือ selector `:global()` และส่ง props เข้า CSS ด้วย `define:vars` ส่วน `<script>` **รันบน browser** และถูก bundle/process โดย default (`is:inline` opt out) — แต่ **ไม่ใช่ island**: script แก้ DOM ที่มีอยู่โดยไม่มีการ hydrate component ถ้าอยากได้ UI component ที่มี state และ hydrate คุณต้องใช้ island (โมดูลถัดไป)
 </Callout>
 
 export const quizStyles = [
@@ -156,10 +156,10 @@ export const quizStyles = [
   {
     q: 'การเติม `is:inline` ให้ script ทำอะไร?',
     options: [
-      'รันมันบน server',
+      'รัน script บน server',
       'ออกมาตามที่เขียน — ข้าม bundling/processing ดังนั้น import ในนั้นไม่ถูก resolve',
-      'scope มันไว้กับ component',
-      'ทำให้มันเป็น island',
+      'scope script ไว้กับ component',
+      'ทำให้ script กลายเป็น island',
     ],
     answer: 1,
   },

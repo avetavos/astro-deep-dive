@@ -14,7 +14,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 content คือข้อมูลที่อยู่ *นอก* โค้ดของเรา ทั้งไฟล์ Markdown ที่แก้ด้วยมือ, JSON จาก CMS ไม่มีอะไรกันการพิมพ์ผิดได้เลย ทั้ง `title` ที่หาย, `pubDate` ที่เขียนเป็น `"soon"`, หรือ tag ที่ควรเป็น array แต่กลายเป็น string ถ้าไม่มี validation ความผิดพลาดพวกนี้จะโผล่มาเป็น runtime error งง ๆ ลึก ๆ ใน template หรือแย่กว่านั้นคือหน้าเพจพังเงียบ ๆ
 
-**schema** ย้ายการตรวจนั้นมาไว้ที่ **content boundary** เมื่อ Astro โหลด collection มันจะ validate ทุก entry กับ schema *ก่อน* ที่หน้าเพจจะเห็น entry ที่ผิดจะทำให้ build ล้มพร้อมข้อความชัดเจน ("`pubDate` ต้องเป็น date") ไม่ใช่ crash แบบปริศนา และ content ที่ validate แล้วยังเป็น content ที่มี **type** ด้วย ซึ่งเป็นผลตอบแทนอย่างที่สอง
+**schema** ย้ายการตรวจนั้นมาไว้ที่ **content boundary** เมื่อ Astro โหลด collection จะ validate ทุก entry กับ schema *ก่อน* ที่หน้าเพจจะเห็น entry ที่ผิดจะทำให้ build ล้มพร้อมข้อความชัดเจน ("`pubDate` ต้องเป็น date") ไม่ใช่ crash แบบปริศนา และ content ที่ validate แล้วยังเป็น content ที่มี **type** ด้วย ที่เป็นผลตอบแทนอย่างที่สอง
 
 ## Zod schema
 
@@ -52,7 +52,7 @@ refinement อย่าง `.max(80)` หรือ `.url()` ช่วยบั�
 
 ## schema generate type ให้
 
-เพราะ schema อธิบาย frontmatter ครบถ้วน Astro จึง **generate TypeScript type** จากมัน พอเราพิมพ์ `post.data.` editor ก็ autocomplete `title`, `pubDate`, `tags` ให้ พร้อม type ที่ถูกต้อง `post.data.pubDate` เป็น `Date` ส่วน `post.data.status` เป็น union `'draft' | 'published' | 'archived'` เราไม่ต้องเขียน interface `Post` เองเลย schema *คือ* แหล่งความจริงเดียวทั้งสำหรับ validation และ type
+เพราะ schema อธิบาย frontmatter ครบถ้วน Astro จึง **generate TypeScript type** จาก schema ให้ พอเราพิมพ์ `post.data.` editor ก็ autocomplete `title`, `pubDate`, `tags` ให้ พร้อม type ที่ถูกต้อง `post.data.pubDate` เป็น `Date` ส่วน `post.data.status` เป็น union `'draft' | 'published' | 'archived'` เราไม่ต้องเขียน interface `Post` เองเลย schema *คือ* แหล่งความจริงเดียวทั้งสำหรับ validation และ type
 
 <Mermaid title="schema เดียว ได้สองผลตอบแทน" code={diagram} />
 
@@ -89,7 +89,7 @@ const blog = defineCollection({
 export const collections = { authors, blog };
 ```
 
-`reference('authors')` เก็บ id ของ author และรับประกันว่ามันชี้ไปที่ entry จริง ถ้าจะเปลี่ยน reference นั้นให้เป็นข้อมูลจริง ก็ resolve มันด้วย `getEntry`:
+`reference('authors')` เก็บ id ของ author และรับประกันว่าชี้ไปที่ entry จริง ถ้าจะเปลี่ยน reference นั้นให้เป็นข้อมูลจริง ก็ resolve ด้วย `getEntry`:
 
 ```astro
 ---
@@ -101,7 +101,7 @@ const author = await getEntry(post.data.author);   // ส่ง reference เข
 <p>โดย {author.data.name}</p>
 ```
 
-วิธีนี้ทำให้ content เป็น normalized ข้อมูล author อยู่ที่เดียว ในขณะที่แต่ละโพสต์มีลิงก์ที่ validate แล้วและ resolve ได้
+วิธีนี้ทำให้ content เป็น normalized ข้อมูล author อยู่ที่เดียว ส่วนแต่ละโพสต์เก็บแค่ลิงก์ที่ validate แล้วและ resolve ได้
 
 <Callout title="สรุปหนึ่งบรรทัด">
 **Zod schema** (จาก `astro/zod`) validate ทุก entry ที่ content boundary frontmatter ที่ผิดจึงทำให้ build ล้มพร้อมข้อความชัดเจน ไม่ใช่ crash หน้าเพจ และ schema เดียวกันยัง **generate TypeScript type** ให้ `entry.data` เราจึงไม่ต้องเขียน interface เอง ใช้ `.optional()`, `.default()`, `z.coerce.date()`, และ `z.enum()` อธิบาย field และใช้ **`reference()`** เชื่อม collection (resolve ด้วย `getEntry`)
@@ -141,7 +141,7 @@ export const quizSchemas = [
   {
     q: 'การ validate content เกิดขึ้นที่ไหน?',
     options: [
-      'ในเบราว์เซอร์ตอน runtime',
+      'ใน browser ตอน runtime',
       'ที่ content boundary ตอน Astro โหลด collection ในช่วง build entry ที่ผิดทำให้ build ล้ม',
       'เฉพาะตอนเรียก render()',
       'ไม่เกิดขึ้นอัตโนมัติเลย',

@@ -10,7 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-## จาก "component คืออะไร" ไปสู่ "เขียนมันยังไง"
+## จาก "component คืออะไร" ไปสู่ "เขียนยังไง"
 
 โมดูล Foundations ให้ mental model กับคุณไปแล้ว — component `.astro` คือฟังก์ชันที่รับ props แล้ว render เป็น HTML บน server โมดูลนี้จะซูมเข้าไปที่ตัว **ภาษา template** เอง — syntax ที่คุณใช้เปลี่ยนข้อมูลให้เป็น markup, จัด style, ใส่ behavior ฝั่ง browser นิดหน่อย และประกอบ component เข้าด้วยกัน
 
@@ -35,7 +35,7 @@ export const diagram = `flowchart LR
 
 ## เส้นเรื่องหลัก
 
-ทุกฟีเจอร์ในโมดูลนี้คือวิธีอธิบาย HTML ให้แสดงออกได้มากขึ้น ในขณะที่ยังรักษาสัญญา zero-JS-by-default ไว้ expression กับ loop ให้ข้อมูลขับ markup ได้ scoped style เก็บ CSS ไว้เฉพาะที่โดยไม่ต้องพิธีรีตอง slot ให้ component ห่อ content ที่มันยังไม่รู้ล่วงหน้าได้ และ Markdown/MDX ให้คุณเขียน content เป็นร้อยแก้วแต่ยังหย่อน component ลงไปตรงที่ต้องการได้
+ทุกฟีเจอร์ในโมดูลนี้คือวิธีอธิบาย HTML ให้แสดงออกได้มากขึ้น โดยยังรักษาสัญญา zero-JS-by-default ไว้ expression กับ loop ให้ข้อมูลขับ markup ได้ scoped style เก็บ CSS ไว้เฉพาะที่โดยไม่ต้องพิธีรีตอง slot ให้ component ห่อ content ที่ยังไม่รู้ล่วงหน้าได้ และ Markdown/MDX ให้คุณเขียน content เป็นร้อยแก้วแต่ยังหย่อน component ลงไปตรงที่ต้องการได้
 
 <Callout title="สรุปหนึ่งบรรทัด">
 โมดูลนี้คือ **ภาษา template ของ `.astro` แบบใกล้ ๆ**: expression และ control flow ที่เปลี่ยนข้อมูลเป็น markup, scoped style กับ script, slot สำหรับ composition และ Markdown/MDX สำหรับ content ทั้งหมดทำงานบน **server** เพื่อผลิต HTML ส่วนความ interactive ค่อยมาทีหลังในโมดูล Islands

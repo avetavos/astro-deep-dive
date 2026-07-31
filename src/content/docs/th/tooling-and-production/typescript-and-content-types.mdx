@@ -20,11 +20,11 @@ Astro มาพร้อม TypeScript support ในตัว — เขีย�
 }
 ```
 
-preset มี `base`, `strict` และ `strictest` — เลือก `strict` (หรือ `strictest`) สำหรับโปรเจกต์จริง มันเปิด check ที่จับ bug จริง ๆ
+preset มี `base`, `strict` และ `strictest` — เลือก `strict` (หรือ `strictest`) สำหรับโปรเจกต์จริง เพราะเปิด check ที่จับ bug ได้จริง
 
 ## การ type props ของ component
 
-คุณ type props ของ component ด้วยการประกาศ interface `Props` ใน frontmatter Astro ใช้มัน type-check ทุกที่ที่ component ถูกใช้:
+คุณ type props ของ component ด้วยการประกาศ interface `Props` ใน frontmatter แล้ว Astro จะใช้ interface นี้ type-check ทุกที่ที่ component ถูกใช้:
 
 ```astro
 ---
@@ -41,7 +41,7 @@ const { title, count = 0 } = Astro.props;
 
 ## type ที่ generate จาก content schema
 
-ตรงนี้แหละที่ typing ของ Astro โดดเด่น เมื่อคุณ define content collection ด้วย Zod schema (จากโมดูล content) Astro **generate TypeScript type** จาก schema นั้น `getCollection` และ `getEntry` จะคืน entry ที่มี type ครบ — editor รู้ทุก field ใน frontmatter และ type ของมัน:
+ตรงนี้แหละที่ typing ของ Astro โดดเด่น เมื่อคุณ define content collection ด้วย Zod schema (จากโมดูล content) Astro **generate TypeScript type** จาก schema นั้น `getCollection` และ `getEntry` จะคืน entry ที่มี type ครบ — editor รู้ทุก field ใน frontmatter และ type ของตัวเอง:
 
 ```ts
 import { getCollection } from 'astro:content';
@@ -59,11 +59,11 @@ export const typesDiagram = `flowchart LR
   gen --> query["getCollection / getEntry return typed data"]
   query --> safe["type errors on wrong field access"]`;
 
-type เหล่านี้อยู่ในโฟลเดอร์ `.astro/` ที่ generate ให้ ซึ่ง Astro ดูแลให้เอง (refresh โดย dev server และ `astro sync`) คุณไม่ต้องแก้มัน แค่ได้ autocomplete และความปลอดภัยฟรีจาก schema ที่คุณเขียนไว้แล้ว
+type เหล่านี้อยู่ในโฟลเดอร์ `.astro/` ที่ generate ให้ ซึ่ง Astro ดูแลให้เอง (refresh โดย dev server และ `astro sync`) คุณไม่ต้องแก้เอง แค่ได้ autocomplete และความปลอดภัยฟรีจาก schema ที่คุณเขียนไว้แล้ว
 
 ## การ type Astro.locals
 
-เมื่อใช้ middleware แนบข้อมูลระดับ request (เช่น user ปัจจุบัน) ไว้ที่ `Astro.locals` คุณ type มันด้วยการประกาศ interface `App.Locals` มักอยู่ใน `src/env.d.ts`:
+เมื่อใช้ middleware แนบข้อมูลระดับ request (เช่น user ปัจจุบัน) ไว้ที่ `Astro.locals` คุณกำหนด type ให้ locals ด้วยการประกาศ interface `App.Locals` มักอยู่ใน `src/env.d.ts`:
 
 ```ts
 // src/env.d.ts
@@ -78,7 +78,7 @@ declare namespace App {
 
 ## type-check ด้วย astro check
 
-editor type-check ให้ระหว่างเขียน แต่ไฟล์ `.astro` ไม่ถูก check โดย `tsc` คำสั่งที่ทำคือ **`astro check`** — มัน validate type ข้ามไฟล์ `.astro`, `.ts` และ `.tsx` ต่อมันเข้ากับ build เพื่อให้ type error หยุด deploy ที่พัง:
+editor type-check ให้ระหว่างเขียน แต่ไฟล์ `.astro` ไม่ถูก check โดย `tsc` คำสั่งที่ทำคือ **`astro check`** — validate type ข้ามไฟล์ `.astro`, `.ts` และ `.tsx` ต่อคำสั่งนี้เข้ากับ build เพื่อให้ type error หยุด deploy ที่พัง:
 
 ```json
 {
@@ -97,7 +97,7 @@ export const quizTypes = [
     q: 'type props ของ component ใน Astro ยังไง?',
     options: [
       'ด้วย JSDoc comment อย่างเดียว',
-      'ประกาศ interface `Props` ใน frontmatter Astro type-check การใช้งานกับมัน',
+      'ประกาศ interface `Props` ใน frontmatter แล้ว Astro จะ type-check การใช้งานตาม interface นั้น',
       'type props ไม่ได้',
       'ในไฟล์ .d.ts แยกต่อ component',
     ],
@@ -116,7 +116,7 @@ export const quizTypes = [
   {
     q: 'type ข้อมูลที่แนบไว้ที่ `Astro.locals` (เช่นโดย middleware) ยังไง?',
     options: [
-      'มันไม่มี type',
+      'ไม่มี type',
       'ประกาศ interface `App.Locals` (มักอยู่ใน src/env.d.ts)',
       'ใช้ global variable',
       'ส่งเป็น prop ทุกที่',

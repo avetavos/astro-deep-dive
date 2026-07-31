@@ -27,10 +27,10 @@ import Counter from '../components/Counter.jsx';
 ## directive ทั้งห้าตัว
 
 - **`client:load`** — hydrate **ทันที** ตั้งแต่หน้าโหลด ใช้กับ control ที่อยู่เหนือ fold และต้องทำงานได้ทันทีที่หน้าใช้งานได้: search ที่ header, toggle สำคัญ ๆ เป็นตัวที่ขยันที่สุดและแพงที่สุด
-- **`client:idle`** — hydrate ตอน browser **idle** (ผ่าน `requestIdleCallback`) หลังงานหลักของการโหลดเสร็จแล้ว เหมาะกับ interactivity ที่สำคัญแต่ไม่ต้องทันที — มันรอจังหวะที่ว่าง
-- **`client:visible`** — hydrate ตอน component **scroll เข้ามาในจอ** (ผ่าน `IntersectionObserver`) เป็น default ที่ดีที่สุดสำหรับอะไรก็ตามที่อยู่ใต้ fold: widget comment, ฟอร์ม newsletter ที่ footer, carousel ที่อยู่ลึกลงไปในหน้า JavaScript ของมันจะไม่ถูกโหลดเลยถ้า user ไม่ scroll ไปถึง
+- **`client:idle`** — hydrate ตอน browser **idle** (ผ่าน `requestIdleCallback`) หลังงานหลักของการโหลดเสร็จแล้ว เหมาะกับ interactivity ที่สำคัญแต่ไม่ต้องมาทันที — รอจังหวะที่ browser ว่างก่อน
+- **`client:visible`** — hydrate ตอน component **scroll เข้ามาในจอ** (ผ่าน `IntersectionObserver`) เป็น default ที่ดีที่สุดสำหรับอะไรก็ตามที่อยู่ใต้ fold: widget comment, ฟอร์ม newsletter ที่ footer, carousel ที่อยู่ลึกลงไปในหน้า JavaScript ของตัวเองจะไม่ถูกโหลดเลยถ้า user ไม่ scroll ไปถึง
 - **`client:media`** — hydrate เฉพาะตอน **CSS media query match** เช่น `client:media="(max-width: 50em)"` ใช้กับ interactivity ที่มีเฉพาะบาง breakpoint — เมนู hamburger ที่มีเฉพาะบน mobile ซึ่งไม่มีความหมายบน desktop
-- **`client:only="react"`** — **ข้าม server rendering ทั้งหมด** และ render บน client เท่านั้น เราต้องระบุชื่อ framework (`"react"`, `"vue"`, `"svelte"`, ...) เพราะ Astro จะไม่ render มันบน server เพื่อตรวจว่าเป็น framework อะไร ใช้กับ component ที่ render บน server ไม่ได้เลย — พวกที่แตะ `window`, `localStorage` หรือ library ที่ใช้ได้แค่บน browser ตั้งแต่ render ครั้งแรก
+- **`client:only="react"`** — **ข้าม server rendering ทั้งหมด** และ render บน client เท่านั้น เราต้องระบุชื่อ framework (`"react"`, `"vue"`, `"svelte"`, ...) เพราะ Astro จะไม่ render component นั้นบน server เพื่อตรวจว่าเป็น framework อะไร ใช้กับ component ที่ render บน server ไม่ได้เลย — พวกที่แตะ `window`, `localStorage` หรือ library ที่ใช้ได้แค่บน browser ตั้งแต่ render ครั้งแรก
 
 <Mermaid title="แต่ละ directive hydrate เมื่อไหร่ บนเส้น timeline ของหน้า" code={diagram} />
 

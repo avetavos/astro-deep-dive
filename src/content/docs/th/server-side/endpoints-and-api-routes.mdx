@@ -1,6 +1,6 @@
 ---
 title: 'Endpoints & API Routes'
-description: 'route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint และมันต่างจาก Actions อย่างไร'
+description: 'route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint และต่างจาก Actions อย่างไร'
 sidebar:
   order: 3
 ---
@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## route ที่ return data ไม่ใช่หน้า
 
-ไม่ใช่ทุก route ที่ render HTML ไฟล์ใน `src/pages/` ที่นามสกุล `.ts` (หรือ `.js`) คือ **API endpoint**: แทนที่จะมี template มันจะ export function ที่ตั้งชื่อตาม HTTP method (`GET`, `POST`, `PUT`, `DELETE`) ซึ่งแต่ละตัว return `Response` มาตรฐาน
+ไม่ใช่ทุก route ที่ render HTML ไฟล์ใน `src/pages/` ที่นามสกุล `.ts` (หรือ `.js`) คือ **API endpoint**: แทนที่จะมี template จะ export function ที่ตั้งชื่อตาม HTTP method (`GET`, `POST`, `PUT`, `DELETE`) ซึ่งแต่ละตัว return `Response` มาตรฐาน
 
 ```ts
 // src/pages/api/health.ts
@@ -78,7 +78,7 @@ export const prerender = false;
 หลักจำง่าย ๆ: **สัญญาแบบ public/external → endpoint; internal app logic ที่เรียกจาก frontend ตัวเอง → Action**
 
 <Callout title="สรุปหนึ่งบรรทัด">
-**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แบบ typed เป็น `APIRoute` ซึ่งแต่ละตัว return `Response` มาตรฐาน; handler อ่าน `params`, request body และ cookies จาก context ของมัน endpoint เป็น **static** (build-time, `GET` เท่านั้น) ถ้าไม่เพิ่ม `prerender = false` เพื่อ method แบบ on-demand ใช้ **endpoint** สำหรับสัญญา HTTP แบบ public/external (webhook, REST, download) และใช้ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe
+**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แบบ typed เป็น `APIRoute` ซึ่งแต่ละตัว return `Response` มาตรฐาน; handler อ่าน `params`, request body และ cookies จาก context ของตัวเอง endpoint เป็น **static** (build-time, `GET` เท่านั้น) ถ้าไม่เพิ่ม `prerender = false` เพื่อ method แบบ on-demand ใช้ **endpoint** สำหรับสัญญา HTTP แบบ public/external (webhook, REST, download) และใช้ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe
 </Callout>
 
 export const quizEndpoints = [
@@ -108,7 +108,7 @@ export const quizEndpoints = [
       'สำหรับ webhook สาธารณะ',
       'สำหรับ mutation ภายในแอปตัวเองแบบ type-safe ที่เรียกจาก frontend (พร้อม input validation อัตโนมัติ)',
       'สำหรับ serve static file',
-      'ไม่มีวัน — มันเหมือนกัน',
+      'ไม่มีเลย — ทั้งสองอย่างเหมือนกัน',
     ],
     answer: 1,
   },

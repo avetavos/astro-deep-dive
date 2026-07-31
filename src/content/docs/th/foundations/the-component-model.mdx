@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Component คือ function ที่ render บน server
 
-Astro component คือไฟล์ `.astro` ที่คุณ import และใช้ในอีกไฟล์ได้ มันรับ **props** และคืน HTML เพราะมัน render บน server component จึงเป็น function จาก props ไปเป็น markup — ไม่มี lifecycle ฝั่ง client
+Astro component คือไฟล์ `.astro` ที่คุณ import และใช้ในอีกไฟล์ได้ รับ **props** เข้ามาแล้วคืน HTML ออกไป เพราะ render บน server component จึงเป็น function จาก props ไปเป็น markup — ไม่มี lifecycle ฝั่ง client
 
 ```astro
 ---
@@ -37,11 +37,11 @@ import Card from '../components/Card.astro';
 <Card title="Hello" href="/hello" />
 ```
 
-props เข้ามาผ่าน **`Astro.props`** และคุณกำหนด type ให้มันด้วยการประกาศ interface `Props` ใน frontmatter — Astro ใช้มัน type-check การใช้งาน ที่นี่ไม่มี `useState` component รันครั้งเดียวเพื่อผลิต HTML
+props เข้ามาผ่าน **`Astro.props`** และคุณกำหนด type ของ props ด้วยการประกาศ interface `Props` ใน frontmatter — Astro ใช้ interface นี้ type-check การใช้งาน ที่นี่ไม่มี `useState` component รันครั้งเดียวเพื่อผลิต HTML
 
 ## Slots: composition ด้วยการส่ง markup
 
-บ่อยครั้ง component ต้องห่อ *content ที่มันไม่รู้ล่วงหน้า* นั่นคือหน้าที่ของ **slots** — markup ลูกที่คุณวางไว้ระหว่าง tag ของ component จะถูก render ตรงที่ `<slot />` ปรากฏ
+บ่อยครั้ง component ต้องห่อ *content ที่ไม่รู้ล่วงหน้า* นั่นคือหน้าที่ของ **slots** — markup ลูกที่คุณวางไว้ระหว่าง tag ของ component จะถูก render ตรงที่ `<slot />` ปรากฏ
 
 ```astro
 ---
@@ -87,7 +87,7 @@ Slots คือกระดูกสันหลังของ **layouts**: `La
 
 ## Scoped styles
 
-tag `<style>` ภายใน `.astro` component เป็น **scoped ให้ component นั้นโดย default** — Astro เขียน selector ใหม่เพื่อไม่ให้มันรั่วออกไปหรือชนกับ component อื่น
+tag `<style>` ภายใน `.astro` component เป็น **scoped ให้ component นั้นโดย default** — Astro เขียน selector ใหม่เพื่อไม่ให้ style รั่วออกไปชนกับ component อื่น
 
 ```astro
 <h1>Title</h1>
@@ -100,12 +100,12 @@ tag `<style>` ภายใน `.astro` component เป็น **scoped ให้
 คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา — ไม่มี CSS-in-JS ไม่ต้องมีพิธีตั้งชื่อแบบ BEM เมื่อคุณ *อยาก* ให้ rule ใช้แบบ global คุณ opt out ด้วย `<style is:global>` (พูดถึงในบท styles)
 
 <Callout title="สรุปบรรทัดเดียว">
-Astro component คือ **function ของ props ที่ render บน server** — props มาผ่าน `Astro.props` และกำหนด type ด้วย interface `Props` ไม่มี state หรือ lifecycle ฝั่ง client **Slots** เปิดทางให้ composition: markup ที่ส่งระหว่าง tag ของ component จะ render ที่ `<slot />` (พร้อม named slots สำหรับหลายจุดแทรก) ซึ่งเป็นวิธีที่ layout ห่อหน้า และ `<style>` ของ component เป็น **scoped โดย default** ให้คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา
+Astro component คือ **function ของ props ที่ render บน server** — props มาผ่าน `Astro.props` และกำหนด type ด้วย interface `Props` ไม่มี state หรือ lifecycle ฝั่ง client **Slots** เปิดทางให้ composition: markup ที่ส่งระหว่าง tag ของ component จะ render ที่ `<slot />` (พร้อม named slots สำหรับหลายจุดแทรก) นั่นคือวิธีที่ layout ห่อหน้า และ `<style>` ของ component เป็น **scoped โดย default** ให้คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา
 </Callout>
 
 export const quizComponents = [
   {
-    q: 'Astro component รับ props ของมันยังไง?',
+    q: 'Astro component รับ props ของตัวเองยังไง?',
     options: [
       'ผ่าน argument ของ function',
       'ผ่าน `Astro.props` กำหนด type ด้วย interface `Props` ใน frontmatter',

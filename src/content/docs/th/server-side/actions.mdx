@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ปัญหาที่ Actions แก้
 
-การจะเรียก server logic จาก client แบบเดิม คุณต้องเขียน endpoint, คิด URL, `fetch()` มัน, stringify body, เดา type ของ response และ validate input ด้วยมือบน server **Actions** ยุบทั้งหมดนั้นเหลือ function ที่ typed ตัวเดียว: define บน server แล้วเรียกจาก client ด้วย type-safety เต็มและ validation อัตโนมัติ
+การจะเรียก server logic จาก client แบบเดิม คุณต้องเขียน endpoint, คิด URL, `fetch()` เอง, stringify body, เดา type ของ response และ validate input ด้วยมือบน server **Actions** ยุบทั้งหมดนั้นเหลือ function ที่ typed ตัวเดียว: define บน server แล้วเรียกจาก client ด้วย type-safety เต็มและ validation อัตโนมัติ
 
 ## define action
 
@@ -78,7 +78,7 @@ export const actionDiagram = `sequenceDiagram
 
 ## form และ progressive enhancement
 
-Action เชื่อมกับ HTML `<form>` ตรง ๆ ได้ด้วยการส่ง `action.name` — มันทำงานเป็น form POST ปกติแม้ JavaScript ยังไม่โหลด แล้วอัปเกรดเป็น client call เมื่อ hydrate นี่คือ **progressive enhancement**: form submit ได้ทั้งสองทาง
+Action เชื่อมกับ HTML `<form>` ตรง ๆ ได้ด้วยการส่ง `action.name` — ทำงานเป็น form POST ปกติแม้ JavaScript ยังไม่โหลด แล้วอัปเกรดเป็น client call เมื่อ hydrate นี่คือ **progressive enhancement**: form submit ได้ทั้งสองทาง
 
 ```astro
 ---
@@ -133,8 +133,8 @@ export const quizActions = [
     options: [
       'ไม่ได้อะไร',
       'progressive enhancement — form submit เป็น POST ปกติได้โดยไม่มี JS แล้วอัปเกรดเป็น client call เมื่อ hydrate',
-      'มันปิด validation',
-      'มันทำให้ form เป็น static',
+      'ปิด validation',
+      'ทำให้ form เป็น static',
     ],
     answer: 1,
   },

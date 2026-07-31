@@ -68,7 +68,7 @@ adapter แปลง server rendering ของ Astro ให้เป็น form
 `astro build` รัน component script ของคุณ, render HTML, bundle CSS และ island JavaScript ใด ๆ แล้วเขียน output ไปที่ `dist/` สำหรับ static site นั่นคือโฟลเดอร์ของไฟล์ `.html` และ asset ที่คุณโยนลง CDN ไหนก็ได้ สำหรับ hybrid/server site `dist/` ยังมี server entry ที่ adapter รันด้วย ไม่ว่าทางไหน browser ก็ได้รับ HTML ที่เสร็จแล้วบวกเฉพาะ island JS — คำมั่นพื้นฐานที่ build ส่งมอบให้
 
 <Callout title="สรุปบรรทัดเดียว">
-Astro render HTML ของ route แบบ **static** (ครั้งเดียวตอน build → ไฟล์บน CDN) หรือ **on-demand** (แต่ละ request บน server สำหรับข้อมูลตอน request) ค่า default คือ static คุณ opt แต่ละ route เข้าหรือออกด้วย `export const prerender` — เปิดทางให้เว็บแบบ **hybrid** ที่ส่วนใหญ่เป็น static พร้อม route dynamic ไม่กี่ตัว on-demand rendering ต้องมี **adapter** (Cloudflare/Node/Vercel/…) เพื่อรัน server code แต่ละ request ลืมมันคือ deploy error คลาสสิก "an adapter is required"
+Astro render HTML ของ route แบบ **static** (ครั้งเดียวตอน build → ไฟล์บน CDN) หรือ **on-demand** (แต่ละ request บน server สำหรับข้อมูลตอน request) ค่า default คือ static คุณ opt แต่ละ route เข้าหรือออกด้วย `export const prerender` — เปิดทางให้เว็บแบบ **hybrid** ที่ส่วนใหญ่เป็น static พร้อม route dynamic ไม่กี่ตัว on-demand rendering ต้องมี **adapter** (Cloudflare/Node/Vercel/…) เพื่อรัน server code แต่ละ request ลืม adapter เมื่อไหร่ก็เจอ deploy error คลาสสิก "an adapter is required"
 </Callout>
 
 export const quizModes = [
@@ -78,14 +78,14 @@ export const quizModes = [
       'Static ใช้ CSS, on-demand ใช้ JavaScript',
       'Static build HTML ครั้งเดียวตอน build (serve เป็นไฟล์); on-demand render แต่ละ request บน server (สำหรับข้อมูลตอน request)',
       'Static ช้ากว่า',
-      'มันเหมือนกัน',
+      'เหมือนกัน',
     ],
     answer: 1,
   },
   {
     q: 'คุณจะทำให้ route เดียว render แบบ on-demand ในโปรเจกต์ที่ส่วนอื่นเป็น static ยังไง?',
     options: [
-      'ย้ายมันไปโฟลเดอร์อื่น',
+      'ย้าย route นั้นไปโฟลเดอร์อื่น',
       'เพิ่ม `export const prerender = false` ให้ route นั้น',
       'เปลี่ยนชื่อเป็น .server.astro',
       'ทำไม่ได้',

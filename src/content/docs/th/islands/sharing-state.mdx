@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ปัญหาเรื่องการแยกตัว
 
-island hydrate อย่างเป็นอิสระ — นั่นแหละที่ทำให้มันถูก แต่มันมีผลข้างเคียงที่คนมาจาก SPA มักสะดุด: **island สองตัวไม่แชร์ state กันอัตโนมัติ** `useState` ของ React ใน island หนึ่งมองไม่เห็นจากอีก island หนึ่ง แม้จะสร้างจาก framework เดียวกันก็ตาม ไม่มี app tree ร่วมกัน แต่ละ island เป็น root เล็ก ๆ ของตัวเอง
+island hydrate อย่างเป็นอิสระ — นั่นแหละที่ทำให้ต้นทุนถูก แต่มีผลข้างเคียงที่คนมาจาก SPA มักสะดุด: **island สองตัวไม่แชร์ state กันอัตโนมัติ** `useState` ของ React ใน island หนึ่งมองไม่เห็นจากอีก island หนึ่ง แม้จะสร้างจาก framework เดียวกันก็ตาม ไม่มี app tree ร่วมกัน แต่ละ island เป็น root เล็ก ๆ ของตัวเอง
 
 แล้ว island "add to cart" กับ island "cart count" ที่ header จะ sync กันได้ยังไง? คุณมีเครื่องมือสามอย่าง เรียงจากง่ายที่สุดไปทรงพลังที่สุด
 
@@ -32,7 +32,7 @@ const initialCount = await getCartCount(Astro.request);
 
 ## 2. nanostores สำหรับ state ที่แชร์ข้าม island
 
-เมื่อ island ต้องตอบสนองต่อกันตอน runtime ให้ใช้ **shared store** ที่อยู่นอก island ตัวใดตัวหนึ่ง เอกสารของ Astro แนะนำ **nanostores** — มันเล็กมาก ไม่ผูกกับ framework ใด และมี adapter สำหรับแต่ละ framework (`@nanostores/react`, `@nanostores/vue`, ...) คุณนิยาม store ครั้งเดียว แล้ว island ไหนก็อ่านและเขียนมันได้
+เมื่อ island ต้องตอบสนองต่อกันตอน runtime ให้ใช้ **shared store** ที่อยู่นอก island ตัวใดตัวหนึ่ง เอกสารของ Astro แนะนำ **nanostores** — ขนาดเล็กมาก ไม่ผูกกับ framework ใด และมี adapter สำหรับแต่ละ framework (`@nanostores/react`, `@nanostores/vue`, ...) คุณนิยาม store ครั้งเดียว แล้ว island ไหนก็อ่านและเขียน store นี้ได้
 
 ```js
 // src/stores/cart.js
@@ -99,7 +99,7 @@ export const quizState = [
       'เพราะ Astro ปิดการใช้ hooks',
       'เพราะ island hydrate อย่างเป็นอิสระ — แต่ละตัวเป็น root ของตัวเองที่ไม่มี app tree ร่วมกัน state จึงแยกกัน',
       'เพราะ state ทำงานได้แค่บน server',
-      'มันแชร์กันอัตโนมัติอยู่แล้ว',
+      'แชร์กันอัตโนมัติอยู่แล้ว',
     ],
     answer: 1,
   },

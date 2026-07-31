@@ -16,7 +16,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## component `<Image />`
 
-เมื่อ import local image เข้ามาแล้ว render ด้วย `<Image />` Astro จะ process มันตอน build time — แปลงเป็น format ที่มีประสิทธิภาพ (เช่น WebP/AVIF) และบังคับให้ระบุ width/height เพื่อให้ browser จองพื้นที่ไว้ (ไม่มี layout shift):
+เมื่อ import local image เข้ามาแล้ว render ด้วย `<Image />` Astro จะ process ภาพนั้นตอน build time — แปลงเป็น format ที่มีประสิทธิภาพ (เช่น WebP/AVIF) และบังคับให้ระบุ width/height เพื่อให้ browser จองพื้นที่ไว้ (ไม่มี layout shift):
 
 ```astro
 ---
@@ -32,11 +32,11 @@ import heroImage from '../assets/hero.png';   // a local import
 - **ป้องกัน layout shift** — บังคับ width/height (infer มาจาก local import) พื้นที่จึงถูกจองก่อน image โหลด
 - **lazy-load โดย default** — ใส่ `loading="lazy"` และ `decoding="async"` ให้ image ที่อยู่นอกจอไม่ block การ render แรก
 
-สำหรับ local import Astro รู้ dimension จริงอยู่แล้ว เราจึงละ width/height ได้และมันจะเติมให้เอง
+สำหรับ local import Astro รู้ dimension จริงอยู่แล้ว เราจึงละ width/height ได้และจะเติมให้เอง
 
 ## `<Picture />` สำหรับหลาย format และ art direction
 
-เมื่ออยากให้ browser *เลือก* format เอง หรือ serve crop ต่างกันในแต่ละ breakpoint ให้ใช้ **`<Picture />`** มัน render เป็น element `<picture>` ที่มีหลาย `<source>`:
+เมื่ออยากให้ browser *เลือก* format เอง หรือ serve crop ต่างกันในแต่ละ breakpoint ให้ใช้ **`<Picture />`** ซึ่ง render ออกมาเป็น element `<picture>` ที่มีหลาย `<source>`:
 
 ```astro
 ---
@@ -63,17 +63,17 @@ export const imgDiagram = `flowchart TB
 
 ## font ที่ optimize
 
-font คืออีก asset ใหญ่ที่ render-blocking Fonts API ของ Astro มี component **`<Font />`** (จาก `astro:assets`) ที่ download, self-host และ optimize web font ตอน build time — สร้าง `@font-face` rule และ preload ที่ถูกต้อง — เราจึงเลี่ยง request ไป font ของ third-party และ layout shift ที่มากับมัน เรา config font family ใน `astro.config.mjs` แล้ววาง `<Font />` ใน head
+font คืออีก asset ใหญ่ที่ render-blocking Fonts API ของ Astro มี component **`<Font />`** (จาก `astro:assets`) ที่ download, self-host และ optimize web font ตอน build time — สร้าง `@font-face` rule และ preload ที่ถูกต้อง — เราจึงเลี่ยง request ไป font ของ third-party และ layout shift ที่ตามมา เรา config font family ใน `astro.config.mjs` แล้ววาง `<Font />` ใน head
 
 <Callout title="สรุปบรรทัดเดียว">
-ใช้ **`<Image />`** (จาก `astro:assets`) แทน `<img>` ธรรมดา: มัน auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อไม่ให้มี layout shift และ lazy-load โดย default ใช้ **`<Picture />`** เมื่ออยากได้หลาย format หรือ crop แบบ art direction เลือก **local imported image** (optimize เต็มที่ รู้ dimension) มากกว่า `public/` (serve ตามเดิม) และ remote URL (ต้องมี authorized domain) และ component **`<Font />`** ช่วย self-host และ optimize web font เพื่อตัด request render-blocking ของ third-party
+ใช้ **`<Image />`** (จาก `astro:assets`) แทน `<img>` ธรรมดา: component นี้ auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อไม่ให้มี layout shift และ lazy-load โดย default ใช้ **`<Picture />`** เมื่ออยากได้หลาย format หรือ crop แบบ art direction เลือก **local imported image** (optimize เต็มที่ รู้ dimension) มากกว่า `public/` (serve ตามเดิม) และ remote URL (ต้องมี authorized domain) และ component **`<Font />`** ช่วย self-host และ optimize web font เพื่อตัด request render-blocking ของ third-party
 </Callout>
 
 export const quizImg = [
   {
     q: 'component `<Image />` ทำอะไรที่ `<img>` ธรรมดาไม่ทำ?',
     options: [
-      'ไม่มีอะไร มันเป็นแค่ alias',
+      'ไม่มีอะไร เป็นแค่ alias',
       'auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อป้องกัน layout shift และ lazy-load โดย default',
       'ใช้ได้กับ remote image เท่านั้น',
       'ปิด lazy loading',
@@ -83,7 +83,7 @@ export const quizImg = [
   {
     q: 'ควรใช้ `<Picture />` แทน `<Image />` เมื่อไร?',
     options: [
-      'ไม่มีวัน มันเหมือนกัน',
+      'ไม่มีเลย ทั้งสองตัวเหมือนกัน',
       'เมื่ออยากให้ browser เลือกจากหลาย format หรือ serve crop ต่างกันในแต่ละ breakpoint',
       'เฉพาะกับ SVG',
       'เฉพาะใน server mode',
@@ -104,7 +104,7 @@ export const quizImg = [
     q: 'จะ optimize remote image จาก URL ต้องมีอะไร?',
     options: [
       'ไม่ต้องมีอะไร ทุก URL ใช้ได้',
-      'domain ของมันต้องถูก list เป็น authorized ใน Astro config (`image.domains` / `image.remotePatterns`)',
+      'domain ของตัวเองต้องถูก list เป็น authorized ใน Astro config (`image.domains` / `image.remotePatterns`)',
       'ต้องเล็กกว่า 1KB',
       'ต้องเป็น SVG',
     ],

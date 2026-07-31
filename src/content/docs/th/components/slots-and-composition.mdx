@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ทวน slot: การฉีด markup
 
-component มักต้องห่อ content ที่มันยังไม่รู้ล่วงหน้า markup ที่ parent วางไว้ระหว่าง tag ของ component จะถูก render ตรงที่ `<slot />` อยู่ — นั่นคือ **default slot**
+component มักต้องห่อ content ที่ยังไม่รู้ล่วงหน้า markup ที่ parent วางไว้ระหว่าง tag ของ component จะถูก render ตรงที่ `<slot />` อยู่ — นั่นคือ **default slot**
 
 ```astro
 ---
@@ -33,7 +33,7 @@ const { heading } = Astro.props;
 
 ## named slot: จุดฉีดหลายจุด
 
-default slot อันเดียวไม่พอสำหรับ layout จริง ๆ **named slot** ให้ช่องที่มีป้ายชื่อหลายช่อง component ประกาศ `<slot name="x" />` ส่วน parent เติมมันด้วย `slot="x"` บน child
+default slot อันเดียวไม่พอสำหรับ layout จริง ๆ **named slot** ให้ช่องที่มีป้ายชื่อหลายช่อง component ประกาศ `<slot name="x" />` ส่วน parent เติมช่องเหล่านั้นด้วย `slot="x"` บน child
 
 ```astro
 ---
@@ -131,7 +131,7 @@ export const diagram = `flowchart TB
 
 ## รูปแบบ composition
 
-ด้วย slot คุณประกอบ component เล็ก ๆ ให้เป็นหน้าได้แบบเดียวกับที่ประกอบฟังก์ชัน: `Card` ที่มี default slot สำหรับ body, `Grid` ที่ default slot เก็บ card, `Section` ที่มี named slot `header` และ `body` คุณเก็บแต่ละชิ้นให้โฟกัสแล้วให้ parent ตัดสินใจว่าจะใส่อะไรข้างใน เพราะทั้งหมด render บน server composition แทบไม่มีต้นทุนตอน runtime — มันคือแค่การประกอบ HTML
+ด้วย slot คุณประกอบ component เล็ก ๆ ให้เป็นหน้าได้แบบเดียวกับที่ประกอบฟังก์ชัน: `Card` ที่มี default slot สำหรับ body, `Grid` ที่ default slot เก็บ card, `Section` ที่มี named slot `header` และ `body` คุณเก็บแต่ละชิ้นให้โฟกัสแล้วให้ parent ตัดสินใจว่าจะใส่อะไรข้างใน เพราะทั้งหมด render บน server composition แทบไม่มีต้นทุนตอน runtime — เป็นแค่การประกอบ HTML เท่านั้น
 
 <Callout title="สรุปหนึ่งบรรทัด">
 slot ให้ component render markup ที่ parent ป้อนมา: **default slot** ที่ `<slot />`, **named slot** (`<slot name="x" />` เติมด้วย `slot="x"`) สำหรับจุดฉีดหลายจุด และ **fallback content** ใน `<slot>…</slot>` ตอนไม่มีอะไรส่งมา `Astro.slots.has('x')` ให้ component ปรับโครงสร้างตาม slot ที่ถูกเติม การใช้งานเด่นคือ **layout** — component shell ที่มี slot ที่ทุกหน้าห่อ content ของตัวเองไว้
