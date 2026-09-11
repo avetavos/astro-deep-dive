@@ -1,6 +1,6 @@
 ---
 title: 'Config & Integrations'
-description: 'The astro.config.mjs file, the integrations system for adding capabilities, how Astro sits on Vite, and adding Tailwind the current way.'
+description: 'The astro.config.mjs file, the integrations system for adding capabilities, how Astro sits on Vite 8 and Rolldown, what moved out of experimental in Astro 7, and adding Tailwind the current way.'
 sidebar:
   order: 2
 ---
@@ -50,7 +50,7 @@ Common official integrations (`@astrojs/*`): `react` / `vue` / `svelte` / `solid
 
 ## Astro is built on Vite
 
-Under the hood, Astro's dev server and build are powered by **Vite**. That's why the dev server starts instantly, why HMR is fast, and why you can use most of the Vite/Rollup plugin ecosystem. When you need something Astro doesn't expose directly, drop into the `vite` key and configure Vite itself:
+Under the hood, Astro's dev server and build are powered by **Vite** — Vite 8 since Astro 7, whose default bundler is **Rolldown**, a Rust rewrite that is 10–30× faster than Rollup while keeping the same plugin API. That's why the dev server starts instantly, why HMR is fast, and why you can use most of the Vite/Rollup plugin ecosystem (check a plugin's Vite 8 support when you upgrade). When you need something Astro doesn't expose directly, drop into the `vite` key and configure Vite itself:
 
 ```js
 export default defineConfig({
@@ -65,9 +65,25 @@ export default defineConfig({
 
 export const configDiagram = `flowchart TB
   cfg["astro.config.mjs (defineConfig)"] --> integ["integrations: UI frameworks, mdx, sitemap, adapter"]
-  cfg --> vite["vite: raw Vite/Rollup plugins and config"]
+  cfg --> vite["vite: raw Vite 8 (Rolldown) plugins and config"]
   integ --> build["Astro build"]
   vite --> build`;
+
+## What changed in the config for Astro 7
+
+Astro 7 stabilised several features, which means the corresponding `experimental` flags are **gone** — leaving them in causes a config error. Move them to the top level:
+
+```js
+// Astro 6                                   // Astro 7
+experimental: { cache: { ... } }             cache: { ... }
+experimental: { routeRules: { ... } }        routeRules: { ... }
+experimental: { logger: { ... } }            logger: { ... }
+experimental: { rustCompiler: true }         // removed — the Rust compiler is the only compiler
+experimental: { queuedRendering: true }      // removed — now the default
+experimental: { advancedRouting: true }      // removed — src/fetch.ts is always on
+```
+
+New top-level keys worth knowing: **`compressHTML`** now defaults to `'jsx'` (JSX whitespace rules); **`fetchFile`** relocates or disables the reserved `src/fetch.ts` entrypoint; **`markdown.processor`** lets you swap Sätteri for `unified()` from `@astrojs/markdown-remark`. And one package is gone: **`@astrojs/db`** is no longer maintained — use `node:sqlite`, Drizzle, or a hosted database (Turso, Neon, PlanetScale) instead.
 
 ## Adding Tailwind (the current way)
 
@@ -80,7 +96,7 @@ npx astro add tailwind
 That installs the plugin, adds it to your Vite config, and creates the CSS entry. You then import your CSS once (e.g. in a layout) and use Tailwind utility classes in your markup. If you ever see guides referencing the `@astrojs/tailwind` *integration*, that's the older approach; the current path is the Vite plugin via `astro add tailwind`.
 
 <Callout title="The one-line takeaway">
-`astro.config.mjs` configures a project via `defineConfig` — key fields are `site` (deployed URL, needed for absolute URLs), `base` (path prefix), `output`, `adapter`, and `integrations`. **Integrations** (`@astrojs/*`, added with `npx astro add`) extend the build with UI frameworks, MDX, sitemaps, and adapters. Astro runs on **Vite**, so you can drop into the `vite` key for raw plugins — and current Tailwind is a Vite plugin added with `astro add tailwind`, not the legacy `@astrojs/tailwind` integration.
+`astro.config.mjs` configures a project via `defineConfig` — key fields are `site` (deployed URL, needed for absolute URLs), `base` (path prefix), `output`, `adapter`, and `integrations`. **Integrations** (`@astrojs/*`, added with `npx astro add`) extend the build with UI frameworks, MDX, sitemaps, and adapters. Astro runs on **Vite**, so you can drop into the `vite` key for raw plugins — and current Tailwind is a Vite plugin added with `astro add tailwind`, not the legacy `@astrojs/tailwind` integration. In Astro 7 the `cache`, `routeRules`, and `logger` keys are top-level (the `experimental` flags are gone), `compressHTML` defaults to `'jsx'`, and `@astrojs/db` has been removed.
 </Callout>
 
 export const quizConfig = [
@@ -121,6 +137,16 @@ export const quizConfig = [
       'The Tailwind Vite plugin, installed via `npx astro add tailwind`',
       'A CDN script tag only',
       'Tailwind is built in',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'After upgrading to Astro 7 your config still has `experimental: { cache: ... }`. What happens?',
+    options: [
+      'It keeps working — experimental flags are ignored',
+      'It is a config error: `cache` (and `routeRules`, `logger`) are now top-level keys, and the experimental flags were removed',
+      'Caching is silently disabled',
+      'Astro downgrades to version 6',
     ],
     answer: 1,
   },

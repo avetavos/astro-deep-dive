@@ -1,6 +1,6 @@
 ---
 title: 'Astro Syntax Deep Dive'
-description: 'Template expressions, conditionals and loops, Fragments, set:html and set:text, spread attributes, and dynamic tags — the JSX-like syntax that turns data into markup.'
+description: 'Template expressions, conditionals and loops, Fragments, set:html and set:text, spread attributes, dynamic tags, and the strict Astro 7 compiler with JSX-style whitespace — the JSX-like syntax that turns data into markup.'
 sidebar:
   order: 2
 ---
@@ -135,12 +135,40 @@ export const diagram = `flowchart LR
   eval --> raw["set:html bypasses escaping for trusted HTML"]
   raw --> html`;
 
+## Astro 7: a strict compiler and JSX-style whitespace
+
+Astro 7 replaced the old Go-based compiler with a **Rust compiler**, and it is now the only compiler. It is faster, and it is *stricter*: the old compiler silently "corrected" broken HTML, the new one reports it as a build error.
+
+```astro
+<!-- Astro 6 quietly closed the first <p> for you. Astro 7: error, unclosed tag. -->
+<p>Hello world<p>Hello world</p>
+
+<!-- Write what you mean. -->
+<p>Hello world</p>
+<p>Hello world</p>
+```
+
+Unclosed tags and invalid nesting (a `<div>` inside a `<p>`, for example) fail the build instead of being patched over. That is a good trade: the corrected output was rarely what you intended.
+
+The second change is **whitespace**. The `compressHTML` option now defaults to `'jsx'`, so whitespace between elements follows JSX rules — a newline between two inline elements no longer produces a visible space:
+
+```astro
+<!-- Astro 6 rendered "hello world"; Astro 7 renders "helloworld". -->
+<span>hello</span>
+<em>world</em>
+
+<!-- Be explicit, exactly as you would in React. -->
+<span>hello</span>{" "}<em>world</em>
+```
+
+If a large existing template depends on the old behaviour, set `compressHTML: true` in `astro.config.mjs` to keep it while you migrate. New projects should just write `{" "}` where a space matters.
+
 ## HTML attribute names, not JSX names
 
 A subtle but important difference from React: Astro templates use **standard HTML attribute names**. It is `class`, not `className`; `for`, not `htmlFor`. You are writing a superset of HTML, so the HTML names are the real ones.
 
 <Callout title="The one-line takeaway">
-Astro templating is JSX-like but HTML-native: `{ }` embeds expressions, `{cond && <el/>}` and ternaries handle conditionals, `{items.map(...)}` handles loops (no `key` needed), and `<Fragment>` / `<>` group without a wrapper. `set:html` renders a **trusted** raw HTML string (bypassing escaping — an XSS risk on untrusted input), `set:text` forces plain text, and `{...obj}` spreads attributes. Use real HTML attribute names — `class`, not `className`.
+Astro templating is JSX-like but HTML-native: `{ }` embeds expressions, `{cond && <el/>}` and ternaries handle conditionals, `{items.map(...)}` handles loops (no `key` needed), and `<Fragment>` / `<>` group without a wrapper. `set:html` renders a **trusted** raw HTML string (bypassing escaping — an XSS risk on untrusted input), `set:text` forces plain text, and `{...obj}` spreads attributes. Use real HTML attribute names — `class`, not `className`. Astro 7's Rust compiler rejects unclosed or mis-nested tags instead of fixing them, and `compressHTML: 'jsx'` means whitespace follows JSX rules — write `{" "}` where a space matters.
 </Callout>
 
 export const quizSyntax = [
@@ -181,6 +209,16 @@ export const quizSyntax = [
       '`class` — Astro uses standard HTML attribute names, not JSX names',
       '`htmlFor`',
       'Both className and class work identically',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In Astro 7, `<span>hello</span>` and `<em>world</em>` on separate lines render as "helloworld". Why, and what is the fix?',
+    options: [
+      'A bug in the Rust compiler — file an issue',
+      '`compressHTML` now defaults to `\'jsx\'`, so whitespace follows JSX rules; write `{" "}` between them (or set `compressHTML: true` to keep the old behaviour)',
+      'Inline elements can no longer be siblings',
+      'You must wrap them in a Fragment',
     ],
     answer: 1,
   },

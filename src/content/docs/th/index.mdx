@@ -1,9 +1,9 @@
 ---
 title: Astro Deep Dive
-description: เชี่ยวชาญ Astro ตั้งแต่พื้นฐาน — islands architecture และ zero-JS by default, .astro component model, client directives, content collections ด้วย Content Layer API, SSR & adapters, Actions, server islands, view transitions และ production สำหรับ Astro 6
+description: เชี่ยวชาญ Astro ตั้งแต่พื้นฐาน — islands architecture และ zero-JS by default, .astro component model, client directives, content collections ด้วย Content Layer API, SSR & adapters, Actions, server islands, view transitions และ production สำหรับ Astro 7
 template: splash
 hero:
-  tagline: คอร์สแบบ standalone ระดับ intermediate→advanced ว่าด้วย Astro 6 ตั้งแต่ islands architecture และ .astro component ไปจนถึง client directives, content collections, on-demand rendering, Actions, server islands และ view transitions — สอนผ่าน code ที่ annotate และไดอะแกรมที่แสดงว่า Astro ส่งอะไรไป browser และทำไม
+  tagline: คอร์สแบบ standalone ระดับ intermediate→advanced ว่าด้วย Astro 7 ตั้งแต่ islands architecture และ .astro component ไปจนถึง client directives, content collections, on-demand rendering, Actions, server islands และ view transitions — สอนผ่าน code ที่ annotate และไดอะแกรมที่แสดงว่า Astro ส่งอะไรไป browser และทำไม
   actions:
     - text: เริ่มที่นี่
       link: /astro/th/foundations/
@@ -48,8 +48,8 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   <Card title="เข้าใจ model ก่อน แล้วค่อยดู code" icon="rocket">
     ทุกหัวข้อเริ่มจาก model — islands, server-first render, content pipeline — พอเข้าใจแล้วตัวเลือกของ Astro จะเลิกดูสุ่ม ๆ และกลายเป็นเรื่องที่สมเหตุสมผล
   </Card>
-  <Card title="Astro 6 ที่ verify แล้ว" icon="seti:html">
-    เขียนบน Astro 6 และตรวจสอบกับ official docs — Content Layer API (`src/content.config.ts` พร้อม loader), `<ClientRouter />`, server islands, Actions และ sessions ถูกสอนตามที่มีอยู่จริงวันนี้
+  <Card title="Astro 7 ที่ verify แล้ว" icon="seti:html">
+    เขียนบน Astro 7 (native Rust compiler, Vite 8 กับ Rolldown, Markdown pipeline ชื่อ Sätteri, route caching ที่ stable แล้ว) และตรวจสอบกับ official docs — Content Layer API (`src/content.config.ts` พร้อม loader), `<ClientRouter />`, server islands, Actions และ sessions ถูกสอนตามที่มีอยู่จริงวันนี้
   </Card>
   <Card title="เน้นการออกแบบ ไม่ใช่แค่ syntax" icon="approve-check">
     ไม่ใช่แค่ "นี่คือ client directive" แต่เป็น "ทำไมถึงส่ง island แทนการ hydrate ทั้งหน้า และ directive ไหนที่เหมาะ" คุณจะ reason ได้ว่าอะไรถูกส่งไป browser อย่างมั่นใจ

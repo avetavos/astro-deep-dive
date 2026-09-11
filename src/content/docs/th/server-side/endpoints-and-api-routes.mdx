@@ -1,6 +1,6 @@
 ---
 title: 'Endpoints & API Routes'
-description: 'route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint และต่างจาก Actions อย่างไร'
+description: 'route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint, entrypoint src/fetch.ts ของ Astro 7 และต่างจาก Actions อย่างไร'
 sidebar:
   order: 3
 ---
@@ -77,8 +77,23 @@ export const prerender = false;
 
 หลักจำง่าย ๆ: **สัญญาแบบ public/external → endpoint; internal app logic ที่เรียกจาก frontend ตัวเอง → Action**
 
+## ไกลกว่า endpoint: `src/fetch.ts` (Astro 7)
+
+endpoint ให้คุณทีละ route Astro 7 ทำให้ **advanced routing** stable: ไฟล์ที่ถูกจองชื่อไว้คือ `src/fetch.ts` ซึ่งอยู่หน้าสุดของ request pipeline ทั้งหมด มัน export **fetch handler** มาตรฐาน — รูปทรง `(request) => Response` แบบเดียวกับที่ Cloudflare Workers, Deno และ Bun ใช้ — คุณจึงรัน logic ก่อน router ของ Astro, mount app **Hono** พร้อม middleware ของมัน หรือเขียน routing เองสำหรับบางส่วนของ URL แล้วปล่อยที่เหลือให้ Astro จัดการต่อ
+
+หยิบมาใช้เมื่อ middleware ไม่พอ: proxy API เก่าไว้ใต้ origin เดียวกัน, ต่อ app Hono/Web-standard ที่มีอยู่แล้วเข้ากับเว็บ Astro หรือจัดรูป request แบบที่ file-based router ทำไม่ได้ ส่วน JSON route เดี่ยว ๆ endpoint ธรรมดายังเป็นเครื่องมือที่ถูกต้อง
+
+เพราะชื่อไฟล์นี้ถูกจองแล้ว `src/fetch.ts` ที่ไม่เกี่ยวกันในโปรเจกต์เก่าต้องเปลี่ยนชื่อ — หรือชี้ให้ Astro ไปที่อื่น:
+
+```js
+// astro.config.mjs
+export default defineConfig({
+  fetchFile: './src/router.ts',   // หรือ null เพื่อปิด advanced routing
+});
+```
+
 <Callout title="สรุปหนึ่งบรรทัด">
-**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แบบ typed เป็น `APIRoute` ซึ่งแต่ละตัว return `Response` มาตรฐาน; handler อ่าน `params`, request body และ cookies จาก context ของตัวเอง endpoint เป็น **static** (build-time, `GET` เท่านั้น) ถ้าไม่เพิ่ม `prerender = false` เพื่อ method แบบ on-demand ใช้ **endpoint** สำหรับสัญญา HTTP แบบ public/external (webhook, REST, download) และใช้ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe
+**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แบบ typed เป็น `APIRoute` ซึ่งแต่ละตัว return `Response` มาตรฐาน; handler อ่าน `params`, request body และ cookies จาก context ของตัวเอง endpoint เป็น **static** (build-time, `GET` เท่านั้น) ถ้าไม่เพิ่ม `prerender = false` เพื่อ method แบบ on-demand ใช้ **endpoint** สำหรับสัญญา HTTP แบบ public/external (webhook, REST, download) และใช้ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe เมื่อต้องอยู่หน้า pipeline ทั้งหมด (app Hono, proxy) fetch handler ใน **`src/fetch.ts`** ที่ Astro 7 จองชื่อไว้คือเครื่องมือที่ใช่
 </Callout>
 
 export const quizEndpoints = [

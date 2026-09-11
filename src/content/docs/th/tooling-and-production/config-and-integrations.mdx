@@ -1,6 +1,6 @@
 ---
 title: 'Config & Integrations'
-description: 'ไฟล์ astro.config.mjs, ระบบ integrations สำหรับเพิ่มความสามารถ, Astro วางอยู่บน Vite ยังไง และการเพิ่ม Tailwind แบบปัจจุบัน'
+description: 'ไฟล์ astro.config.mjs, ระบบ integrations สำหรับเพิ่มความสามารถ, Astro วางอยู่บน Vite 8 กับ Rolldown ยังไง, อะไรย้ายออกจาก experimental ใน Astro 7 และการเพิ่ม Tailwind แบบปัจจุบัน'
 sidebar:
   order: 2
 ---
@@ -50,7 +50,7 @@ integration ทางการที่พบบ่อย (`@astrojs/*`): `react
 
 ## Astro สร้างบน Vite
 
-ข้างใต้นั้น dev server และ build ของ Astro ขับเคลื่อนด้วย **Vite** นั่นคือเหตุผลที่ dev server เริ่มทันที, HMR เร็ว และคุณใช้ plugin จาก ecosystem ของ Vite/Rollup ได้เกือบทั้งหมด เมื่อต้องการอะไรที่ Astro ไม่ได้เปิดให้ตรง ๆ ก็ลงไปที่ key `vite` แล้วตั้งค่า Vite เอง:
+ข้างใต้นั้น dev server และ build ของ Astro ขับเคลื่อนด้วย **Vite** — ตั้งแต่ Astro 7 คือ Vite 8 ที่ bundler default เป็น **Rolldown** ซึ่งเขียนใหม่ด้วย Rust เร็วกว่า Rollup 10–30 เท่าแต่ยังใช้ plugin API เดิม นั่นคือเหตุผลที่ dev server เริ่มทันที, HMR เร็ว และคุณใช้ plugin จาก ecosystem ของ Vite/Rollup ได้เกือบทั้งหมด (เช็กว่า plugin รองรับ Vite 8 ตอนอัปเกรด) เมื่อต้องการอะไรที่ Astro ไม่ได้เปิดให้ตรง ๆ ก็ลงไปที่ key `vite` แล้วตั้งค่า Vite เอง:
 
 ```js
 export default defineConfig({
@@ -65,9 +65,25 @@ export default defineConfig({
 
 export const configDiagram = `flowchart TB
   cfg["astro.config.mjs (defineConfig)"] --> integ["integrations: UI frameworks, mdx, sitemap, adapter"]
-  cfg --> vite["vite: raw Vite/Rollup plugins and config"]
+  cfg --> vite["vite: raw Vite 8 (Rolldown) plugins and config"]
   integ --> build["Astro build"]
   vite --> build`;
+
+## config เปลี่ยนอะไรใน Astro 7
+
+Astro 7 ทำให้หลายฟีเจอร์ stable ซึ่งแปลว่า flag `experimental` ที่คู่กัน **หายไปแล้ว** — ปล่อยทิ้งไว้จะเกิด config error ให้ย้ายขึ้นมาระดับบนสุด:
+
+```js
+// Astro 6                                   // Astro 7
+experimental: { cache: { ... } }             cache: { ... }
+experimental: { routeRules: { ... } }        routeRules: { ... }
+experimental: { logger: { ... } }            logger: { ... }
+experimental: { rustCompiler: true }         // ถอดแล้ว — Rust compiler เป็น compiler เดียว
+experimental: { queuedRendering: true }      // ถอดแล้ว — เป็น default
+experimental: { advancedRouting: true }      // ถอดแล้ว — src/fetch.ts เปิดเสมอ
+```
+
+key ระดับบนใหม่ที่ควรรู้: **`compressHTML`** ตอนนี้ default เป็น `'jsx'` (กฎ whitespace แบบ JSX); **`fetchFile`** ย้ายหรือปิด entrypoint `src/fetch.ts` ที่ถูกจองชื่อ; **`markdown.processor`** ให้สลับ Sätteri เป็น `unified()` จาก `@astrojs/markdown-remark` และมี package หนึ่งที่หายไป: **`@astrojs/db`** ไม่ได้ดูแลต่อแล้ว — ใช้ `node:sqlite`, Drizzle หรือ database แบบ hosted (Turso, Neon, PlanetScale) แทน
 
 ## การเพิ่ม Tailwind (แบบปัจจุบัน)
 
@@ -80,7 +96,7 @@ npx astro add tailwind
 คำสั่งนั้นติดตั้ง plugin, เพิ่มลง Vite config และสร้าง CSS entry ให้ จากนั้น import CSS ครั้งเดียว (เช่นใน layout) แล้วใช้ Tailwind utility class ใน markup ได้ ถ้าเจอ guide ที่อ้างถึง *integration* `@astrojs/tailwind` นั่นคือวิธีเก่า วิธีปัจจุบันคือ Vite plugin ผ่าน `astro add tailwind`
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`astro.config.mjs` ตั้งค่าโปรเจกต์ผ่าน `defineConfig` — field สำคัญคือ `site` (URL ที่ deploy จริง จำเป็นสำหรับ absolute URL), `base` (path prefix), `output`, `adapter` และ `integrations` **integrations** (`@astrojs/*` เพิ่มด้วย `npx astro add`) ขยาย build ด้วย UI framework, MDX, sitemap และ adapter Astro รันบน **Vite** จึงลงไปที่ key `vite` เพื่อใช้ raw plugin ได้ — และ Tailwind ปัจจุบันเป็น Vite plugin ที่เพิ่มด้วย `astro add tailwind` ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า
+`astro.config.mjs` ตั้งค่าโปรเจกต์ผ่าน `defineConfig` — field สำคัญคือ `site` (URL ที่ deploy จริง จำเป็นสำหรับ absolute URL), `base` (path prefix), `output`, `adapter` และ `integrations` **integrations** (`@astrojs/*` เพิ่มด้วย `npx astro add`) ขยาย build ด้วย UI framework, MDX, sitemap และ adapter Astro รันบน **Vite** จึงลงไปที่ key `vite` เพื่อใช้ raw plugin ได้ — และ Tailwind ปัจจุบันเป็น Vite plugin ที่เพิ่มด้วย `astro add tailwind` ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า ใน Astro 7 key `cache`, `routeRules` และ `logger` อยู่ระดับบนสุด (flag `experimental` หายไปแล้ว), `compressHTML` default เป็น `'jsx'` และ `@astrojs/db` ถูกถอดออก
 </Callout>
 
 export const quizConfig = [
@@ -121,6 +137,16 @@ export const quizConfig = [
       'Tailwind Vite plugin ติดตั้งผ่าน `npx astro add tailwind`',
       'CDN script tag อย่างเดียว',
       'Tailwind มีมาให้ในตัว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'หลังอัปเกรดเป็น Astro 7 config ของคุณยังมี `experimental: { cache: ... }` จะเกิดอะไรขึ้น?',
+    options: [
+      'ยังทำงานได้ — experimental flag ถูกเมิน',
+      'เป็น config error: `cache` (รวมถึง `routeRules`, `logger`) ตอนนี้เป็น key ระดับบนสุด และ experimental flag ถูกถอดออกแล้ว',
+      'caching ถูกปิดเงียบ ๆ',
+      'Astro ลดรุ่นลงเป็นเวอร์ชัน 6',
     ],
     answer: 1,
   },

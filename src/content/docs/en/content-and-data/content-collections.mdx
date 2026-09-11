@@ -34,7 +34,7 @@ const blog = defineCollection({
 export const collections = { blog };
 ```
 
-The key Astro 6 rule: **every collection must declare a `loader`**. The old behavior — dropping files in `src/content/blog/` and having them auto-collected — is gone. Being explicit means the same API can load local files today and a remote API tomorrow, with no change to how you query.
+The key rule since Astro 5 (unchanged in Astro 7): **every collection must declare a `loader`**. The old behavior — dropping files in `src/content/blog/` and having them auto-collected — is gone. Being explicit means the same API can load local files today and a remote API tomorrow, with no change to how you query.
 
 ## Loaders: where content comes from
 
@@ -111,7 +111,7 @@ A collection is `defineCollection({ loader, schema })` in **`src/content.config.
 
 export const quizCollections = [
   {
-    q: 'Where do you define content collections in Astro 6?',
+    q: 'Where do you define content collections in Astro 7?',
     options: [
       'In astro.config.mjs',
       'In src/content.config.ts, with defineCollection',

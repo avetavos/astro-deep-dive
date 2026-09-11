@@ -1,6 +1,6 @@
 ---
 title: 'Markdown & MDX'
-description: 'Markdown and MDX pages, frontmatter, applying a layout to content, embedding components in MDX, and when to reach for .md versus .mdx.'
+description: 'Markdown and MDX pages, frontmatter, applying a layout to content, embedding components in MDX, the Sätteri pipeline in Astro 7, and when to reach for .md versus .mdx.'
 sidebar:
   order: 5
 ---
@@ -91,6 +91,28 @@ export const diagram = `flowchart LR
   layout --> out["final page"]
   comp --> out`;
 
+## Astro 7 renders Markdown with Sätteri
+
+Since Astro 7, `.md` and `.mdx` files are rendered by **Sätteri**, Astro's native, Rust-powered Markdown pipeline, instead of the JavaScript remark/rehype (unified) pipeline. For plain content nothing changes except speed — it is one of the reasons Astro 7 builds are 15–61% faster.
+
+Where it matters is **plugins**. If your project relies on remark or rehype plugins (custom containers, reading-time, image transforms), those are unified plugins, and Sätteri does not run them. Opt back into the unified pipeline explicitly:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
+
+export default defineConfig({
+  markdown: {
+    processor: unified(),          // keep remark/rehype plugins working
+    remarkPlugins: [/* ... */],
+    rehypePlugins: [/* ... */],
+  },
+});
+```
+
+`@astrojs/markdown-remark` is now a separate install. The rule of thumb: start with Sätteri (the default) and only switch the processor when a plugin you actually need has no native equivalent.
+
 ## `.md` versus `.mdx`
 
 Reach for **`.md`** when the file is pure content — a blog post, a doc page, notes. It is simpler and has no component overhead.
@@ -102,7 +124,7 @@ Reach for **`.mdx`** when the content needs to embed components — a callout bo
 Putting Markdown files directly in `src/pages/` works, but it does not scale to a large blog or docs site: there is no schema validation, no typed frontmatter, no querying. The modern way to manage **many** Markdown/MDX files is **content collections** — a typed, validated, queryable content layer — which is the entire focus of the next module. Loose pages are fine for a handful of files; collections are how you run real content sites.
 
 <Callout title="The one-line takeaway">
-`.md` and `.mdx` files in `src/pages/` are routes rendered to HTML, with **frontmatter** for metadata and a `layout` key to wrap the content in a shell (the body fills the layout's `<slot />`). **MDX** adds the ability to import and render components — including islands — inside prose. Use `.md` for pure content and `.mdx` when you need components; and for **many** files, graduate to typed **content collections** (next module).
+`.md` and `.mdx` files in `src/pages/` are routes rendered to HTML, with **frontmatter** for metadata and a `layout` key to wrap the content in a shell (the body fills the layout's `<slot />`). **MDX** adds the ability to import and render components — including islands — inside prose. Use `.md` for pure content and `.mdx` when you need components; and for **many** files, graduate to typed **content collections** (next module). Astro 7 renders both with the native **Sätteri** pipeline; opt into `@astrojs/markdown-remark`'s `unified()` processor only when you need remark/rehype plugins.
 </Callout>
 
 export const quizMarkdown = [
@@ -143,6 +165,16 @@ export const quizMarkdown = [
       'Content collections — a typed, validated, queryable content layer (next module)',
       'A database',
       'One giant .mdx file',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Your remark plugins stopped running after upgrading to Astro 7. Why, and what do you do?',
+    options: [
+      'Plugins are no longer supported in Astro',
+      'Astro 7 renders Markdown with the native Sätteri pipeline; install `@astrojs/markdown-remark` and set `markdown.processor: unified()` to keep remark/rehype plugins',
+      'Rename the files to .mdx',
+      'Move the plugins into `vite.plugins`',
     ],
     answer: 1,
   },

@@ -1,6 +1,6 @@
 ---
 title: 'Markdown & MDX'
-description: 'หน้า Markdown กับ MDX, frontmatter, การใส่ layout ให้ content, การฝัง component ใน MDX และเมื่อไหร่ควรใช้ .md กับ .mdx'
+description: 'หน้า Markdown กับ MDX, frontmatter, การใส่ layout ให้ content, การฝัง component ใน MDX, pipeline Sätteri ใน Astro 7 และเมื่อไหร่ควรใช้ .md กับ .mdx'
 sidebar:
   order: 5
 ---
@@ -91,6 +91,28 @@ export const diagram = `flowchart LR
   layout --> out["final page"]
   comp --> out`;
 
+## Astro 7 render Markdown ด้วย Sätteri
+
+ตั้งแต่ Astro 7 ไฟล์ `.md` และ `.mdx` ถูก render ด้วย **Sätteri** ซึ่งเป็น Markdown pipeline แบบ native ที่ขับเคลื่อนด้วย Rust ของ Astro เอง แทน pipeline remark/rehype (unified) ที่เป็น JavaScript สำหรับ content ธรรมดาไม่มีอะไรเปลี่ยนนอกจากความเร็ว — นี่เป็นหนึ่งในเหตุผลที่ build ของ Astro 7 เร็วขึ้น 15–61%
+
+จุดที่มีผลคือ **plugin** ถ้าโปรเจกต์ของคุณพึ่งพา remark หรือ rehype plugin (custom container, reading-time, image transform) พวกนั้นคือ unified plugin และ Sätteri ไม่รันมัน ต้อง opt กลับไปใช้ unified pipeline อย่างชัดเจน:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
+
+export default defineConfig({
+  markdown: {
+    processor: unified(),          // ให้ remark/rehype plugin ทำงานต่อได้
+    remarkPlugins: [/* ... */],
+    rehypePlugins: [/* ... */],
+  },
+});
+```
+
+`@astrojs/markdown-remark` ตอนนี้เป็น package ที่ต้องติดตั้งแยก กฎง่าย ๆ คือ เริ่มด้วย Sätteri (default) แล้วค่อยสลับ processor เมื่อ plugin ที่คุณต้องใช้จริง ๆ ไม่มีของ native ให้แทน
+
 ## `.md` กับ `.mdx`
 
 หยิบ **`.md`** มาใช้เมื่อไฟล์เป็น content ล้วน ๆ — บล็อกโพสต์, หน้า doc, โน้ต `.md` เรียบง่ายกว่าและไม่มี overhead ของ component
@@ -102,7 +124,7 @@ export const diagram = `flowchart LR
 การวางไฟล์ Markdown ตรง ๆ ใน `src/pages/` ใช้ได้ แต่ไม่สเกลไปยังบล็อกหรือไซต์ doc ขนาดใหญ่: ไม่มี schema validation, ไม่มี frontmatter ที่มี type, ไม่มีการ query วิธีสมัยใหม่ในการจัดการไฟล์ Markdown/MDX **จำนวนมาก** คือ **content collection** — ชั้น content ที่มี type, validate และ query ได้ — ที่เป็นเนื้อหาทั้งหมดของโมดูลถัดไป หน้าหลวม ๆ โอเคสำหรับไฟล์ไม่กี่ไฟล์; collection คือวิธีรันไซต์ content จริงจัง
 
 <Callout title="สรุปหนึ่งบรรทัด">
-ไฟล์ `.md` และ `.mdx` ใน `src/pages/` เป็น route ที่ render เป็น HTML โดยมี **frontmatter** สำหรับ metadata และ key `layout` เพื่อห่อ content ใน shell (body เติมลง `<slot />` ของ layout) **MDX** เพิ่มความสามารถ import แล้ว render component — รวมถึง island — ในร้อยแก้ว ใช้ `.md` สำหรับ content ล้วน ๆ และ `.mdx` เมื่อต้องการ component; และสำหรับไฟล์ **จำนวนมาก** ให้เลื่อนขั้นไปใช้ **content collection** ที่มี type (โมดูลถัดไป)
+ไฟล์ `.md` และ `.mdx` ใน `src/pages/` เป็น route ที่ render เป็น HTML โดยมี **frontmatter** สำหรับ metadata และ key `layout` เพื่อห่อ content ใน shell (body เติมลง `<slot />` ของ layout) **MDX** เพิ่มความสามารถ import แล้ว render component — รวมถึง island — ในร้อยแก้ว ใช้ `.md` สำหรับ content ล้วน ๆ และ `.mdx` เมื่อต้องการ component; และสำหรับไฟล์ **จำนวนมาก** ให้เลื่อนขั้นไปใช้ **content collection** ที่มี type (โมดูลถัดไป) Astro 7 render ทั้งสองแบบด้วย pipeline native ชื่อ **Sätteri**; opt ไปใช้ processor `unified()` จาก `@astrojs/markdown-remark` เฉพาะเมื่อต้องใช้ remark/rehype plugin
 </Callout>
 
 export const quizMarkdown = [
@@ -143,6 +165,16 @@ export const quizMarkdown = [
       'content collection — ชั้น content ที่มี type, validate และ query ได้ (โมดูลถัดไป)',
       'database',
       'ไฟล์ .mdx ยักษ์ไฟล์เดียว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'remark plugin ของคุณหยุดทำงานหลังอัปเกรดเป็น Astro 7 เพราะอะไร และทำยังไง?',
+    options: [
+      'Astro ไม่รองรับ plugin อีกแล้ว',
+      'Astro 7 render Markdown ด้วย pipeline native ชื่อ Sätteri; ติดตั้ง `@astrojs/markdown-remark` แล้วตั้ง `markdown.processor: unified()` เพื่อให้ remark/rehype plugin ทำงานต่อ',
+      'เปลี่ยนชื่อไฟล์เป็น .mdx',
+      'ย้าย plugin ไปไว้ใน `vite.plugins`',
     ],
     answer: 1,
   },

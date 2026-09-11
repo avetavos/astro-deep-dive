@@ -1,6 +1,6 @@
 ---
 title: 'Deployment & Ecosystem'
-description: 'การ build สำหรับ production, deploy เว็บแบบ static vs on-demand, ตั้ง site และ base ให้ถูก และ ecosystem ของ Astro รวมถึง Starlight'
+description: 'การ build สำหรับ production, deploy เว็บแบบ static vs on-demand, ตั้ง site และ base ให้ถูก, อัปเกรดจาก Astro 6 เป็น 7 และ ecosystem ของ Astro รวมถึง Starlight'
 sidebar:
   order: 5
 ---
@@ -53,13 +53,28 @@ export const deployDiagram = `flowchart TB
 Astro เป็น content-first และ ecosystem ของตัวเองสะท้อนสิ่งนั้น:
 
 - **Starlight** — documentation-site framework ทางการที่สร้างบน Astro (คอร์สนี้ก็สร้างด้วย Starlight): sidebar, search, i18n และ dark mode มาในตัว
-- **Integrations directory** — catalog ขนาดใหญ่ของ integration ทางการและ community: UI framework, CMS connector, image service, analytics และ adapter สำหรับ host หลักทุกตัว
+- **Integrations directory** — catalog ขนาดใหญ่ของ integration ทางการและ community: UI framework, CMS connector, image service, analytics และ adapter สำหรับ host หลักทุกตัว (มี package ทางการหนึ่งตัวที่หายไปใน Astro 7: `@astrojs/db` ไม่ได้ดูแลต่อแล้ว — ใช้ `node:sqlite`, Drizzle หรือ database แบบ hosted แทน)
 - **content-focused patterns** — เมื่อรวมกับ content collection Astro เป็นตัวเลือกที่เหมาะสำหรับ blog, docs, marketing site และ headless-CMS front-end ที่คุณได้เว็บ static (หรือ hybrid) ที่เร็วพร้อม content ที่มี type
 
 หยิบ framework อย่าง **Starlight** เมื่อตรงกับ use case ของคุณ แทนที่จะสร้าง docs infrastructure ใหม่ด้วยมือ — สัญชาตญาณ "compose อย่าสร้างใหม่" เดียวกันที่ไหลผ่าน Astro
 
+## อัปเกรดจาก Astro 6 เป็น 7
+
+โปรเจกต์ส่วนใหญ่อัปเกรดได้ในบ่ายเดียว checklist มีดังนี้:
+
+1. **Node 22.12+** เป็นขั้นต่ำ (เท่ากับ Astro 6) รัน `npx @astrojs/upgrade` เพื่อ bump `astro` และ integration `@astrojs/*` ทุกตัวพร้อมกัน
+2. **ถอด experimental flag ที่ stable แล้ว**: `experimental.cache`, `experimental.routeRules`, `experimental.logger` ย้ายไปเป็น `cache`, `routeRules`, `logger` ระดับบนสุด ส่วน `experimental.rustCompiler`, `queuedRendering`, `advancedRouting` ลบทิ้ง (เป็น default แล้ว)
+3. **แก้สิ่งที่ Rust compiler ปฏิเสธ**: tag ที่ไม่ปิดและการซ้อนที่ผิดเป็น build error แล้ว error message ชี้ไฟล์และบรรทัดให้
+4. **เช็ก whitespace**: `compressHTML` default เป็น `'jsx'` ใส่ `{" "}` ตรงที่ inline element ต้องมีช่องว่าง หรือตั้ง `compressHTML: true` ชั่วคราว
+5. **Markdown plugin**: ถ้าใช้ remark/rehype plugin ให้ติดตั้ง `@astrojs/markdown-remark` และตั้ง `markdown: { processor: unified() }` ถ้าไม่ใช้ก็รับความเร็วของ Sätteri ไปเลย
+6. **Vite 8**: ทบทวน migration note ของ Vite 8 สำหรับ plugin เฉพาะของ Vite ที่ตั้งไว้ใต้ key `vite`
+7. **เปลี่ยนชื่อ `src/fetch.ts`** ถ้าคุณมีไฟล์ชื่อนี้ที่ไม่เกี่ยวกัน (หรือตั้ง `fetchFile`)
+8. **API ที่ถูกถอด**: `@astrojs/db` (เปลี่ยนไป `node:sqlite`, Drizzle หรือ DB แบบ hosted), ค่าคงที่ event ของ `astro:transitions` (ใช้ชื่อ event แบบ string เช่น `'astro:before-preparation'`) และ `getContainerRenderer` ตอนนี้ import จาก `@astrojs/react/container-renderer`
+
+จากนั้น `astro check && astro build` — build เร็วขึ้นอย่างเห็นได้ชัด ซึ่งคือรางวัล
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`astro build` เขียน `dist/`: เป็นแค่ **ไฟล์ HTML** สำหรับเว็บ static (deploy ไป CDN อะไรก็ได้ — Cloudflare Pages, Netlify, S3) หรือ **server entry + assets** สำหรับ on-demand ซึ่งต้องมี **adapter** ที่ตรงกันและ runtime ตั้ง **`site`** เป็น URL ที่ deploy จริง (absolute URL ทั้งหมดอิงจากค่านี้) และ **`base`** เป็น subpath ที่ถูก serve (ไม่ตรงแล้ว asset 404) ecosystem เป็น content-first: **Starlight** สำหรับ docs พร้อม integrations directory ขนาดใหญ่ — compose กับของที่มีอยู่แทนที่จะสร้างใหม่
+`astro build` เขียน `dist/`: เป็นแค่ **ไฟล์ HTML** สำหรับเว็บ static (deploy ไป CDN อะไรก็ได้ — Cloudflare Pages, Netlify, S3) หรือ **server entry + assets** สำหรับ on-demand ซึ่งต้องมี **adapter** ที่ตรงกันและ runtime ตั้ง **`site`** เป็น URL ที่ deploy จริง (absolute URL ทั้งหมดอิงจากค่านี้) และ **`base`** เป็น subpath ที่ถูก serve (ไม่ตรงแล้ว asset 404) ecosystem เป็น content-first: **Starlight** สำหรับ docs พร้อม integrations directory ขนาดใหญ่ — compose กับของที่มีอยู่แทนที่จะสร้างใหม่ การอัปเกรด 6 → 7 ส่วนใหญ่คือ `npx @astrojs/upgrade`, ลบ flag `experimental` ที่ stable แล้ว และแก้สิ่งที่ compiler ที่เข้มงวดกับ whitespace แบบ JSX ชี้ให้เห็น
 </Callout>
 
 export const quizDeploy = [
@@ -100,6 +115,16 @@ export const quizDeploy = [
       'documentation-site framework ทางการที่สร้างบน Astro (sidebar, search, i18n, dark mode)',
       'CSS library',
       'Astro adapter',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อไหนเป็นส่วนหนึ่งของการอัปเกรด Astro 6 → 7 ตามปกติ?',
+    options: [
+      'เขียน component ทั้งหมดใหม่ด้วย React',
+      'ย้าย `experimental.cache`/`routeRules`/`logger` ไปเป็น key ระดับบนสุด, แก้ tag ที่ Rust compiler ปฏิเสธ และเช็ก whitespace แบบ JSX',
+      'ลดรุ่น Node เป็น 18',
+      'แทนที่ content collection ด้วย `Astro.glob()`',
     ],
     answer: 1,
   },

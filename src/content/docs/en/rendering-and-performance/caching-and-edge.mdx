@@ -1,6 +1,6 @@
 ---
 title: 'Caching & Edge'
-description: 'Caching on-demand responses with Cache-Control, serving from the CDN edge, and combining a cacheable static shell with server islands for the personalized parts.'
+description: 'Caching on-demand responses with Cache-Control, the stable route-caching config in Astro 7, serving from the CDN edge, and combining a cacheable static shell with server islands for the personalized parts.'
 sidebar:
   order: 5
 ---
@@ -48,6 +48,29 @@ export const edgeDiagram = `flowchart LR
   edge -->|cache miss| origin["Origin renders, then caches at edge"]
   origin --> edge`;
 
+## Route caching in config (Astro 7)
+
+Setting headers by hand works, but Astro 7 promoted **route caching** from an experimental flag to a stable, top-level config. Instead of every on-demand page remembering to set `Cache-Control`, you declare caching once and Astro applies it — with a platform-agnostic cache API plus CDN providers for Netlify, Vercel, and Cloudflare.
+
+```js
+// astro.config.mjs (Astro 7 — no experimental flag)
+import { defineConfig } from 'astro/config';
+import { memoryCache } from 'astro/config';   // dev/single-instance provider
+
+export default defineConfig({
+  output: 'server',
+  cache: { provider: memoryCache() },        // was experimental.cache in Astro 6
+  routeRules: { /* per-route caching rules — was experimental.routeRules */ },
+});
+```
+
+Two things to internalize:
+
+- **`cache.provider`** decides *where* rendered responses live: an in-memory provider for development or a single server, or a CDN provider so your host's edge cache does the work.
+- **`routeRules`** describe *which* routes are cacheable and for how long, so the policy lives next to the rest of your config instead of being scattered across pages.
+
+If you upgraded from Astro 6, move both keys out of `experimental` — the flags no longer exist. `Cache-Control` headers set in a page still work and still matter for browsers and third-party CDNs; route caching is the layer that makes the *server side* of that story declarative.
+
 ## The powerful pattern: cacheable shell + server islands
 
 Pure per-request SSR is hard to cache — if the page contains "Welcome back, Ana," you can't share that response with the next visitor. The elegant fix combines what earlier modules taught: make the **page shell static/cacheable**, and defer *only the personalized part* to a **server island** (`server:defer`).
@@ -71,7 +94,7 @@ Now the heavy, shared part is cached at the edge and served instantly, while the
 If a page is mostly the same for everyone with a few dynamic bits, **static (or cached) + islands** almost always beats full SSR: better cacheability, less server load, faster responses. Reserve full on-demand rendering for pages that are genuinely different on every request (a personalized dashboard, search results). Choosing the *cacheable* option is itself a performance decision.
 
 <Callout title="The one-line takeaway">
-The fastest response is a cached one. For on-demand routes, set **`Cache-Control`** on `Astro.response.headers` (`s-maxage` for the CDN, `stale-while-revalidate` to avoid cold renders) so a CDN can serve the HTML from the **edge**. Best of all, keep the **shell static/cacheable and defer only the personalized part to a `server:defer` server island** — edge-speed pages with per-user bits. Prefer static-with-islands over full SSR whenever a page is mostly shared.
+The fastest response is a cached one. For on-demand routes, set **`Cache-Control`** on `Astro.response.headers` (`s-maxage` for the CDN, `stale-while-revalidate` to avoid cold renders) so a CDN can serve the HTML from the **edge**. Best of all, keep the **shell static/cacheable and defer only the personalized part to a `server:defer` server island** — edge-speed pages with per-user bits. Prefer static-with-islands over full SSR whenever a page is mostly shared. In Astro 7, declare caching once with the stable top-level **`cache`** and **`routeRules`** config instead of sprinkling headers.
 </Callout>
 
 export const quizCache = [
@@ -112,6 +135,16 @@ export const quizCache = [
       'When a page is mostly the same for everyone with a few dynamic bits — you get better cacheability, less server load, and faster responses',
       'Only for API routes',
       'Only when there are no images',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where does route caching live in an Astro 7 config?',
+    options: [
+      'Under `experimental.cache` — it is still experimental',
+      'Top-level `cache` (provider) and `routeRules` — the experimental flags were removed in Astro 7',
+      'In `vite.cache`',
+      'Only in `Cache-Control` headers; there is no config',
     ],
     answer: 1,
   },

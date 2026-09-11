@@ -1,6 +1,6 @@
 ---
 title: 'Caching & Edge'
-description: 'cache response แบบ on-demand ด้วย Cache-Control, serve จาก CDN edge และรวม static shell ที่ cache ได้เข้ากับ server islands สำหรับส่วนที่ personalize'
+description: 'cache response แบบ on-demand ด้วย Cache-Control, config route caching ที่ stable ใน Astro 7, serve จาก CDN edge และรวม static shell ที่ cache ได้เข้ากับ server islands สำหรับส่วนที่ personalize'
 sidebar:
   order: 5
 ---
@@ -48,6 +48,29 @@ export const edgeDiagram = `flowchart LR
   edge -->|cache miss| origin["Origin renders, then caches at edge"]
   origin --> edge`;
 
+## route caching ใน config (Astro 7)
+
+การตั้ง header เองก็ใช้ได้ แต่ Astro 7 เลื่อน **route caching** จาก experimental flag ขึ้นมาเป็น config ระดับบนสุดที่ stable แล้ว แทนที่ทุกหน้า on-demand ต้องจำว่าให้ตั้ง `Cache-Control` คุณประกาศ caching ครั้งเดียวแล้ว Astro นำไปใช้ให้ — พร้อม cache API ที่ไม่ผูกกับ platform และ CDN provider สำหรับ Netlify, Vercel และ Cloudflare
+
+```js
+// astro.config.mjs (Astro 7 — ไม่ต้องมี experimental flag)
+import { defineConfig } from 'astro/config';
+import { memoryCache } from 'astro/config';   // provider สำหรับ dev / instance เดียว
+
+export default defineConfig({
+  output: 'server',
+  cache: { provider: memoryCache() },        // ใน Astro 6 คือ experimental.cache
+  routeRules: { /* กฎ caching รายเส้นทาง — ใน Astro 6 คือ experimental.routeRules */ },
+});
+```
+
+สองอย่างที่ควรจำ:
+
+- **`cache.provider`** ตัดสินว่า response ที่ render แล้ว *อยู่ที่ไหน*: provider แบบ in-memory สำหรับ development หรือ server เดียว หรือ CDN provider เพื่อให้ edge cache ของ host ทำงานแทน
+- **`routeRules`** บอกว่า route *ไหน* cache ได้และนานแค่ไหน นโยบายจึงอยู่ข้าง ๆ config ที่เหลือแทนที่จะกระจายอยู่ตามหน้า
+
+ถ้าอัปเกรดมาจาก Astro 6 ให้ย้าย key ทั้งสองออกจาก `experimental` — flag พวกนั้นไม่มีแล้ว header `Cache-Control` ที่ตั้งในหน้ายังใช้ได้และยังสำคัญสำหรับ browser กับ CDN ภายนอก ส่วน route caching คือชั้นที่ทำให้ฝั่ง *server* ของเรื่องนี้เป็นแบบ declarative
+
 ## pattern ที่ทรงพลัง: shell ที่ cache ได้ + server islands
 
 pure per-request SSR cache ยาก — ถ้าหน้ามี "Welcome back, Ana" เรา share response นั้นกับผู้ชมคนถัดไปไม่ได้ ทางแก้ที่สวยงามรวมสิ่งที่โมดูลก่อนหน้าสอน: ทำให้ **page shell เป็น static/cache ได้** และ defer *เฉพาะส่วนที่ personalize* ไปเป็น **server island** (`server:defer`):
@@ -71,7 +94,7 @@ pure per-request SSR cache ยาก — ถ้าหน้ามี "Welcome ba
 ถ้าหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนโดยมีส่วน dynamic นิดหน่อย **static (หรือ cached) + islands** มักชนะ full SSR: cache ได้ดีกว่า, server load น้อยกว่า, response เร็วกว่า เก็บ full on-demand rendering ไว้สำหรับหน้าที่ต่างจริง ๆ ทุก request (dashboard ที่ personalize, ผลการ search) การเลือก option ที่ *cache ได้* เองก็เป็นการตัดสินใจด้าน performance
 
 <Callout title="สรุปบรรทัดเดียว">
-response ที่เร็วที่สุดคืออันที่ cache ไว้ สำหรับ route แบบ on-demand ให้ตั้ง **`Cache-Control`** บน `Astro.response.headers` (`s-maxage` สำหรับ CDN, `stale-while-revalidate` เพื่อเลี่ยง cold render) เพื่อให้ CDN serve HTML จาก **edge** ได้ ดีที่สุดคือเก็บ **shell เป็น static/cache ได้ และ defer เฉพาะส่วนที่ personalize ไปเป็น `server:defer` server island** — ได้หน้าที่เร็วระดับ edge พร้อมส่วน per-user เลือก static-with-islands มากกว่า full SSR เมื่อหน้าส่วนใหญ่ share กัน
+response ที่เร็วที่สุดคืออันที่ cache ไว้ สำหรับ route แบบ on-demand ให้ตั้ง **`Cache-Control`** บน `Astro.response.headers` (`s-maxage` สำหรับ CDN, `stale-while-revalidate` เพื่อเลี่ยง cold render) เพื่อให้ CDN serve HTML จาก **edge** ได้ ดีที่สุดคือเก็บ **shell เป็น static/cache ได้ และ defer เฉพาะส่วนที่ personalize ไปเป็น `server:defer` server island** — ได้หน้าที่เร็วระดับ edge พร้อมส่วน per-user เลือก static-with-islands มากกว่า full SSR เมื่อหน้าส่วนใหญ่ share กัน ใน Astro 7 ประกาศ caching ครั้งเดียวด้วย config ระดับบน **`cache`** และ **`routeRules`** ที่ stable แล้ว แทนการโปรย header ไปทั่ว
 </Callout>
 
 export const quizCache = [
@@ -112,6 +135,16 @@ export const quizCache = [
       'เมื่อหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนโดยมีส่วน dynamic นิดหน่อย — ได้ cache ที่ดีกว่า, server load น้อยกว่า และ response เร็วกว่า',
       'เฉพาะ API route',
       'เฉพาะตอนไม่มี image',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'route caching อยู่ตรงไหนใน config ของ Astro 7?',
+    options: [
+      'ใต้ `experimental.cache` — ยังเป็น experimental อยู่',
+      '`cache` (provider) และ `routeRules` ระดับบนสุด — experimental flag ถูกถอดออกใน Astro 7',
+      'ใน `vite.cache`',
+      'มีแค่ใน header `Cache-Control` ไม่มี config',
     ],
     answer: 1,
   },

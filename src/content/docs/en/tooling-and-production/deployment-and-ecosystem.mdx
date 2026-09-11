@@ -1,6 +1,6 @@
 ---
 title: 'Deployment & Ecosystem'
-description: 'Building for production, deploying static vs on-demand sites, setting site and base correctly, and the Astro ecosystem including Starlight.'
+description: 'Building for production, deploying static vs on-demand sites, setting site and base correctly, upgrading from Astro 6 to 7, and the Astro ecosystem including Starlight.'
 sidebar:
   order: 5
 ---
@@ -53,13 +53,28 @@ Two config values bite people at deploy time:
 Astro is content-first, and its ecosystem reflects that:
 
 - **Starlight** — an official documentation-site framework built on Astro (it's what this course is built with): sidebars, search, i18n, and dark mode out of the box.
-- **Integrations directory** — a large catalog of official and community integrations: UI frameworks, CMS connectors, image services, analytics, and adapters for every major host.
+- **Integrations directory** — a large catalog of official and community integrations: UI frameworks, CMS connectors, image services, analytics, and adapters for every major host. (One official package left in Astro 7: `@astrojs/db` is no longer maintained — reach for `node:sqlite`, Drizzle, or a hosted database instead.)
 - **Content-focused patterns** — combined with content collections, Astro is a natural fit for blogs, docs, marketing sites, and headless-CMS front-ends, where you get a fast static (or hybrid) site with typed content.
 
 Reach for a framework like **Starlight** when it matches your use case rather than rebuilding docs infrastructure by hand — the same "compose, don't reinvent" instinct that runs through Astro.
 
+## Upgrading from Astro 6 to 7
+
+Most projects upgrade in an afternoon. The checklist:
+
+1. **Node 22.12+** is the floor (unchanged from Astro 6). Run `npx @astrojs/upgrade` to bump `astro` and every `@astrojs/*` integration together.
+2. **Remove the stabilised experimental flags**: `experimental.cache`, `experimental.routeRules`, `experimental.logger` move to top-level `cache`, `routeRules`, `logger`; `experimental.rustCompiler`, `queuedRendering`, `advancedRouting` are deleted (now default).
+3. **Fix what the Rust compiler now rejects**: unclosed tags and invalid nesting are build errors. The error messages point at the file and line.
+4. **Check whitespace**: `compressHTML` defaults to `'jsx'`. Add `{" "}` where inline elements need a space, or set `compressHTML: true` temporarily.
+5. **Markdown plugins**: if you use remark/rehype plugins, install `@astrojs/markdown-remark` and set `markdown: { processor: unified() }`; otherwise enjoy Sätteri.
+6. **Vite 8**: review the Vite 8 migration notes for any Vite-specific plugin you configured under the `vite` key.
+7. **Rename `src/fetch.ts`** if you had an unrelated file by that name (or set `fetchFile`).
+8. **Removed APIs**: `@astrojs/db` (switch to `node:sqlite`, Drizzle, or a hosted DB), the `astro:transitions` event constants (use the string event names such as `'astro:before-preparation'`), and `getContainerRenderer` now imported from `@astrojs/react/container-renderer`.
+
+Then `astro check && astro build` — the build is noticeably faster, which is the reward.
+
 <Callout title="The one-line takeaway">
-`astro build` writes `dist/`: just **HTML files** for a static site (deployable to any CDN — Cloudflare Pages, Netlify, S3), or a **server entry + assets** for on-demand, which needs the matching **adapter** and a runtime. Set **`site`** to your real deployed URL (absolute URLs depend on it) and **`base`** to the subpath you're served from (a mismatch 404s your assets). The ecosystem is content-first: **Starlight** for docs, plus a large integrations directory — compose with it rather than rebuilding.
+`astro build` writes `dist/`: just **HTML files** for a static site (deployable to any CDN — Cloudflare Pages, Netlify, S3), or a **server entry + assets** for on-demand, which needs the matching **adapter** and a runtime. Set **`site`** to your real deployed URL (absolute URLs depend on it) and **`base`** to the subpath you're served from (a mismatch 404s your assets). The ecosystem is content-first: **Starlight** for docs, plus a large integrations directory — compose with it rather than rebuilding. Upgrading 6 → 7 is mostly `npx @astrojs/upgrade`, deleting stabilised `experimental` flags, and fixing what the strict compiler and JSX whitespace now flag.
 </Callout>
 
 export const quizDeploy = [
@@ -100,6 +115,16 @@ export const quizDeploy = [
       'An official documentation-site framework built on Astro (sidebars, search, i18n, dark mode)',
       'A CSS library',
       'An Astro adapter',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which of these is part of a typical Astro 6 → 7 upgrade?',
+    options: [
+      'Rewriting all components in React',
+      'Moving `experimental.cache`/`routeRules`/`logger` to top-level keys, fixing tags the Rust compiler now rejects, and checking JSX-style whitespace',
+      'Downgrading Node to 18',
+      'Replacing content collections with `Astro.glob()`',
     ],
     answer: 1,
   },

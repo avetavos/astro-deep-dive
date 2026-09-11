@@ -1,6 +1,6 @@
 ---
 title: 'Astro Syntax Deep Dive'
-description: 'template expression, conditional กับ loop, Fragment, set:html กับ set:text, spread attribute และ dynamic tag — syntax แบบ JSX ที่เปลี่ยนข้อมูลให้เป็น markup'
+description: 'template expression, conditional กับ loop, Fragment, set:html กับ set:text, spread attribute, dynamic tag และ compiler ที่เข้มงวดของ Astro 7 กับ whitespace แบบ JSX — syntax แบบ JSX ที่เปลี่ยนข้อมูลให้เป็น markup'
 sidebar:
   order: 2
 ---
@@ -135,12 +135,40 @@ export const diagram = `flowchart LR
   eval --> raw["set:html bypasses escaping for trusted HTML"]
   raw --> html`;
 
+## Astro 7: compiler ที่เข้มงวดและ whitespace แบบ JSX
+
+Astro 7 เปลี่ยนจาก compiler ตัวเก่าที่เขียนด้วย Go มาเป็น **Rust compiler** และตอนนี้เป็น compiler เดียวที่มี มันเร็วขึ้น และ *เข้มงวดขึ้น*: compiler เก่าแอบ "แก้" HTML ที่พังให้เงียบ ๆ ส่วนตัวใหม่รายงานเป็น build error
+
+```astro
+<!-- Astro 6 ปิด <p> ตัวแรกให้เงียบ ๆ ส่วน Astro 7: error, unclosed tag -->
+<p>Hello world<p>Hello world</p>
+
+<!-- เขียนให้ตรงกับที่ตั้งใจ -->
+<p>Hello world</p>
+<p>Hello world</p>
+```
+
+tag ที่ไม่ปิดและการซ้อนที่ผิด (เช่น `<div>` ใน `<p>`) จะทำให้ build ล้มแทนที่จะถูกแก้ทับให้ ซึ่งเป็น trade ที่คุ้ม เพราะ output ที่ถูก "แก้" ให้มักไม่ใช่สิ่งที่คุณตั้งใจอยู่แล้ว
+
+เรื่องที่สองคือ **whitespace** option `compressHTML` ตอนนี้ default เป็น `'jsx'` ดังนั้น whitespace ระหว่าง element จะเป็นไปตามกฎของ JSX — ขึ้นบรรทัดใหม่ระหว่าง inline element สองตัวไม่ทำให้เกิดช่องว่างที่มองเห็นอีกต่อไป:
+
+```astro
+<!-- Astro 6 render เป็น "hello world" ส่วน Astro 7 render เป็น "helloworld" -->
+<span>hello</span>
+<em>world</em>
+
+<!-- ระบุให้ชัด เหมือนที่ทำใน React -->
+<span>hello</span>{" "}<em>world</em>
+```
+
+ถ้า template เก่าขนาดใหญ่พึ่งพาพฤติกรรมเดิม ให้ตั้ง `compressHTML: true` ใน `astro.config.mjs` เพื่อคงไว้ระหว่าง migrate ส่วนโปรเจกต์ใหม่ก็แค่เขียน `{" "}` ตรงที่ช่องว่างมีความหมาย
+
 ## ชื่อ attribute แบบ HTML ไม่ใช่แบบ JSX
 
 จุดต่างที่ละเอียดแต่สำคัญจาก React: template ของ Astro ใช้ **ชื่อ attribute แบบ HTML มาตรฐาน** เป็น `class` ไม่ใช่ `className`; เป็น `for` ไม่ใช่ `htmlFor` คุณกำลังเขียน superset ของ HTML ดังนั้นชื่อแบบ HTML คือชื่อจริง
 
 <Callout title="สรุปหนึ่งบรรทัด">
-templating ของ Astro คล้าย JSX แต่เป็น HTML-native: `{ }` ฝัง expression, `{cond && <el/>}` กับ ternary จัดการ conditional, `{items.map(...)}` จัดการ loop (ไม่ต้องใช้ `key`) และ `<Fragment>` / `<>` จัดกลุ่มโดยไม่ต้องมี wrapper `set:html` render string HTML ที่ **เชื่อถือได้** แบบดิบ (ข้าม escaping — เสี่ยง XSS ถ้า input ไม่น่าเชื่อถือ), `set:text` บังคับเป็น plain text และ `{...obj}` spread attribute ใช้ชื่อ attribute แบบ HTML จริง — `class` ไม่ใช่ `className`
+templating ของ Astro คล้าย JSX แต่เป็น HTML-native: `{ }` ฝัง expression, `{cond && <el/>}` กับ ternary จัดการ conditional, `{items.map(...)}` จัดการ loop (ไม่ต้องใช้ `key`) และ `<Fragment>` / `<>` จัดกลุ่มโดยไม่ต้องมี wrapper `set:html` render string HTML ที่ **เชื่อถือได้** แบบดิบ (ข้าม escaping — เสี่ยง XSS ถ้า input ไม่น่าเชื่อถือ), `set:text` บังคับเป็น plain text และ `{...obj}` spread attribute ใช้ชื่อ attribute แบบ HTML จริง — `class` ไม่ใช่ `className` Rust compiler ของ Astro 7 ปฏิเสธ tag ที่ไม่ปิดหรือซ้อนผิดแทนที่จะแก้ให้ และ `compressHTML: 'jsx'` ทำให้ whitespace เป็นไปตามกฎ JSX — เขียน `{" "}` ตรงที่ช่องว่างมีความหมาย
 </Callout>
 
 export const quizSyntax = [
@@ -181,6 +209,16 @@ export const quizSyntax = [
       '`class` — Astro ใช้ชื่อ attribute แบบ HTML มาตรฐาน ไม่ใช่ชื่อแบบ JSX',
       '`htmlFor`',
       'ทั้ง className และ class ใช้ได้เหมือนกัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน Astro 7 `<span>hello</span>` กับ `<em>world</em>` ที่อยู่คนละบรรทัด render ออกมาเป็น "helloworld" เพราะอะไร และแก้ยังไง?',
+    options: [
+      'เป็น bug ของ Rust compiler — ไปเปิด issue',
+      '`compressHTML` ตอนนี้ default เป็น `\'jsx\'` whitespace จึงเป็นไปตามกฎ JSX; เขียน `{" "}` คั่นระหว่างกัน (หรือตั้ง `compressHTML: true` เพื่อคงพฤติกรรมเดิม)',
+      'inline element เป็น sibling กันไม่ได้อีกแล้ว',
+      'ต้องห่อด้วย Fragment',
     ],
     answer: 1,
   },

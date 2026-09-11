@@ -1,6 +1,6 @@
 ---
 title: 'Endpoints & API Routes'
-description: 'Non-HTML routes — APIRoute handlers that return a Response, reading params and the request body, static vs on-demand endpoints, and how they differ from Actions.'
+description: 'Non-HTML routes — APIRoute handlers that return a Response, reading params and the request body, static vs on-demand endpoints, the Astro 7 src/fetch.ts entrypoint, and how they differ from Actions.'
 sidebar:
   order: 3
 ---
@@ -77,8 +77,23 @@ Both run server code, but they solve different problems:
 
 Rule of thumb: **public/external contract → endpoint; internal app logic called from your own frontend → Action.**
 
+## Beyond endpoints: `src/fetch.ts` (Astro 7)
+
+Endpoints give you one route at a time. Astro 7 stabilised **advanced routing**: a reserved file, `src/fetch.ts`, that sits in front of the whole request pipeline. It exports a standard **fetch handler** — the same `(request) => Response` shape that Cloudflare Workers, Deno, and Bun use — so you can run logic before Astro's router, mount a **Hono** app with its middleware, or hand-roll routing for a slice of your URL space, then fall through to Astro for everything else.
+
+Reach for it when middleware is not enough: proxying a legacy API under the same origin, wiring an existing Hono/Web-standard app into an Astro site, or shaping requests in a way the file-based router cannot express. For a single JSON route, a normal endpoint is still the right tool.
+
+Because the filename is now reserved, an unrelated `src/fetch.ts` in an older project must be renamed — or point Astro elsewhere:
+
+```js
+// astro.config.mjs
+export default defineConfig({
+  fetchFile: './src/router.ts',   // or null to disable advanced routing
+});
+```
+
 <Callout title="The one-line takeaway">
-An **API endpoint** is a `.ts` file in `src/pages/` that exports HTTP-method functions (`GET`, `POST`, …) typed as `APIRoute`, each returning a standard `Response`; the handler reads `params`, the request body, and cookies from its context. Endpoints are **static** (build-time, `GET`-only) unless you add `prerender = false` for on-demand methods. Use an **endpoint** for public/external HTTP contracts (webhooks, REST, downloads) and an **Action** for your own app's internal, type-safe mutations.
+An **API endpoint** is a `.ts` file in `src/pages/` that exports HTTP-method functions (`GET`, `POST`, …) typed as `APIRoute`, each returning a standard `Response`; the handler reads `params`, the request body, and cookies from its context. Endpoints are **static** (build-time, `GET`-only) unless you add `prerender = false` for on-demand methods. Use an **endpoint** for public/external HTTP contracts (webhooks, REST, downloads) and an **Action** for your own app's internal, type-safe mutations. When you need to sit in front of the whole pipeline (a Hono app, a proxy), Astro 7's reserved **`src/fetch.ts`** fetch handler is the tool.
 </Callout>
 
 export const quizEndpoints = [

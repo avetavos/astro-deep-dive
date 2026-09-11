@@ -34,7 +34,7 @@ const blog = defineCollection({
 export const collections = { blog };
 ```
 
-กฎสำคัญของ Astro 6 คือ **ทุก collection ต้องประกาศ `loader`** พฤติกรรมเก่าที่แค่โยนไฟล์ลง `src/content/blog/` แล้ว Astro เก็บให้อัตโนมัติ หายไปแล้ว การเขียนให้ชัดเจนแปลว่า API เดียวกันโหลดไฟล์ในเครื่องได้วันนี้ และโหลด API ปลายทางได้พรุ่งนี้ โดยวิธี query ไม่ต้องเปลี่ยนเลย
+กฎสำคัญตั้งแต่ Astro 5 (และไม่เปลี่ยนใน Astro 7) คือ **ทุก collection ต้องประกาศ `loader`** พฤติกรรมเก่าที่แค่โยนไฟล์ลง `src/content/blog/` แล้ว Astro เก็บให้อัตโนมัติ หายไปแล้ว การเขียนให้ชัดเจนแปลว่า API เดียวกันโหลดไฟล์ในเครื่องได้วันนี้ และโหลด API ปลายทางได้พรุ่งนี้ โดยวิธี query ไม่ต้องเปลี่ยนเลย
 
 ## loader: content มาจากไหน
 
@@ -111,7 +111,7 @@ collection คือ `defineCollection({ loader, schema })` ใน **`src/conten
 
 export const quizCollections = [
   {
-    q: 'ใน Astro 6 ประกาศ content collection ที่ไหน?',
+    q: 'ใน Astro 7 ประกาศ content collection ที่ไหน?',
     options: [
       'ใน astro.config.mjs',
       'ใน src/content.config.ts ด้วย defineCollection',

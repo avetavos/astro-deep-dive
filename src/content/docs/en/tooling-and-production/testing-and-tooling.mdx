@@ -83,6 +83,8 @@ export const testDiagram = `flowchart LR
 
 In development, Astro shows a **Dev Toolbar** at the bottom of the page — it flags accessibility issues, shows which components are islands (and their hydration directives), and hosts plugins for auditing and debugging. It's the fastest way to see *what actually became an island* and catch a11y problems while you build. It only runs in dev and never ships to production.
 
+Astro 7 also made the dev server friendlier to automation: it can run in a **background mode**, detects when an **AI coding agent** is driving it, and can emit **structured JSON logs** so tools (and agents) read errors without scraping terminal output. Two small API notes for test code: framework container renderers are now imported from a subpath (`import { getContainerRenderer } from '@astrojs/react/container-renderer'`), and view-transition tests should listen for the string event names (`'astro:before-swap'`) because the exported constants were removed.
+
 <Callout title="The one-line takeaway">
 Test an Astro site at three layers: **Vitest** for plain logic, the **Astro Container API** (`experimental_AstroContainer`, `renderToString`) for asserting a component's rendered HTML in isolation, and **Playwright** for end-to-end flows that need real hydration and navigation. Container tests don't run islands, so interactive behavior belongs in Playwright. The dev-only **Dev Toolbar** helps you see which components became islands and catch accessibility issues as you build.
 </Callout>

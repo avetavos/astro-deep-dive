@@ -53,6 +53,12 @@ Don't optimize by vibes. Two things to look at:
 
 The Astro baseline usually scores near-perfect out of the box. When a score drops, it's almost always one of: an unoptimized image, a font causing shift, or an island hydrating more eagerly than it needs to.
 
+## The build itself got faster (Astro 7)
+
+Runtime performance is what your users feel; build performance is what *you* feel every deploy. Astro 7 moved a lot of the toolchain to Rust: the Astro compiler, Markdown via Sätteri, and **Vite 8**, whose default bundler is now **Rolldown** (10–30× faster than Rollup while keeping the plugin API). A new **queued rendering engine** renders pages roughly 2.4× faster during the build. In Astro's own benchmarks builds are 15–61% faster, and some sites build twice as fast — with no changes to your code.
+
+One knock-on effect on output: the HTML you ship is compressed with JSX-style whitespace rules by default (`compressHTML: 'jsx'`), which is slightly smaller but means a newline between inline elements is no longer a space — see the syntax lesson.
+
 <Callout title="The one-line takeaway">
 Astro gives you a fast baseline (static HTML, zero JS); performance work is keeping it. Prefer the **cheapest client directive** — `client:visible`/`client:idle` over `client:load` — so island JavaScript stays off the critical path. Use **prefetch** (plus `<ClientRouter />`) to make navigation feel instant. And **measure** — check which islands actually shipped and run Lighthouse — because regressions are almost always an unoptimized image, a shifting font, or an over-eager `client:load`.
 </Callout>
