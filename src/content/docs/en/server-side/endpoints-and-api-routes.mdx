@@ -34,6 +34,7 @@ The handler receives a context with the request, params, cookies, and more:
 
 ```ts
 // src/pages/api/users/[id].ts
+export const prerender = false;   // dynamic + POST needs on-demand (or add getStaticPaths for GET-only)
 import type { APIRoute } from 'astro';
 
 export const GET: APIRoute = async ({ params }) => {

@@ -140,10 +140,10 @@ export const diagram = `flowchart LR
 Astro 7 เปลี่ยนจาก compiler ตัวเก่าที่เขียนด้วย Go มาเป็น **Rust compiler** และตอนนี้เป็น compiler เดียวที่มี มันเร็วขึ้น และ *เข้มงวดขึ้น*: compiler เก่าแอบ "แก้" HTML ที่พังให้เงียบ ๆ ส่วนตัวใหม่รายงานเป็น build error
 
 ```astro
-<!-- Astro 6 ปิด <p> ตัวแรกให้เงียบ ๆ ส่วน Astro 7: error, unclosed tag -->
+<!-- Astro 6 quietly closed the first <p> for you. Astro 7: error, unclosed tag. -->
 <p>Hello world<p>Hello world</p>
 
-<!-- เขียนให้ตรงกับที่ตั้งใจ -->
+<!-- Write what you mean. -->
 <p>Hello world</p>
 <p>Hello world</p>
 ```
@@ -153,11 +153,11 @@ tag ที่ไม่ปิดและการซ้อนที่ผิด 
 เรื่องที่สองคือ **whitespace** option `compressHTML` ตอนนี้ default เป็น `'jsx'` ดังนั้น whitespace ระหว่าง element จะเป็นไปตามกฎของ JSX — ขึ้นบรรทัดใหม่ระหว่าง inline element สองตัวไม่ทำให้เกิดช่องว่างที่มองเห็นอีกต่อไป:
 
 ```astro
-<!-- Astro 6 render เป็น "hello world" ส่วน Astro 7 render เป็น "helloworld" -->
+<!-- Astro 6 rendered "hello world"; Astro 7 renders "helloworld". -->
 <span>hello</span>
 <em>world</em>
 
-<!-- ระบุให้ชัด เหมือนที่ทำใน React -->
+<!-- Be explicit, exactly as you would in React. -->
 <span>hello</span>{" "}<em>world</em>
 ```
 

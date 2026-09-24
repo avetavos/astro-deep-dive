@@ -53,14 +53,14 @@ export const edgeDiagram = `flowchart LR
 การตั้ง header เองก็ใช้ได้ แต่ Astro 7 เลื่อน **route caching** จาก experimental flag ขึ้นมาเป็น config ระดับบนสุดที่ stable แล้ว แทนที่ทุกหน้า on-demand ต้องจำว่าให้ตั้ง `Cache-Control` คุณประกาศ caching ครั้งเดียวแล้ว Astro นำไปใช้ให้ — พร้อม cache API ที่ไม่ผูกกับ platform และ CDN provider สำหรับ Netlify, Vercel และ Cloudflare
 
 ```js
-// astro.config.mjs (Astro 7 — ไม่ต้องมี experimental flag)
+// astro.config.mjs (Astro 7 — no experimental flag)
 import { defineConfig } from 'astro/config';
-import { memoryCache } from 'astro/config';   // provider สำหรับ dev / instance เดียว
+import { memoryCache } from 'astro/config';   // dev/single-instance provider
 
 export default defineConfig({
   output: 'server',
-  cache: { provider: memoryCache() },        // ใน Astro 6 คือ experimental.cache
-  routeRules: { /* กฎ caching รายเส้นทาง — ใน Astro 6 คือ experimental.routeRules */ },
+  cache: { provider: memoryCache() },        // was experimental.cache in Astro 6
+  routeRules: { /* per-route caching rules — was experimental.routeRules */ },
 });
 ```
 

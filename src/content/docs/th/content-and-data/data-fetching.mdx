@@ -1,6 +1,6 @@
 ---
 title: 'Data Fetching'
-description: 'fetch ข้อมูลภายนอกด้วย top-level await, ความต่างระหว่างข้อมูล build-time กับ request-time, ดึงจาก headless CMS, และทำไม Astro.glob ถึงถูกแทนที่.'
+description: 'fetch ข้อมูลภายนอกด้วย top-level await, ความต่างระหว่างข้อมูล build-time กับ request-time, ดึงจาก headless CMS, และทำไม Astro.glob() ถึงถูกถอดออกใน Astro 6.'
 sidebar:
   order: 4
 ---
@@ -37,13 +37,13 @@ pattern เดียวกันใช้ได้กับ REST API, database c
 
 ```astro
 ---
-// หน้านี้ render ต่อ request ดังนั้น fetch จึงสดทุกครั้งที่เข้ามา
+// This page renders per request, so the fetch is live on every visit.
 export const prerender = false;
 
 const res = await fetch('https://api.example.com/inventory');
 const inventory = await res.json();
 ---
-<p>เหลือในสต็อกตอนนี้ {inventory.inStock} ชิ้น</p>
+<p>{inventory.inStock} in stock right now</p>
 ```
 
 แบบทดสอบในใจ: **ข้อมูลนี้ต้องสดต่อผู้ชมแต่ละคน หรือ snapshot ตอน build ก็พอ?** snapshot พอ → ปล่อยให้ static ไว้ (เร็ว, cache ได้) ต้องสด → เปลี่ยน route นั้นให้ render แบบ on-demand การรีบไปใช้ on-demand ทั้งที่ snapshot ตอน build ก็พอ เป็นวิธีที่คนทิ้งความเร็วของ Astro ไปเปล่า ๆ บ่อยที่สุด
@@ -63,10 +63,10 @@ headless CMS (Contentful, Sanity, Storyblok, WordPress API) ก็เป็น�
 
 ## แล้ว Astro.glob() ล่ะ?
 
-โค้ด Astro รุ่นเก่าใช้ **`Astro.glob()`** ดึงไฟล์ในเครื่องหลายไฟล์ (Markdown ทั้งหมดในโฟลเดอร์) พร้อมกัน ตอนนี้ `Astro.glob()` ยังใช้ได้อยู่แต่ **ถูกแทนที่ด้วย content collection** ซึ่งให้พลัง "โหลดหลายไฟล์" แบบเดียวกัน *บวก* schema validation และ type ที่ generate ให้ สำหรับ content ในเครื่อง ให้ประกาศ collection ด้วย glob loader แทนที่จะไปคว้า `Astro.glob()` ส่วน `fetch` ดิบ ๆ เก็บไว้ใช้กับข้อมูลภายนอกจริง ๆ
+โค้ด Astro รุ่นเก่าใช้ **`Astro.glob()`** ดึงไฟล์ในเครื่องหลายไฟล์ (Markdown ทั้งหมดในโฟลเดอร์) พร้อมกัน Astro 6 **ถอดมันออกไปทั้งหมด** (แหล่งที่มา: [Astro v6 upgrade guide](https://docs.astro.build/en/guides/upgrade-to/v6/)) — ตัวแทนคือ **content collection** ซึ่งให้พลัง "โหลดหลายไฟล์" แบบเดียวกัน *บวก* schema validation และ type ที่ generate ให้ (ถ้าต้องการ glob ไฟล์ดิบ ๆ ที่ไม่ใช่ content ให้ใช้ `import.meta.glob()` ของ Vite แทน) สำหรับ content ในเครื่อง ให้ประกาศ collection ด้วย glob loader ส่วน `fetch` ดิบ ๆ เก็บไว้ใช้กับข้อมูลภายนอกจริง ๆ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-fetch ข้อมูลด้วย **top-level `await fetch()`** ใน component script โค้ดส่วนนี้รันบน server ความลับจึงปลอดภัยและไม่มี round-trip ฝั่ง client กุญแจอยู่ที่ *ตอนไหน* ที่รัน บนหน้า **static** fetch เกิด **ครั้งเดียวตอน build** แล้วอบเข้าไป ส่วนหน้า **on-demand** (`prerender = false`) รัน **ต่อ request** เพื่อข้อมูลสดต่อผู้ชม default เป็น static ไว้จนกว่าจะจำเป็นต้องสด และสำหรับโหลดไฟล์ในเครื่องหลายไฟล์ ให้ใช้ content collection แทน `Astro.glob()` รุ่นเก่า
+fetch ข้อมูลด้วย **top-level `await fetch()`** ใน component script โค้ดส่วนนี้รันบน server ความลับจึงปลอดภัยและไม่มี round-trip ฝั่ง client กุญแจอยู่ที่ *ตอนไหน* ที่รัน บนหน้า **static** fetch เกิด **ครั้งเดียวตอน build** แล้วอบเข้าไป ส่วนหน้า **on-demand** (`prerender = false`) รัน **ต่อ request** เพื่อข้อมูลสดต่อผู้ชม default เป็น static ไว้จนกว่าจะจำเป็นต้องสด และสำหรับโหลดไฟล์ในเครื่องหลายไฟล์ ให้ใช้ content collection — `Astro.glob()` ถูกถอดออกแล้วใน Astro 6
 </Callout>
 
 export const quizFetching = [
@@ -101,12 +101,12 @@ export const quizFetching = [
     answer: 1,
   },
   {
-    q: 'สำหรับโหลดไฟล์ Markdown ในเครื่องหลายไฟล์ อะไรดีกว่า Astro.glob()?',
+    q: 'Astro.glob() ถูกถอดออกใน Astro 6 อะไรมาแทนสำหรับโหลดไฟล์ Markdown ในเครื่องหลายไฟล์?',
     options: [
       'content collection ที่มี glob loader พลังเท่ากันบวก schema validation และ type',
       'copy-paste ไฟล์เอา',
       'fetch ฝั่ง client',
-      'ไม่มี ต้องใช้ Astro.glob() เท่านั้น',
+      'ไม่มี Astro.glob() ยังใช้ได้อยู่',
     ],
     answer: 0,
   },

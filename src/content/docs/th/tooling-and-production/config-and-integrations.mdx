@@ -78,9 +78,9 @@ Astro 7 ทำให้หลายฟีเจอร์ stable ซึ่งแ�
 experimental: { cache: { ... } }             cache: { ... }
 experimental: { routeRules: { ... } }        routeRules: { ... }
 experimental: { logger: { ... } }            logger: { ... }
-experimental: { rustCompiler: true }         // ถอดแล้ว — Rust compiler เป็น compiler เดียว
-experimental: { queuedRendering: true }      // ถอดแล้ว — เป็น default
-experimental: { advancedRouting: true }      // ถอดแล้ว — src/fetch.ts เปิดเสมอ
+experimental: { rustCompiler: true }         // removed — the Rust compiler is the only compiler
+experimental: { queuedRendering: true }      // removed — now the default
+experimental: { advancedRouting: true }      // removed — src/fetch.ts is always on
 ```
 
 key ระดับบนใหม่ที่ควรรู้: **`compressHTML`** ตอนนี้ default เป็น `'jsx'` (กฎ whitespace แบบ JSX); **`fetchFile`** ย้ายหรือปิด entrypoint `src/fetch.ts` ที่ถูกจองชื่อ; **`markdown.processor`** ให้สลับ Sätteri เป็น `unified()` จาก `@astrojs/markdown-remark` และมี package หนึ่งที่หายไป: **`@astrojs/db`** ไม่ได้ดูแลต่อแล้ว — ใช้ `node:sqlite`, Drizzle หรือ database แบบ hosted (Turso, Neon, PlanetScale) แทน

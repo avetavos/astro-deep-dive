@@ -55,7 +55,7 @@ The Astro baseline usually scores near-perfect out of the box. When a score drop
 
 ## The build itself got faster (Astro 7)
 
-Runtime performance is what your users feel; build performance is what *you* feel every deploy. Astro 7 moved a lot of the toolchain to Rust: the Astro compiler, Markdown via Sätteri, and **Vite 8**, whose default bundler is now **Rolldown** (10–30× faster than Rollup while keeping the plugin API). A new **queued rendering engine** renders pages roughly 2.4× faster during the build. In Astro's own benchmarks builds are 15–61% faster, and some sites build twice as fast — with no changes to your code.
+Runtime performance is what your users feel; build performance is what *you* feel every deploy. Astro 7 moved a lot of the toolchain to Rust: the Astro compiler, Markdown via Sätteri, and **Vite 8**, whose default bundler is now **Rolldown** (10–30× faster than Rollup while keeping the plugin API). A new **queued rendering engine** renders pages roughly 2.4× faster during the build. In Astro's own benchmarks builds are 15–61% faster, and some sites build twice as fast — with no changes to your code (source: [Astro 7.0 release notes](https://astro.build/blog/astro-7/)).
 
 One knock-on effect on output: the HTML you ship is compressed with JSX-style whitespace rules by default (`compressHTML: 'jsx'`), which is slightly smaller but means a newline between inline elements is no longer a space — see the syntax lesson.
 

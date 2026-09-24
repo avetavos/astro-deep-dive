@@ -21,9 +21,9 @@ import { z } from 'astro/zod';
 import { glob } from 'astro/loaders';
 
 const blog = defineCollection({
-  // loader: อ่านทุกไฟล์ .md/.mdx ใต้ src/data/blog (ข้ามไฟล์ _drafts)
+  // loader: read every .md/.mdx file under src/data/blog (skipping _drafts)
   loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
-  // schema: validate frontmatter ของแต่ละไฟล์
+  // schema: validate each file's frontmatter
   schema: z.object({
     title: z.string(),
     pubDate: z.coerce.date(),
@@ -64,12 +64,12 @@ export const diagram = `flowchart LR
 ---
 import { getCollection, getEntry } from 'astro:content';
 
-// โพสต์ที่ publish ทั้งหมด ใหม่สุดก่อน
+// All published posts, newest first
 const posts = (await getCollection('blog'))
   .filter((post) => !post.data.draft)
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
 
-// entry เดียวจาก id
+// A single entry by its id
 const featured = await getEntry('blog', 'hello-world');
 ---
 <ul>

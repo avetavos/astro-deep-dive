@@ -37,15 +37,15 @@ my-site/
 
 ```astro
 ---
-// 1. component script (frontmatter) รันบน SERVER เท่านั้น
-//    JavaScript/TypeScript ตรงนี้: imports, ดึงข้อมูล, props, logic
+// 1. The component script (frontmatter). Runs on the SERVER only.
+//    JavaScript/TypeScript here: imports, data fetching, props, logic.
 import Card from '../components/Card.astro';
 
 const title = "Latest posts";
 const posts = await fetch('https://api.example.com/posts').then((r) => r.json());
 ---
 
-<!-- 2. template กลายเป็น HTML ใช้ { } เพื่อฝัง JS expression -->
+<!-- 2. The template. Becomes HTML. Uses { } to embed JS expressions. -->
 <h1>{title}</h1>
 <ul>
   {posts.map((post) => <Card title={post.title} />)}

@@ -30,9 +30,9 @@ const blog = defineCollection({
   loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
   schema: z.object({
     title: z.string().max(80),
-    description: z.string().optional(),          // ไม่ใส่ก็ได้
-    pubDate: z.coerce.date(),                     // "2026-01-01" กลายเป็น Date
-    draft: z.boolean().default(false),            // เติมให้ถ้าไม่มี
+    description: z.string().optional(),          // may be omitted
+    pubDate: z.coerce.date(),                     // "2026-01-01" becomes a Date
+    draft: z.boolean().default(false),            // fills in if absent
     tags: z.array(z.string()).default([]),
     status: z.enum(['draft', 'published', 'archived']),
   }),
@@ -81,7 +81,7 @@ const blog = defineCollection({
   loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
   schema: z.object({
     title: z.string(),
-    author: reference('authors'),          // ต้องตรงกับ id ใน collection authors
+    author: reference('authors'),          // must match an id in the authors collection
     related: z.array(reference('blog')).default([]),
   }),
 });
@@ -96,9 +96,9 @@ export const collections = { authors, blog };
 import { getEntry, getCollection } from 'astro:content';
 
 const post = (await getCollection('blog'))[0];
-const author = await getEntry(post.data.author);   // ส่ง reference เข้าไปตรง ๆ
+const author = await getEntry(post.data.author);   // pass the reference straight in
 ---
-<p>โดย {author.data.name}</p>
+<p>By {author.data.name}</p>
 ```
 
 วิธีนี้ทำให้ content เป็น normalized ข้อมูล author อยู่ที่เดียว ส่วนแต่ละโพสต์เก็บแค่ลิงก์ที่ validate แล้วและ resolve ได้

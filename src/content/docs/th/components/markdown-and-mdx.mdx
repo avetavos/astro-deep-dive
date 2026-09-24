@@ -93,7 +93,7 @@ export const diagram = `flowchart LR
 
 ## Astro 7 render Markdown ด้วย Sätteri
 
-ตั้งแต่ Astro 7 ไฟล์ `.md` และ `.mdx` ถูก render ด้วย **Sätteri** ซึ่งเป็น Markdown pipeline แบบ native ที่ขับเคลื่อนด้วย Rust ของ Astro เอง แทน pipeline remark/rehype (unified) ที่เป็น JavaScript สำหรับ content ธรรมดาไม่มีอะไรเปลี่ยนนอกจากความเร็ว — นี่เป็นหนึ่งในเหตุผลที่ build ของ Astro 7 เร็วขึ้น 15–61%
+ตั้งแต่ Astro 7 ไฟล์ `.md` และ `.mdx` ถูก render ด้วย **Sätteri** ซึ่งเป็น Markdown pipeline แบบ native ที่ขับเคลื่อนด้วย Rust ของ Astro เอง แทน pipeline remark/rehype (unified) ที่เป็น JavaScript สำหรับ content ธรรมดาไม่มีอะไรเปลี่ยนนอกจากความเร็ว — นี่เป็นหนึ่งในเหตุผลที่ build ของ Astro 7 เร็วขึ้น 15–61% (แหล่งที่มา: [Astro 7.0 release notes](https://astro.build/blog/astro-7/))
 
 จุดที่มีผลคือ **plugin** ถ้าโปรเจกต์ของคุณพึ่งพา remark หรือ rehype plugin (custom container, reading-time, image transform) พวกนั้นคือ unified plugin และ Sätteri ไม่รันมัน ต้อง opt กลับไปใช้ unified pipeline อย่างชัดเจน:
 
@@ -104,7 +104,7 @@ import { unified } from '@astrojs/markdown-remark';
 
 export default defineConfig({
   markdown: {
-    processor: unified(),          // ให้ remark/rehype plugin ทำงานต่อได้
+    processor: unified(),          // keep remark/rehype plugins working
     remarkPlugins: [/* ... */],
     rehypePlugins: [/* ... */],
   },

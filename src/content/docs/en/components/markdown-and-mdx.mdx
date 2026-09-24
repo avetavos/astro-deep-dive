@@ -93,7 +93,7 @@ export const diagram = `flowchart LR
 
 ## Astro 7 renders Markdown with Sätteri
 
-Since Astro 7, `.md` and `.mdx` files are rendered by **Sätteri**, Astro's native, Rust-powered Markdown pipeline, instead of the JavaScript remark/rehype (unified) pipeline. For plain content nothing changes except speed — it is one of the reasons Astro 7 builds are 15–61% faster.
+Since Astro 7, `.md` and `.mdx` files are rendered by **Sätteri**, Astro's native, Rust-powered Markdown pipeline, instead of the JavaScript remark/rehype (unified) pipeline. For plain content nothing changes except speed — it is one of the reasons Astro 7 builds are 15–61% faster (source: [Astro 7.0 release notes](https://astro.build/blog/astro-7/)).
 
 Where it matters is **plugins**. If your project relies on remark or rehype plugins (custom containers, reading-time, image transforms), those are unified plugins, and Sätteri does not run them. Opt back into the unified pipeline explicitly:
 

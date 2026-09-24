@@ -35,9 +35,9 @@ export const modeDiagram = `flowchart TB
 
 ```astro
 ---
-// เว็บที่ส่วนใหญ่เป็น static แต่มีหนึ่ง route ที่ dynamic:
-export const prerender = false;  // render หน้านี้แบบ on-demand แต่ละ request
-const user = await getUser(Astro.request);  // ต้องใช้ request ที่เข้ามา
+// A mostly-static site with one dynamic route:
+export const prerender = false;  // render THIS page on demand, per request
+const user = await getUser(Astro.request);  // needs the incoming request
 ---
 <p>Welcome, {user.name}</p>
 ```
@@ -52,12 +52,12 @@ const user = await getUser(Astro.request);  // ต้องใช้ request ท
 Static output ไม่ต้องการอะไรนอกจาก file host ส่วน on-demand rendering ต้องการ **runtime** เพื่อรัน server code ของคุณแต่ละ request — และนั่นคือที่ที่ **adapter** เข้ามา คุณติดตั้ง adapter สำหรับ platform เป้าหมายแล้วตั้งค่าใน config:
 
 ```js
-// astro.config.mjs — เปิด on-demand rendering บน Cloudflare
+// astro.config.mjs — enabling on-demand rendering on Cloudflare
 import { defineConfig } from 'astro/config';
 import cloudflare from '@astrojs/cloudflare';
 
 export default defineConfig({
-  adapter: cloudflare(),   // หรือ node(), vercel(), netlify()...
+  adapter: cloudflare(),   // or node(), vercel(), netlify()...
 });
 ```
 

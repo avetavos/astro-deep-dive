@@ -21,7 +21,7 @@ interface Props {
   title: string;
   href: string;
 }
-const { title, href } = Astro.props;   // props มาที่ Astro.props
+const { title, href } = Astro.props;   // props arrive on Astro.props
 ---
 <a class="card" href={href}>
   <h3>{title}</h3>
@@ -50,13 +50,13 @@ const { heading } = Astro.props;
 ---
 <section class="panel">
   <h2>{heading}</h2>
-  <slot />          <!-- children มาตรงนี้ -->
+  <slot />          <!-- children go here -->
 </section>
 ```
 
 ```astro
 <Panel heading="Notes">
-  <p>markup ตรงนี้จะไปลงใน slot</p>
+  <p>Any markup here lands in the slot.</p>
 </Panel>
 ```
 
@@ -65,14 +65,14 @@ const { heading } = Astro.props;
 ```astro
 <!-- Layout.astro -->
 <header><slot name="header" /></header>
-<main><slot /></main>            <!-- default slot -->
+<main><slot /></main>            <!-- the default slot -->
 <footer><slot name="footer" /></footer>
 ```
 
 ```astro
 <Layout>
   <h1 slot="header">Title</h1>
-  <p>Body ไปลงใน default slot</p>
+  <p>Body goes in the default slot.</p>
   <small slot="footer">© 2026</small>
 </Layout>
 ```
@@ -92,7 +92,7 @@ tag `<style>` ภายใน `.astro` component เป็น **scoped ให้
 ```astro
 <h1>Title</h1>
 <style>
-  /* rule h1 นี้ใช้เฉพาะกับ h1 ของ component นี้ ไม่ใช่ตัวอื่นบนหน้า */
+  /* This h1 rule applies ONLY to this component's h1, not others on the page. */
   h1 { color: rebeccapurple; }
 </style>
 ```

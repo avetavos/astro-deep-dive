@@ -45,14 +45,14 @@ export const islandDiagram = `flowchart TB
 
 ```astro
 ---
-// component นี้รันบน server เพื่อผลิต HTML
-// JavaScript พวกนี้ไม่ถูกส่งไป browser เลย
+// This component runs on the server to produce HTML.
+// None of this JavaScript is sent to the browser.
 const posts = await getPosts();
 ---
 <ul>
   {posts.map((post) => <li>{post.title}</li>)}
 </ul>
-<!-- ส่ง: HTML <ul> ส่ง: ไม่มี JavaScript -->
+<!-- Ships: an HTML <ul>. Ships: no JavaScript. -->
 ```
 
 ผลลัพธ์คือหน้าเว็บที่เร็วตั้งแต่โครงสร้าง: browser ได้ HTML ที่ paint ได้ทันที และโหลด JavaScript เฉพาะ island ที่คุณเลือกเปิดเองอย่างชัดเจน

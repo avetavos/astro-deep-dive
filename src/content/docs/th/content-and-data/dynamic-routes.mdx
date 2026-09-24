@@ -32,8 +32,8 @@ import { getCollection, render } from 'astro:content';
 export async function getStaticPaths() {
   const posts = await getCollection('blog');
   return posts.map((post) => ({
-    params: { slug: post.id },   // เติม [slug] หนึ่งหน้าต่อโพสต์
-    props: { post },             // ส่งทั้ง entry เข้าหน้า
+    params: { slug: post.id },   // fills [slug] — one page per post
+    props: { post },             // hand the whole entry to the page
   }));
 }
 
@@ -67,18 +67,18 @@ import { getCollection } from 'astro:content';
 
 export async function getStaticPaths({ paginate }) {
   const posts = await getCollection('blog');
-  return paginate(posts, { pageSize: 10 });   // 10 โพสต์ต่อหน้า
+  return paginate(posts, { pageSize: 10 });   // 10 posts per page
 }
 
-const { page } = Astro.props;   // paginate ยัด prop `page` ให้
+const { page } = Astro.props;   // paginate injects a `page` prop
 ---
 <ul>
   {page.data.map((post) => <li>{post.data.title}</li>)}
 </ul>
 <nav>
-  {page.url.prev && <a href={page.url.prev}>ก่อนหน้า</a>}
-  <span>หน้า {page.currentPage} จาก {page.lastPage}</span>
-  {page.url.next && <a href={page.url.next}>ถัดไป</a>}
+  {page.url.prev && <a href={page.url.prev}>Previous</a>}
+  <span>Page {page.currentPage} of {page.lastPage}</span>
+  {page.url.next && <a href={page.url.next}>Next</a>}
 </nav>
 ```
 
@@ -93,7 +93,7 @@ dynamic route รู้ param ของตัวเองได้สองท�
 
 ```astro
 ---
-// src/pages/blog/[slug].astro — เวอร์ชัน on-demand
+// src/pages/blog/[slug].astro — on-demand version
 export const prerender = false;
 import { getEntry, render } from 'astro:content';
 

@@ -55,7 +55,7 @@ baseline ของ Astro มักได้คะแนนเกือบเต�
 
 ## build เองก็เร็วขึ้น (Astro 7)
 
-performance ตอน runtime คือสิ่งที่ผู้ใช้รู้สึก ส่วน performance ตอน build คือสิ่งที่ *คุณ* รู้สึกทุกครั้งที่ deploy Astro 7 ย้าย toolchain ส่วนใหญ่ไป Rust: compiler ของ Astro, Markdown ผ่าน Sätteri และ **Vite 8** ที่ bundler default ตอนนี้คือ **Rolldown** (เร็วกว่า Rollup 10–30 เท่า แต่ยังใช้ plugin API เดิม) และ **queued rendering engine** ตัวใหม่ render หน้าตอน build เร็วขึ้นราว 2.4 เท่า ใน benchmark ของ Astro เอง build เร็วขึ้น 15–61% บางเว็บเร็วขึ้นเท่าตัว — โดยไม่ต้องแก้โค้ดเลย
+performance ตอน runtime คือสิ่งที่ผู้ใช้รู้สึก ส่วน performance ตอน build คือสิ่งที่ *คุณ* รู้สึกทุกครั้งที่ deploy Astro 7 ย้าย toolchain ส่วนใหญ่ไป Rust: compiler ของ Astro, Markdown ผ่าน Sätteri และ **Vite 8** ที่ bundler default ตอนนี้คือ **Rolldown** (เร็วกว่า Rollup 10–30 เท่า แต่ยังใช้ plugin API เดิม) และ **queued rendering engine** ตัวใหม่ render หน้าตอน build เร็วขึ้นราว 2.4 เท่า ใน benchmark ของ Astro เอง build เร็วขึ้น 15–61% บางเว็บเร็วขึ้นเท่าตัว — โดยไม่ต้องแก้โค้ดเลย (แหล่งที่มา: [Astro 7.0 release notes](https://astro.build/blog/astro-7/))
 
 ผลข้างเคียงหนึ่งที่ output: HTML ที่ส่งออกไปถูกบีบด้วยกฎ whitespace แบบ JSX เป็น default (`compressHTML: 'jsx'`) เล็กลงนิดหน่อย แต่แปลว่าขึ้นบรรทัดใหม่ระหว่าง inline element ไม่ใช่ช่องว่างอีกต่อไป — ดูบท syntax
 
