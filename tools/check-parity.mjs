@@ -58,8 +58,24 @@ function countHeadings(src) {
 // guarantees stays English (```text fences are used for Thai-captioned
 // ASCII diagrams and are intentionally not checked here).
 const NON_CODE = new Set(['text', 'txt', 'plain', 'mermaid', 'md', 'markdown']);
+// Quiz arrays (`export const x = [ ... ];`) are removed first: a q string that
+// embeds a fence on one physical line (\n escapes) would otherwise pair with a
+// later fence and produce phantom diffs. Quiz content is checked separately.
+function stripQuizArrays(src) {
+  let out = '';
+  let i = 0;
+  const re = /export\s+const\s+\w+\s*=\s*\[/g;
+  let m;
+  while ((m = re.exec(src))) {
+    if (m.index < i) continue;
+    out += src.slice(i, m.index);
+    i = scanBalanced(src, m.index + m[0].length, '[', ']');
+    re.lastIndex = i;
+  }
+  return out + src.slice(i);
+}
 function fencedJsBlocks(src) {
-  return [...src.matchAll(/```(\w*)[^\n]*\n([\s\S]*?)```/g)].filter((m) => !NON_CODE.has(m[1])).map((m) => m[2]);
+  return [...stripQuizArrays(src).matchAll(/```(\w*)[^\n]*\n([\s\S]*?)```/g)].filter((m) => !NON_CODE.has(m[1])).map((m) => m[2]);
 }
 
 // Parse a quoted string literal (', ", or `) starting at index i.
