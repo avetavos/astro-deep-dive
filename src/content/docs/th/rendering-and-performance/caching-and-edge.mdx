@@ -40,7 +40,7 @@ directive สำคัญ: `s-maxage` คุมว่า *shared* cache (CDN) �
 
 CDN cache response ไว้ที่ location แบบ **edge** ใกล้ user หน้าที่ cache แล้วจึงถูก serve จากเมืองใกล้ ๆ แทนที่จะเป็น origin ของเรา เว็บ Astro แบบ static ถูก edge-cache โดยธรรมชาติ ส่วนเว็บ on-demand จะ edge-friendly ทันทีที่เราเพิ่ม `Cache-Control` ที่ถูกต้อง — CDN cache HTML ที่ render แล้วไว้ที่ edge และเรียก server เฉพาะตอน cache หมดอายุ
 
-<Mermaid title="The edge serves cached HTML; the origin renders only on a miss" code={edgeDiagram} />
+<Mermaid title="edge เสิร์ฟ HTML ที่ cache ไว้ origin จะ render เฉพาะตอน miss" code={edgeDiagram} />
 
 export const edgeDiagram = `flowchart LR
   user["User request"] --> edge["CDN edge"]

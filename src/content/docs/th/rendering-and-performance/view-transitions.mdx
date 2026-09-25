@@ -39,7 +39,7 @@ import { ClientRouter } from 'astro:transitions';
 
 ## navigation ทำงานยังไง
 
-<Mermaid title="ClientRouter swaps content instead of reloading" code={navDiagram} />
+<Mermaid title="ClientRouter สลับเนื้อหาแทนการ reload ทั้งหน้า" code={navDiagram} />
 
 export const navDiagram = `flowchart LR
   click["User clicks a link"] --> intercept["ClientRouter intercepts (no full reload)"]

@@ -54,7 +54,7 @@ browser เลือก format แรกที่รองรับ (AVIF แล
 - **image ใน `public/`** ถูก serve ตามเดิม ไม่ optimize (Astro ไม่แตะ `public/` เลย) ใช้เฉพาะกับของที่ต้องคง path/ชื่อไว้เป๊ะ ๆ
 - **remote image** (URL) optimize ได้เหมือนกัน แต่ต้อง list domain เป็น **authorized** ใน `astro.config.mjs` (`image.domains` หรือ `image.remotePatterns`) — เป็นมาตรการความปลอดภัยไม่ให้เรา proxy host มั่วซั่ว
 
-<Mermaid title="Where an image comes from decides how it's handled" code={imgDiagram} />
+<Mermaid title="ที่มาของรูปเป็นตัวกำหนดวิธีจัดการ" code={imgDiagram} />
 
 export const imgDiagram = `flowchart TB
   local["Imported from src/"] --> opt["Optimized, dimensions known"]

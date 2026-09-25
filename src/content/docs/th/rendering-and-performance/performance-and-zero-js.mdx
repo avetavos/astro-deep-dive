@@ -27,7 +27,7 @@ framework ส่วนใหญ่ทำให้เราต้องไล่�
 
 หลักคิด: **เอื้อมไปหา `client:visible` (หรือ `client:idle`) ก่อน `client:load`** carousel ที่อยู่ลงไปสามจอไม่ต้องใช้ JavaScript ตอน load แรก การ hydrate ด้วย `client:visible` ทำให้ cost นั้นอยู่นอก critical path การใช้ `client:load` เกินจำเป็นจะแอบสร้าง cost แบบ "ทุกอย่าง hydrate ตอนแรก" ที่ Astro มีอยู่เพื่อหลีกเลี่ยงกลับมา
 
-<Mermaid title="Directives move JS cost off the critical path" code={dirDiagram} />
+<Mermaid title="directive ย้ายต้นทุน JS ออกจาก critical path" code={dirDiagram} />
 
 export const dirDiagram = `flowchart LR
   load["client:load"] --> upfront["JS on the critical path (heaviest)"]
