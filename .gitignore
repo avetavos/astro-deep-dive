@@ -6,6 +6,9 @@ dist/
 # dependencies
 node_modules/
 
+# snippet-verification harness probe project (see tools/verify-snippets.mjs)
+tools/probe/
+
 # logs
 npm-debug.log*
 yarn-debug.log*

@@ -9,6 +9,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "check": "node tools/check-parity.mjs",
+    "verify": "node tools/verify-snippets.mjs",
     "test": "echo \"no tests\" && exit 0"
   },
   "dependencies": {
