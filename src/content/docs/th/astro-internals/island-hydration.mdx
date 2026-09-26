@@ -1,0 +1,410 @@
+---
+title: 'Island Hydration'
+description: '<astro-island> ทำอะไรจริง ๆ ตอน connectedCallback และ hydrate() — astro-island.js ที่ติดตั้งจริง, tuple encoding แบบ [type, value] ของ prop, directive loader script ทั้งห้า, ทำไม island ที่ซ้อนกันต้องรอ parent และ client:only ข้ามอะไรจริง ๆ'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+[Client Directives](/astro/th/islands/client-directives/) แสดง `<astro-island>` tag จริงและ attribute ของมันแล้ว พร้อม quote directive-loader script เล็ก ๆ บทเรียนนี้ลึกไปอีกขั้น: lifecycle เต็มของ `astro-island.js` (`connectedCallback` → `start()` → `hydrate()`), prop รอดจากการเดินทางไป browser ได้ยังไงจริง ๆ และ — สิ่งที่บทเรียนนั้นยังไม่พิสูจน์ — เกิดอะไรขึ้นเมื่อ island **ซ้อนกัน**
+
+## lifecycle เต็ม จาก source จริง
+
+ทั้งหมดข้างล่างนี้คือ `node_modules/astro/dist/runtime/server/astro-island.js` (astro@7.3.5) ตัดแค่ comment ที่คุยไปแล้วที่อื่นออก:
+
+```js
+// node_modules/astro/dist/runtime/server/astro-island.js (trimmed)
+class AstroIsland extends HTMLElement {
+  Component;
+  hydrator;
+  static observedAttributes = ["props"];
+
+  connectedCallback() {
+    if (!this.hasAttribute("await-children") || document.readyState === "interactive" || document.readyState === "complete") {
+      this.childrenConnectedCallback();
+    } else {
+      const onConnected = () => {
+        document.removeEventListener("DOMContentLoaded", onConnected);
+        mo.disconnect();
+        this.childrenConnectedCallback();
+      };
+      const mo = new MutationObserver(() => {
+        if (this.lastChild?.nodeType === Node.COMMENT_NODE && this.lastChild.nodeValue === "astro:end") {
+          this.lastChild.remove();
+          onConnected();
+        }
+      });
+      mo.observe(this, { childList: true });
+      document.addEventListener("DOMContentLoaded", onConnected);
+    }
+  }
+
+  async childrenConnectedCallback() {
+    let beforeHydrationUrl = this.getAttribute("before-hydration-url");
+    if (beforeHydrationUrl) await import(beforeHydrationUrl);
+    this.start();
+  }
+
+  async start() {
+    const opts = JSON.parse(this.getAttribute("opts"));
+    const directive = this.getAttribute("client");
+    if (Astro[directive] === void 0) {
+      window.addEventListener(`astro:${directive}`, () => this.start(), { once: true });
+      return;
+    }
+    try {
+      await Astro[directive](
+        async () => {
+          const rendererUrl = this.getAttribute("renderer-url");
+          const [componentModule, { default: hydrator }] = await Promise.all([
+            this.importWithRetry(this.getAttribute("component-url")),
+            rendererUrl ? this.importWithRetry(rendererUrl) : Promise.resolve({ default: () => () => {} })
+          ]);
+          this.Component = componentModule[this.getAttribute("component-export") || "default"];
+          this.hydrator = hydrator;
+          return this.hydrate;
+        },
+        opts,
+        this
+      );
+    } catch (error) {
+      this.handleHydrationError(error);
+    }
+  }
+
+  hydrate = async () => {
+    if (!this.hydrator) return;
+    if (!this.isConnected) return;
+    const parentSsrIsland = this.parentElement?.closest("astro-island[ssr]");
+    if (parentSsrIsland) {
+      parentSsrIsland.addEventListener("astro:hydrate", this.hydrate, { once: true });
+      return;
+    }
+    // ...collect slotted content into `slots`, revive `props`...
+    const hydrator = this.hydrator(this);
+    await hydrator(this.Component, props, slots, { client: this.getAttribute("client") });
+    this.removeAttribute("ssr");
+    this.dispatchEvent(new CustomEvent("astro:hydrate"));
+  };
+
+  attributeChangedCallback() {
+    this.hydrate();
+  }
+}
+customElements.define("astro-island", AstroIsland);
+```
+
+สี่อย่างที่ควรระบุให้ชัด:
+
+- **`connectedCallback`** ตัดสินว่าจะ hydrate ทันทีหรือรอ HTML comment marker `astro:end` — นี่คือสิ่งที่ `await-children` มีไว้เพื่อ: island ที่ *slotted content* ยัง stream เข้ามาไม่เสร็จ (คล้าย `<Suspense>` หรือแค่ SSR stream ที่ช้า) จะไม่เริ่ม hydrate กับ DOM ที่ยังมาไม่ครบ
+- **`start()`** อ่าน attribute `client` เป็น literal property lookup: `Astro[directive]` นี่คือกลไกเป๊ะ ๆ ที่อยู่เบื้องหลัง claim ของ [Client Directives](/astro/th/islands/client-directives/) ว่า attribute `client` *คือ* ชื่อ directive — ไม่มี switch statement ไม่มีตาราง string comparison มีแค่ `Astro.load`, `Astro.idle`, `Astro.visible`, `Astro.media` หรือ `Astro.only` ที่ถูก lookup แบบ dynamic
+- **`hydrate()`** คือ method ที่ทำงานจริง — และเป็นตัวที่ `attributeChangedCallback` เรียกใหม่ทุกครั้งที่ attribute `props` เปลี่ยน (entry เดียวใน `observedAttributes`) ซึ่งเป็นวิธีที่ parent island อัปเดต prop ของ child ได้หลัง hydrate ครั้งแรก
+- **การเช็ค `parentSsrIsland`** คือกลไกทั้งหมดที่อยู่เบื้องหลัง order ของ island ที่ซ้อนกัน พิสูจน์ต่อไปนี้
+
+## island ที่ซ้อนกันรอ parent ก่อน — พิสูจน์กับ source จริง
+
+ขั้นแรกจริง ๆ ของ `hydrate()` (หลัง guard ธรรมดา) คือ: *ancestor `<astro-island>` ที่ใกล้ที่สุดของฉันยังมี `ssr` อยู่ไหม?* ถ้าใช่ อย่าเพิ่ง hydrate — รอให้ ancestor นั้น dispatch `astro:hydrate` ก่อน แล้วลองใหม่ พิสูจน์ได้ตรง ๆ กับ `astro-island.js` ที่ติดตั้งจริงโดยไม่ได้แก้ไข โดยไม่ต้องมี browser จริง: รันภายใต้ `jsdom` ต่อ `<astro-island>` สองตัวซ้อนกัน แล้วเรียก `hydrate()` จริงของ child **ก่อน** ของ parent เพื่อบังคับ race เป๊ะ ๆ ที่ source ต้องแก้ให้ถูก
+
+```ts
+// Run in an isolated vitest + jsdom project (this course's own harness
+// deliberately has no jsdom — its own test fences prove server-side render
+// output, not browser DOM behavior — so this one fragment is not collected
+// by tools/verify-snippets.mjs; the real, reproduced output is pasted below).
+// @vitest-environment jsdom
+import { describe, expect, test } from 'vitest';
+
+// Loads the REAL astro-island custom element definition shipped in
+// astro@7.3.5 (astro/dist/runtime/server/astro-island.js). It self-registers
+// customElements.define('astro-island', ...) as an import side effect.
+import 'astro/runtime/server/astro-island.js';
+
+describe('nested islands wait for their parent (real astro-island.js source)', () => {
+  test('a child island with an [ssr] parent defers hydrate() until the parent dispatches astro:hydrate', async () => {
+    // Stub the directive-loader global so connectedCallback()'s automatic
+    // start() no-ops instead of fetching a real component/renderer module —
+    // we call the real hydrate() method ourselves below.
+    (window as any).Astro = { load: () => {} };
+
+    document.body.innerHTML = `
+      <astro-island uid="parent" ssr client="load" opts='{}'>
+        <astro-island uid="child" ssr client="load" opts='{}'></astro-island>
+      </astro-island>
+    `;
+    const parent = document.querySelector('astro-island[uid="parent"]') as any;
+    const child = document.querySelector('astro-island[uid="child"]') as any;
+
+    // Fake only the renderer-supplied hydrator (normally set by start());
+    // hydrate() itself — including the real parentSsrIsland guard — runs
+    // completely unmodified below.
+    parent.hydrator = () => async () => {};
+    child.hydrator = () => async () => {};
+
+    const order: string[] = [];
+    parent.addEventListener('astro:hydrate', () => order.push('parent hydrated'));
+    child.addEventListener('astro:hydrate', () => order.push('child hydrated'));
+
+    // Call the CHILD's hydrate() first — nothing about DOM order guarantees
+    // parent-before-child; this is the real race the source has to win.
+    const childDone = child.hydrate();
+    order.push('child.hydrate() called');
+    await Promise.resolve();
+    await Promise.resolve();
+    // The child must NOT have hydrated yet — its parent still carries `ssr`.
+    expect(order).toEqual(['child.hydrate() called']);
+
+    await parent.hydrate();
+    await childDone;
+
+    // The real guard (`parentElement?.closest('astro-island[ssr]')`) makes
+    // the child re-run only once its parent has actually hydrated.
+    expect(order.indexOf('parent hydrated')).toBeGreaterThan(order.indexOf('child.hydrate() called'));
+    expect(order.indexOf('child hydrated')).toBeGreaterThan(order.indexOf('parent hydrated'));
+  });
+});
+```
+
+```text
+✓ nested islands wait for their parent (real astro-island.js source) > a child island with an [ssr] parent defers hydrate() until the parent dispatches astro:hydrate
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+test นี้รันภายใต้ jsdom environment (`// @vitest-environment jsdom` ซึ่งเป็น pragma ต่อไฟล์) แทนที่จะใช้ harness `AstroContainer` แบบ string-render ปกติของคอร์สนี้ เพราะการพิสูจน์ hydration ordering ของ *custom element ในเบราว์เซอร์* ต้องการ DOM จริง, event dispatch และ microtask interleaving — ไม่ใช่ HTML string ที่ render จาก server guard `parentSsrIsland` ที่ test นี้ใช้คือ method จริงที่ไม่ได้แก้ไขจาก package ที่ติดตั้งไว้ ไม่มีส่วนไหนของ ordering logic เองถูก mock
+
+<Mermaid title="island ที่ซ้อนกันสองตัว เรียก hydrate() ของ child ก่อน" code={orderDiagram} />
+
+export const orderDiagram = `sequenceDiagram
+  participant C as Child astro-island
+  participant P as Parent astro-island
+  C->>C: hydrate() called
+  C->>C: parentElement.closest('astro-island[ssr]') -> found P
+  C->>P: addEventListener('astro:hydrate', hydrate, { once: true })
+  Note over C: returns early — does NOT hydrate yet
+  P->>P: hydrate() runs (own directive fired)
+  P->>P: removeAttribute('ssr')
+  P->>C: dispatchEvent('astro:hydrate') triggers C's listener
+  C->>C: hydrate() re-runs — no ssr parent found this time
+  C->>C: actually hydrates`;
+
+## prop เดินทางเป็น tuple `[type, value]`
+
+attribute `props` ไม่ใช่ JSON ธรรมดา — มันคือ encoding แบบ tuple-tagged เพื่อให้ type ที่ JSON แทนเองไม่ได้ (`Date`, `Map`, `Set`, `RegExp`, `BigInt`, `URL`, typed array, `Infinity`) รอดจากการเดินทาง ฝั่ง server คือ `astro/dist/runtime/server/serialize.js` เรียก `serializeProps` จริงของมันตรง ๆ:
+
+```ts
+// src/lib/serialize-props.test.ts
+import { serializeProps } from 'astro/runtime/server/serialize.js';
+import { expect, test } from 'vitest';
+
+test('serializeProps(): Date/Map/Set encode as real [type, value] tuples', () => {
+  const out = serializeProps(
+    {
+      when: new Date('2026-01-01T00:00:00.000Z'),
+      tags: new Set(['a', 'b']),
+      meta: new Map([['k', 1]]),
+    },
+    { displayName: 'Counter', hydrate: 'load', astroStaticSlot: true },
+  );
+
+  const parsed = JSON.parse(out);
+  expect(parsed.when).toEqual([3, '2026-01-01T00:00:00.000Z']); // 3 = Date
+  expect(parsed.tags).toEqual([5, [[0, 'a'], [0, 'b']]]);       // 5 = Set, 0 = plain Value
+  expect(parsed.meta).toEqual([4, [[1, [[0, 'k'], [0, 1]]]]]);   // 4 = Map, 1 = JSON/Array
+});
+```
+
+```text
+✓ serializeProps(): Date/Map/Set encode as real [type, value] tuples
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+output จริงที่ capture ได้จาก call นั้นเป๊ะ:
+
+```text
+{"when":[3,"2026-01-01T00:00:00.000Z"],"tags":[5,[[0,"a"],[0,"b"]]],"meta":[4,[[1,[[0,"k"],[0,1]]]]]}
+```
+
+ตาราง type เต็มจริง (`PROP_TYPE` ของ `astro/dist/runtime/server/serialize.js` จับคู่กับตาราง inverse ตรง ๆ ใน `astro-island.js` ฝั่ง client):
+
+| Tag | ความหมาย | การ revive ฝั่ง client |
+|---|---|---|
+| `0` | `Value` (value ธรรมดา หรือ fallback สำหรับอะไรก็ตามที่ไม่รู้จัก) | คืนตามเดิม |
+| `1` | `JSON` (จริง ๆ คือ Array) | `raw.map(reviveTuple)` |
+| `2` | `RegExp` | `new RegExp(value)` |
+| `3` | `Date` | `new Date(value)` |
+| `4` | `Map` | `new Map(reviveArray(value))` |
+| `5` | `Set` | `new Set(reviveArray(value))` |
+| `6` | `BigInt` | `BigInt(value)` |
+| `7` | `URL` | `new URL(value)` |
+| `8`/`9`/`10` | `Uint8Array`/`Uint16Array`/`Uint32Array` | `new Uint8Array(value)` เป็นต้น |
+| `11` | `Infinity` | `Number.POSITIVE_INFINITY * value` (`-1` เลย decode เป็น `-Infinity`) |
+
+นี่คือเหตุผลเป๊ะ ๆ ที่ prop ที่มี type หลวม/`any` กลายเป็น `null` เงียบ ๆ แทนที่จะ error (พิสูจน์ใน [Client Directives](/astro/th/islands/client-directives/)): อะไรก็ตามที่ `convertToSerializedForm` ไม่รู้จักจาก `Object.prototype.toString.call(value)` ตกลงไปที่ case `0`/`Value` และการ `JSON.stringify` function ที่อยู่ใน slot `value` ของ tuple นั้นได้ `null` — รูปแบบ tuple ไม่ fail แบบดัง ๆ มันแค่พก function ไปไม่ได้
+
+## `client:only`: tag เดียวกัน แต่ว่างจริง ๆ
+
+build component เดียวกันเป๊ะทั้งสองแบบ แล้วอ่าน HTML จริงที่ build ออกมา:
+
+```tsx
+// src/components/Counter.tsx
+import { useState } from 'preact/hooks';
+
+export default function Counter({ count }: { count: number }) {
+  const [n, setN] = useState(count);
+  return <button onClick={() => setN(n + 1)}>Count: {n}</button>;
+}
+```
+
+```astro
+---
+// src/pages/island-load.astro
+import Counter from '../components/Counter.tsx';
+---
+<Counter client:load count={5} />
+```
+
+```text
+<astro-island uid="Z2Vwhy" data-preact-island-id="1" component-url="/_astro/Counter.CJpRDZkK.js" component-export="default" renderer-url="/_astro/client.CYoOuZrL.js" props="{&quot;count&quot;:[0,5]}" ssr client="load" opts="{&quot;name&quot;:&quot;Counter&quot;,&quot;value&quot;:true}" await-children><button>Count: 5</button><!--astro:end--></astro-island>
+```
+
+```astro
+---
+// src/pages/island-only.astro
+import Counter from '../components/Counter.tsx';
+---
+<Counter client:only="preact" count={5} />
+```
+
+```text
+<astro-island uid="4yKpu" component-url="/_astro/Counter.CJpRDZkK.js" component-export="default" renderer-url="/_astro/client.CYoOuZrL.js" props="{&quot;count&quot;:[0,5]}" ssr client="only" opts="{&quot;name&quot;:&quot;Counter&quot;,&quot;value&quot;:&quot;preact&quot;}"></astro-island>
+```
+
+ทั้งสอง `<astro-island>` tag จริงยังพก attribute `ssr` อยู่ — มันแปลว่า "ยังไม่ hydrate" ไม่ใช่ "ถูก render บน server" ดังนั้นอย่าอ่านการมีอยู่ของมันอย่างเดียวเป็นหลักฐานว่า render บน server แล้ว ความต่างที่พิสูจน์ได้จริงคือ **content ระหว่าง tag**: island ของ `client:load` มี `<button>Count: 5</button>` ที่ render จาก server จริง ๆ พร้อม marker `<!--astro:end-->` ที่ `MutationObserver` ของ `connectedCallback` เฝ้าดูอยู่; island ของ `client:only` ว่างเปล่าสมบูรณ์ — ไม่มีอะไรให้แสดงจนกว่า `component-url` และ `renderer-url` จะโหลดครบและ `hydrate()` รัน นี่คือด้านต้นทุนที่จับต้องได้ของ [Compiler Output](/astro/th/astro-internals/compiler-output/) ที่พิสูจน์ว่า `client:only` ส่ง `null` เป็น component reference ตอน compile time: ไม่มี compiled reference แปลว่าไม่มี server render ซึ่งแปลว่าไม่มี fallback content ใน HTML แรกเลย
+
+## `astro:hydrate` เทียบกับ `astro:page-load`
+
+`hydrate()` ของ `astro-island.js` dispatch `CustomEvent('astro:hydrate')` จริงบน island element เอง ทุกครั้งที่ island นั้น hydrate เสร็จ (รวมถึงอีกครั้งทีหลัง ถ้า `attributeChangedCallback` trigger ใหม่หลัง `props` อัปเดต) `astro:page-load` เป็น event **คนละตัว** จากส่วนอื่นของ Astro เลย (`astro/dist/transitions/events.d.ts`) — มีอยู่แค่ภายใต้ `<ClientRouter />` (view transitions) และ fire แค่ครั้งเดียวต่อการ navigate ฝั่ง client สำหรับทั้งหน้า ไม่ใช่ต่อ island:
+
+```text
+type Events = 'astro:after-preparation' | 'astro:after-swap' | 'astro:page-load';
+```
+
+ถ้าหน้าของคุณไม่ใช้ `<ClientRouter />` `astro:page-load` ไม่ fire เลย — script ที่ทำ `document.addEventListener('astro:page-load', ...)` บนหน้าที่ไม่มี client-side routing คือ dead code ที่รอ event ซึ่งมีแค่ View Transitions เท่านั้นที่ dispatch `astro:hydrate` คือตัวที่มีอยู่บนทุก island ทุกหน้า ไม่ว่าจะมี routing หรือไม่
+
+## อ่านโค้ดที่ AI เขียน
+
+- comment สมมติว่า island ทั้งหมดบนหน้า hydrate "พร้อมกัน" เมื่อ directive ของมันทำงานไหม? พิสูจน์ข้างบน: `hydrate()` ของ island ที่ซ้อนกัน defer จริง ๆ — ผ่าน DOM query จริง (`closest('astro-island[ssr]')`) — จนกว่า parent จะเสร็จจริง ไม่ว่าตัวไหนจะใช้ directive อะไรหรือเงื่อนไข trigger ของแต่ละตัวจะถึงเมื่อไหร่
+- prop ที่ส่งให้ island เป็น class instance, function หรืออะไรที่ตาราง type ของ `serializeProps` (ข้างบน) ไม่ได้ลิสต์ไว้ไหม? มันจะตกไปที่ case plain-`Value` — โอเคสำหรับ object/array ธรรมดา แต่ function กลายเป็น `null` เงียบ ๆ และ class instance เสีย prototype (มาถึง client เป็น plain object)
+- code เช็ค `astro:page-load` โดยคาดว่าจะมีทุกหน้าไหม? มัน fire แค่ภายใต้ `<ClientRouter />` — พิสูจน์ข้างบนจาก event union type จริง ใช้ `astro:hydrate` (ต่อ island) หรือ `DOMContentLoaded`/module-execution ธรรมดา (ทั้งหน้า ไม่ต้องมี routing) แทนถ้าไม่ได้ใช้ `<ClientRouter />`
+- สมมติฐานของ initial render ของ component ที่เป็น `client:only` รวม "server render loading skeleton ให้แล้ว" ไหม? พิสูจน์ข้างบน: `<astro-island>` tag ของมันว่างสมบูรณ์จนกว่าจะ hydrate skeleton/placeholder ใดก็ตามต้องเป็น static markup ที่เขียนไว้ *นอก* island ไม่ใช่ข้างใน
+
+<SpotTheBug code={`---
+// src/components/Dashboard.astro
+import Chart from './Chart.jsx';
+import Legend from './Legend.jsx';
+---
+<div class="dashboard">
+  <Chart client:load data={chartData} />
+  <Legend client:load chartData={chartData} />
+</div>
+
+<script>
+  // "both islands are already interactive once this script runs, since
+  // they're both client:load"
+  window.dispatchEvent(new CustomEvent('dashboard:ready'));
+</script>`}>
+สมมติฐานของ comment ไม่จริง `<script>` ธรรมดาบนหน้ารันตาม order ของ module-execution ปกติ — มันไม่รู้อะไรเลยเกี่ยวกับ hydration state ของ island ทั้งสอง ไม่ว่าจริงหรือที่สมมติไว้ ทั้ง `Chart` และ `Legend` เป็น `<astro-island>` element แยกกัน แต่ละตัวรัน `start()`/`hydrate()` chain เป็นอิสระของตัวเอง (`client:load` ไม่มี gate เลย พิสูจน์ใน [Client Directives](/astro/th/islands/client-directives/) — แต่ "ไม่มี gate" แปลว่า "เริ่มทันที" ไม่ใช่ "เสร็จแบบ synchronous ก่อนบรรทัดถัดไปของ script บนหน้าจะรัน"; การ hydrate ยังเกี่ยวกับ dynamic `import()` ที่ `await` สำหรับ `component-url`/`renderer-url` อยู่ดี) วิธีแก้คือรอ event `astro:hydrate` จริงของทั้งสอง island ก่อนจะ dispatch `dashboard:ready` — เช่น listen บน element ของทั้งสอง island แล้วนับให้ครบสอง หรือ listen ที่ `document` ครั้งเดียวด้วย option `capture` แล้วกรองว่า island ไหน fire
+</SpotTheBug>
+
+## Mental Model
+
+island ไม่ใช่ "component ที่กลายเป็น interactive เมื่อ directive บอกให้เป็น" — มันคือ custom element จริงที่รัน lifecycle จริง ธรรมดา: `connectedCallback` ตัดสินว่าจะเริ่มเมื่อไหร่ `start()` lookup directive เป็น property ตรง ๆ บน global object `Astro` และ `hydrate()` — งานจริง — ปฏิเสธที่จะรันเลยตราบใดที่ `<astro-island>` ancestor ที่ใกล้ที่สุดยังพก `ssr` อยู่ การอ่าน island code ให้ดี คือติดตามสองอย่างพร้อมกัน: *directive ของ island นี้เอง fire เมื่อไหร่* และ *มีอะไรข้างบนที่ยังรอ hydrate ก่อนไหม*
+
+## ข้อแลกเปลี่ยน
+
+| ตัวเลือก | ได้อะไร | เสียอะไร |
+|---|---|---|
+| island ที่ซ้อนกันรอ parent (guard `parentSsrIsland`) | child ไม่ hydrate กับ DOM subtree ที่ parent อาจจะยัง replace/จัดใหม่อยู่ | parent ที่ hydrate ช้า (เช่น `client:idle`) ทำให้ child ที่ซ้อนอยู่ข้างในช้าไปด้วยเงียบ ๆ แม้จะทำเครื่องหมาย `client:load` ไว้ |
+| prop แบบ tuple-encoded (`[type, value]`) | `Date`/`Map`/`Set`/`RegExp`/typed array รอดข้าม client boundary ครบถ้วน | อะไรที่ encoder ไม่รู้จัก (function, class instance, DOM node) ลดระดับเงียบ ๆ เป็น plain value หรือ `null` แทนที่จะ error |
+| `client:only` ไม่ render อะไรบน server | ไม่เสียงาน render บน server เปล่า ๆ สำหรับ component ที่รันบนนั้นไม่ได้อยู่แล้ว (browser-only API) | HTML แรกมีช่องว่างจริง พิสูจน์ได้ สำหรับ element นั้น — loading state ใดก็ตามต้องเป็น static markup นอก island |
+| event ชื่อเดียว (`astro:hydrate`) ต่อ island เทียบกับ event ทั้งหน้า (`astro:page-load`) | signal ความพร้อมที่แม่นยำต่อ component มีในทุกหน้า | `astro:page-load` ดูคล้ายแต่ fire แค่ภายใต้ `<ClientRouter />` — เผลอใช้ง่ายบนหน้าที่ไม่ได้ใช้ ซึ่งมันจะไม่ fire เลยเงียบ ๆ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"island `client:load` ทั้งหมดบนหน้า hydrate เสร็จตาม DOM order จากบนลงล่าง"** ไม่ได้พิสูจน์และไม่จริงโดยทั่วไป: `import()` แบบ dynamic ของ `start()` สำหรับ `component-url`/`renderer-url` เป็น async และ settle ตามลำดับไหนก็ได้ข้าม island ที่เป็นอิสระต่อกัน island ที่ซ้อนกันเป็นกรณีเดียวที่มี order *รับประกัน* (พิสูจน์ข้างบน); sibling ไม่รับประกันเลย
+- **"`ssr` บน `<astro-island>` tag แปลว่า component นี้ถูก render บน server"** พิสูจน์ว่าผิดข้างบน: tag ของ `client:only` ก็พก `ssr` เหมือนกัน โดยไม่มี server-rendered content ข้างในเลย `ssr` จริง ๆ แปลว่า "ยังต้องรอ `hydrate()` รัน" — มันถูกลบโดย `hydrate()` เอง ไม่ได้ถูกตั้งตามว่า render เกิดขึ้นหรือไม่
+- **"เพราะ prop เป็นแค่ JSON ควรส่งแค่ value ที่ JSON-safe ให้ island"** พิสูจน์ว่าผิดข้างบน: tuple encoding จัดการ `Date`, `Map`, `Set`, `RegExp`, `BigInt`, `URL` และ typed array ได้ถูกต้อง — มากกว่าที่ JSON ธรรมดารองรับจริง ๆ ขีดจำกัดจริงคือตาราง type ของ *encoder* ไม่ใช่ของ JSON
+- **"`astro:page-load` fire เมื่อ island ของหน้าพร้อม บนทุกหน้า"** พิสูจน์ว่าผิดข้างบน: มันเป็นส่วนหนึ่งของ event set แบบ view-transition ของ `<ClientRouter />` และไม่ fire เลยถ้าไม่มีมัน `astro:hydrate` (ต่อ island) คือ event ที่มีอยู่ทุกที่
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`<astro-island>` คือ custom element จริงที่รัน lifecycle จริง: `connectedCallback` (รอ marker `astro:end` ถ้ามี `await-children`) → `start()` (lookup `Astro[client-attribute]` แบบ dynamic — ไม่มี switch statement) → `hydrate()` ซึ่งปฏิเสธที่จะรันตราบใดที่ `astro-island[ssr]` ancestor ที่ใกล้ที่สุดยังไม่ hydrate (พิสูจน์ด้วย source จริงที่ไม่ได้แก้ไข ภายใต้ jsdom) — กลไกทั้งหมดที่อยู่เบื้องหลัง order ของ island ที่ซ้อนกัน prop ข้าม server/client boundary เป็น tuple `[type, value]` (`serializeProps`/`reviveObject` ฝั่ง client) พก `Date`/`Map`/`Set`/`RegExp`/typed array ได้ถูกต้อง แต่ทิ้งอะไรที่ตาราง type ไม่รู้จักเงียบ ๆ `client:only` พก attribute `ssr` เหมือน island อื่น แต่ ship tag ที่ว่างจริง ๆ — ไม่มี server render ไม่มี fallback content และ `astro:hydrate` (ต่อ island มีทุกที่) ไม่ใช่ event เดียวกับ `astro:page-load` (ทั้งหน้า มีแค่ภายใต้ `<ClientRouter />`)
+</Callout>
+
+export const quizIslandHydration = [
+  {
+    q: '```js\nasync start() {\n  const directive = this.getAttribute("client");\n  if (Astro[directive] === void 0) { /* wait */ }\n  await Astro[directive](...);\n}\n```\nastro-island.js ตัดสินยังไงว่าจะเรียก directive loader ไหน (load/idle/visible/media/only)?',
+    options: [
+      'switch statement เทียบ string ของ client attribute กับชื่อ directive ที่รู้จักแต่ละตัว',
+      'literal, dynamic property lookup — Astro[directive] — ที่ directive อ่านมาจาก client attribute ตรง ๆ',
+      'มันเรียก Astro.load เสมอ แล้วให้ loader เองตัดสินใจ',
+      'มัน import bundle คนละตัวต่อ directive ตอน build time',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ ใน source จริงที่ติดตั้งไว้: start() อ่าน this.getAttribute("client") แล้ว lookup เป็น Astro[directive] — เป็น dynamic property access ไม่ใช่ switch',
+  },
+  {
+    q: 'ใน jsdom test จริงในบทเรียนนี้ hydrate() ของ CHILD island ถูกเรียกก่อนของ parent เกิดอะไรขึ้นจริง ๆ?',
+    options: [
+      'child hydrate ทันที เพราะ hydrate() ถูกเรียกตรง ๆ',
+      'hydrate() ของ child ตรวจพบว่า parent ยังพก [ssr] อยู่ register listener astro:hydrate แบบครั้งเดียวบน parent แล้ว return โดยไม่ hydrate — จะรันจริงหลังจาก parent dispatch astro:hydrate เท่านั้น',
+      'มัน throw เพราะไม่รองรับ island ที่ซ้อนกัน',
+      'parent ถูก hydrate อัตโนมัติเป็นผลข้างเคียงของการเรียก hydrate() ของ child',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ด้วย test จริง: order บันทึก "child.hydrate() called" โดยไม่มี hydration event แล้วหลังจาก hydrate() ของ parent รันเท่านั้นถึงมี "parent hydrated" ตามด้วย "child hydrated" ตามลำดับนั้น',
+  },
+  {
+    q: '```text\n{"when":[3,"2026-01-01T00:00:00.000Z"],"tags":[5,[[0,"a"],[0,"b"]]]}\n```\nตัวเลขนำหน้า (3, 5, 0) ใน serializeProps() output จริงนี้แปลว่าอะไร?',
+    options: [
+      'index ของ array ไม่มีความหมายอะไรอื่น',
+      'type tag จากตาราง PROP_TYPE ที่กำหนดตายตัว — 3 = Date, 5 = Set, 0 = Value ธรรมดา — อ่านโดยตาราง inverse เป๊ะ ๆ ฝั่ง client เพื่อ revive type จริง',
+      'เลข version สำหรับ cache-busting',
+      'client ไม่สนใจตัวเลขเหล่านี้เลย',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ กับ constant PROP_TYPE จริงของ astro/dist/runtime/server/serialize.js และตาราง revival ที่ตรงกันฝั่ง client ใน astro-island.js',
+  },
+  {
+    q: 'ความต่างจริงที่พิสูจน์ได้ใน HTML ที่ build ระหว่าง island แบบ client:load กับ client:only ที่เหมือนกันทุกอย่างอื่นคืออะไร?',
+    options: [
+      'client:only ไม่มี attribute ssr เลย',
+      '`<astro-island>` ของ client:load มี markup ที่ render จาก server จริง (เช่น <button> ที่ render แล้ว) พร้อม marker astro:end; tag ของ client:only ว่างสมบูรณ์',
+      'ทั้งสองเหมือนกันเป๊ะ ยกเว้นค่าของ attribute client',
+      'client:only ไม่ใส่ attribute props เสมอ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ด้วย HTML ที่ build จริงทั้งสองแบบในบทเรียนนี้: ทั้งสอง tag พก ssr แต่มีแค่ของ client:load ที่มี content ที่ render แล้วระหว่าง tag — island ของ client:only ว่างจนกว่าจะ hydrate',
+  },
+  {
+    q: 'astro:page-load fire เมื่อไหร่?',
+    options: [
+      'ต่อ island หนึ่งครั้ง ทุกครั้งที่ island นั้น hydrate เสร็จ บนทุกหน้า',
+      'เฉพาะภายใต้ <ClientRouter /> (view transitions) — ครั้งเดียวต่อการ navigate ฝั่ง client ทั้งหน้า — พิสูจน์ตรง ๆ จาก event union type จริง',
+      'ทุกครั้งที่โหลดหน้า ไม่ว่าจะมี routing หรือไม่ ครั้งเดียวทั้งหน้า',
+      'มันคือ alias ของ astro:hydrate',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบนจาก Events union จริงของ astro/dist/transitions/events.d.ts: astro:page-load เป็นส่วนหนึ่งของ event set ของ ClientRouter และไม่ fire เลยบนหน้าที่ไม่ได้ใช้ astro:hydrate คือ event ต่อ island ที่มีอยู่ทุกที่',
+  },
+];
+
+<Quiz client:visible id="astro-internals/island-hydration" questions={quizIslandHydration} />
+
+<ProgressTracker client:visible id="astro-internals/island-hydration" />

@@ -1,0 +1,314 @@
+---
+title: 'Content Layer Internals'
+description: 'What astro sync actually writes to disk — the real .astro/ and node_modules/.astro/ outputs, the DataStore/MutableDataStore/MetaStore API a loader gets, and proof (with a real glob() loader run twice) that an unchanged entry is never reparsed — versus a live loader, which has no store at all.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+The content-and-data module already taught you to define collections and call `getCollection()`/`getEntry()`. This lesson is about what actually happens underneath: what `astro sync` writes to disk, what a loader is actually handed (`context.store`), and — provably, not by reading docs — when a loader's `load()` skips reparsing an entry entirely.
+
+## What `astro sync` actually writes
+
+Running `astro sync` against a project with a real `authors` collection (one JSON file) and a real `blog` collection (one Markdown file, with a `cover` image):
+
+```text
+$ npx astro sync
+[content] Syncing content
+[content] Synced content
+[types] Generated 283ms
+```
+
+Two **different locations** end up holding content-layer output, and they hold different things — worth being precise about, since it's easy to assume everything lives under the project-root `.astro/`:
+
+```text
+.astro/
+├── content.d.ts          (real collection types — DataEntryMap, per-collection shape)
+├── types.d.ts             (thin file: two /// <reference> lines, nothing else)
+├── content-assets.mjs     (a real Map of image-import specifiers -> the actual import)
+└── content-modules.mjs    (a real Map for deferred-render module imports)
+
+node_modules/.astro/
+└── data-store.json        (the actual content — every entry, digest, rendered HTML)
+```
+
+`.astro/content.d.ts`, trimmed to the two real collections this run produced:
+
+```ts
+type DataEntryMap = {
+	"authors": Record<string, {
+  id: string;
+  body?: string;
+  collection: "authors";
+  data: InferEntrySchema<"authors">;
+  rendered?: RenderedContent;
+  filePath?: string;
+  digest?: string | number;
+}>;
+"blog": Record<string, {
+  id: string;
+  body?: string;
+  collection: "blog";
+  data: InferEntrySchema<"blog">;
+  rendered?: RenderedContent;
+  filePath?: string;
+  digest?: string | number;
+}>;
+};
+```
+
+`.astro/content-assets.mjs` — a real, generated `Map` from an image-import specifier to the actual Vite-resolved import (this is how `image()`-schema fields become real `ImageMetadata` at read time):
+
+```js
+import __ASTRO_IMAGE_IMPORT_0 from "./cover.png?astroContentImageFlag=&importer=src%2Fdata%2Fblog%2Fhello-world.md";
+export default new Map([["./cover.png?astroContentImageFlag=&importer=src%2Fdata%2Fblog%2Fhello-world.md", __ASTRO_IMAGE_IMPORT_0]]);
+```
+
+And the real content of `node_modules/.astro/data-store.json` for that same run — this is not plain per-collection JSON, it's a flat, **deduplicated array** (repeated strings like a filename or a digest are stored once and referenced by index, the same technique `devalue` uses for the action-error wire format in the actions lesson):
+
+```json
+[
+  ["Map", 1, 2, 9, 10, 41, 42],
+  "authors",
+  ["Map", 3, 4],
+  "jane",
+  { "id": 3, "data": 5, "filePath": 7, "digest": 8 },
+  { "name": 6 },
+  "Jane Doe",
+  "src/data/authors/jane.json",
+  "70a6649a93b60adf",
+  "blog",
+  ["Map", 11, 12],
+  "hello-world",
+  { "id": 11, "data": 13, "body": 24, "filePath": 25, "digest": 30, "rendered": 31 },
+  { "title": 14, "pubDate": 15, "...": "..." }
+]
+```
+
+This is a genuine, useful correction to have straight when reading generated output: `data-store.json` — the actual entry data, every `digest`, and every `rendered.html` — lives under **`node_modules/.astro/`**, not the project-root `.astro/` folder a quick guess (or an outdated blog post) might assume. The root `.astro/` folder holds *types and asset-import glue*, not the data itself.
+
+## What a loader is actually handed: `LoaderContext`
+
+A custom loader's `load(context)` function receives an object shaped exactly like this real, installed type (`astro/dist/content/loaders/types.d.ts`):
+
+```ts
+export interface LoaderContext {
+	collection: string;
+	store: DataStore;
+	meta: MetaStore;
+	logger: AstroIntegrationLogger;
+	config: AstroConfig;
+	parseData<TData extends Record<string, unknown>>(props: ParseDataOptions<TData>): Promise<TData>;
+	renderMarkdown(content: string, options?: RenderMarkdownOptions): Promise<RenderedContent>;
+	generateDigest(data: Record<string, unknown> | string): string;
+	watcher?: FSWatcher;
+	refreshContextData?: Record<string, unknown>;
+}
+```
+
+`context.store` is a **scoped** `DataStore` — already bound to this one collection, so a loader never names its own collection when reading/writing (`astro/dist/content/mutable-data-store.d.ts`):
+
+```ts
+export interface DataStore {
+	get: <TData extends Record<string, unknown> = Record<string, unknown>>(key: string) => DataEntry<TData> | undefined;
+	entries: () => Array<[id: string, DataEntry]>;
+	set: <TData extends Record<string, unknown>>(opts: DataEntry<TData>) => boolean;
+	values: () => Array<DataEntry>;
+	keys: () => Array<string>;
+	delete: (key: string) => void;
+	clear: () => void;
+	has: (key: string) => boolean;
+	addModuleImport: (fileName: string) => void;
+}
+
+export interface MetaStore {
+	get: (key: string) => string | undefined;
+	set: (key: string, value: string) => void;
+	has: (key: string) => boolean;
+	delete: (key: string) => void;
+}
+```
+
+`meta` is deliberately separate from `store`: it's a tiny string-only key/value store meant for a loader's own bookkeeping (a sync token, a last-fetched timestamp, an ETag) — data that isn't itself a content entry and shouldn't show up in `getCollection()`.
+
+## Proof: an unchanged entry is never reparsed
+
+The real, unmodified `glob()` loader (`astro/dist/content/loaders/glob.js`) computes a digest for each file's contents, looks up the existing entry by id, and — this is the load-bearing line — returns **before calling `parseData` or rendering anything** when the digest matches:
+
+```js
+// astro/dist/content/loaders/glob.js (trimmed to the load-bearing check)
+const existingEntry = store.get(id);
+const digest = generateDigest(contents);
+if (existingEntry && existingEntry.digest === digest && existingEntry.filePath) {
+  if (existingEntry.deferredRender) store.addModuleImport(existingEntry.filePath);
+  if (existingEntry.assetImports?.length) store.addAssetImports(existingEntry.assetImports, existingEntry.filePath);
+  fileToIdMap.set(filePath2, id);
+  return; // <-- parseData/render never run for this entry on this sync
+}
+// ...only reached when the digest is new or different:
+const parsedData = await parseData({ id, data, filePath: filePath2 });
+```
+
+Proving this without editing the installed package's real logic — only adding one `console.log` line at that exact guard, then running `astro sync` three times against the real `authors`/`blog` collections used above:
+
+```text
+$ npx astro sync   # run 1: empty store, both entries are new
+[digest-probe] jane: existing=undefined new=70a6649a93b60adf REPARSE
+[digest-probe] hello-world: existing=undefined new=d5537621606f1b3b REPARSE
+
+$ npx astro sync   # run 2: nothing on disk changed
+[digest-probe] jane: existing=70a6649a93b60adf new=70a6649a93b60adf SKIP-reparse
+[digest-probe] hello-world: existing=d5537621606f1b3b new=d5537621606f1b3b SKIP-reparse
+
+$ # edit hello-world.md's body, leave jane.json untouched, then:
+$ npx astro sync   # run 3
+[digest-probe] hello-world: existing=d5537621606f1b3b new=255c56c997251696 REPARSE
+[digest-probe] jane: existing=70a6649a93b60adf new=70a6649a93b60adf SKIP-reparse
+```
+
+Run 2 proves the claim directly: with zero file changes, both entries hit `SKIP-reparse` — `parseData` and `renderMarkdown` never run for either one. Run 3 proves it's genuinely per-entry: editing only `hello-world.md` reparses only that entry; `jane.json`, untouched, still skips. This is exactly why a very large content collection doesn't get slower to `sync`/`build` as it grows *unchanged* — only the files that actually changed since the last run cost anything.
+
+<Mermaid title="glob() loader: digest decides reparse vs. skip" code={digestDiagram} />
+
+export const digestDiagram = `flowchart TD
+  start["for each matched file"] --> read["read file, compute digest = generateDigest(contents)"]
+  read --> lookup["existingEntry = store.get(id)"]
+  lookup --> cmp{"existingEntry?.digest === digest?"}
+  cmp -->|yes| skip["re-register module/asset imports only\nreturn — parseData/render NEVER called"]
+  cmp -->|no| parse["parseData(...) + renderMarkdown(...)\nstore.set({ ...digest, rendered, ... })"]`;
+
+## Loader lifecycle: dev vs. build
+
+`load()` runs once per `astro sync` (which `astro build` and `astro dev`'s startup both trigger). In `astro dev`, the `context.watcher` (a real Vite `FSWatcher`) lets a loader re-trigger its own `load()` on a relevant file change instead of waiting for the next full sync — this is what makes editing a Markdown file during `astro dev` show up without restarting the server. `refreshContextData` exists for a different re-trigger path entirely: an **integration** can call the content layer's refresh function with arbitrary extra data (e.g. "a webhook just told us collection X changed"), and every loader's `load()` runs again with that data available on `context.refreshContextData` — a live loader never sees this at all, since it has no persistent store to refresh in the first place.
+
+## `file`/`glob` loaders vs. a live loader: store vs. no store
+
+Everything above — the store, the digest, the skip — is specific to **build-time** loaders (`glob`, `file`, and custom ones built the same way). A **live loader** (`defineLiveCollection`) is a genuinely different code path with no store at all. The real runtime function behind `getLiveCollection()` (`astro/dist/content/runtime.js`):
+
+```js
+// astro/dist/content/runtime.js (trimmed)
+function createGetLiveCollection({ liveCollections }) {
+  return async function getLiveCollection(collection, filter) {
+    const context = { filter, collection };
+    const response = await liveCollections[collection].loader?.loadCollection?.(context);
+    // ...validate response.entries against the schema, return { entries } or { error }
+  };
+}
+```
+
+There is no `store.get`/`store.set` anywhere in this path — `loadCollection(context)` runs **fresh, on every single call**, for every request that calls `getLiveCollection()`. This is the entire difference in one sentence: a build-time loader's job is to keep a persistent, digest-checked store up to date (so reads are free); a live loader's job is to answer one request right now (so every read has a real cost — a real fetch, a real query — every time). Reaching for `defineCollection` + `glob`/`file` for data that's genuinely static-per-build, and `defineLiveCollection` only for data that must be fresh on every request, is the actual trade-off — not a stylistic choice.
+
+## Reading AI-generated code
+
+- Does a custom loader mutate `context.store` without ever computing or comparing a digest? It will work — the data ends up in the store either way — but every single `astro sync`/`astro build` will reparse and re-render every entry from scratch, proven above to be unnecessary for anything unchanged.
+- Does code assume `data-store.json` lives in the project-root `.astro/` folder? Proven above: it's under `node_modules/.astro/` — a script or CI step that reads/inspects it directly needs the real path, not the assumed one.
+- Is `getLiveCollection()` called in a loop, or cached "for performance" the way a build-time `getCollection()` result might be? Proven above: it has no store — it's meant to be called per-request; caching it yourself just reintroduces a cache with none of the digest-based invalidation the content layer already gives build-time collections for free.
+- Does `context.meta` get used to store actual content entries ("just to keep them separate")? It's a string-only key/value store for a loader's own bookkeeping, not a second data store — real content entries belong in `context.store`, where `getCollection()` can actually find them.
+
+<SpotTheBug code={`// A custom loader for a hypothetical CMS
+export function cmsLoader() {
+  return {
+    name: 'cms-loader',
+    load: async ({ store, config }) => {
+      const res = await fetch('https://cms.example.com/api/posts');
+      const posts = await res.json();
+      for (const post of posts) {
+        // "always write the latest data — simplest way to stay in sync"
+        store.set({ id: post.id, data: post });
+      }
+    },
+  };
+}`}>
+This loader works, but it throws away the entire point of the content layer's store: it never reads `existingEntry`/computes a digest at all, so `store.set(...)` runs for **every** post on **every** `astro sync`/`astro build` — full reparse, full rebuild-relevant work, whether the CMS actually changed anything or not. It also never removes entries for posts that were deleted upstream (there's no `untouchedEntries`-style tracking, unlike the real `glob()` loader shown in this lesson), so a deleted CMS post stays in the store forever. The fix mirrors `glob()`'s real pattern: compute `const digest = context.generateDigest(post)`, compare it against `store.get(post.id)?.digest` and skip the write when they match, and track which ids were seen this run so anything left over in the store afterward can be `store.delete()`d.
+</SpotTheBug>
+
+## Mental Model
+
+The content layer is a small database with one job: don't do work twice. `astro sync` calls every loader's `load()`, each loader decides — per entry, using a digest — whether anything actually needs reparsing, and the result lands in a real, inspectable file (`node_modules/.astro/data-store.json`) that `getCollection()`/`getEntry()` read from at runtime, with zero parsing cost at read time. A live loader opts out of all of this on purpose: no store, no digest, no persistence — just "answer this one request right now."
+
+## Trade-offs
+
+| | Build-time loader (`glob`/`file`/custom) | Live loader (`defineLiveCollection`) |
+|---|---|---|
+| **Where the data lives** | `node_modules/.astro/data-store.json`, written by `astro sync` | Nowhere persistent — fetched fresh per call |
+| **Repeat-call cost** | Free — `getCollection()` reads the already-parsed store | A real cost every time — `loadCollection()` re-runs in full |
+| **Freshness** | As fresh as the last `astro sync`/build | Always current as of the request |
+| **Unchanged-entry cost** | Zero, proven above — skipped via digest | N/A — there's no persistent entry to compare against |
+| **Best for** | Content that changes at author/deploy time (blog posts, docs, product catalogs synced periodically) | Data that must reflect *this exact moment* (live inventory, a price that changes by the minute) |
+
+## Common Misconceptions
+
+- **"`astro sync` reparses every content file, every time, to be safe."** Proven false above with a real `glob()` loader run twice in a row: an entry whose digest hasn't changed is never reparsed — only its module/asset imports are re-registered.
+- **"The content-layer data lives in the project's own `.astro/` folder."** Proven above: `data-store.json` — the actual entries, digests, and rendered HTML — is under `node_modules/.astro/`; the project-root `.astro/` folder holds generated *types* and asset-import glue, not the data.
+- **"A live collection is just a content collection that happens to be marked live — same caching underneath."** Proven false above from the real `getLiveCollection()` source: there is no store, no digest, no persistence at all. `loadCollection()` runs in full on every single call.
+
+<Callout title="The one-line takeaway">
+`astro sync` writes generated **types** and asset-import maps to the project-root `.astro/` folder, but the actual content — every entry, its `digest`, and its rendered HTML — lives in `node_modules/.astro/data-store.json` (proven above, a real, deduplicated-array JSON file). A loader gets a `LoaderContext` with a collection-scoped `store` (`get`/`set`/`entries`/`delete`/`clear`) and a separate string-only `meta` store for its own bookkeeping; the real, unmodified `glob()` loader proves — with three consecutive real `astro sync` runs — that an entry whose content digest hasn't changed is **never** reparsed, only re-registered. A live loader (`defineLiveCollection`) is a genuinely different path with no store at all: `getLiveCollection()` calls `loadCollection(context)` fresh, in full, on every single request — the real trade-off is build-time freshness-as-of-last-sync (free reads) versus request-time freshness (a real cost every time).
+</Callout>
+
+export const quizContentLayer = [
+  {
+    q: 'Where does astro sync actually write the content layer\'s data — every entry, its digest, and its rendered HTML?',
+    options: [
+      'The project-root .astro/ folder, in data-store.json',
+      'node_modules/.astro/data-store.json — proven directly in this lesson; the project-root .astro/ folder holds generated types and asset-import maps instead',
+      'It is kept only in memory and never written to disk',
+      'Inside src/content.config.ts itself',
+    ],
+    answer: 1,
+    explain: 'Proven above by running a real astro sync and inspecting the filesystem: data-store.json is under node_modules/.astro/, not the project-root .astro/ folder a quick guess might assume.',
+  },
+  {
+    q: '```js\nif (existingEntry && existingEntry.digest === digest && existingEntry.filePath) {\n  // ...\n  return;\n}\nconst parsedData = await parseData({ id, data, filePath });\n```\nWhat does this real glob() loader code, and the three real astro sync runs in this lesson, prove?',
+    options: [
+      'Every entry is always reparsed on every sync, for safety',
+      'An entry whose content digest matches the stored one is never reparsed — parseData/render are skipped entirely; only a changed file is actually reparsed',
+      'Digests are only used in production builds, never in sync',
+      'parseData always runs first, and the digest check happens afterward',
+    ],
+    answer: 1,
+    explain: 'Proven with three real astro sync runs: run 2 (no file changes) hit SKIP-reparse for both entries; run 3 (one file edited) reparsed only that one entry — the untouched one still skipped.',
+  },
+  {
+    q: 'What is context.meta, in a loader\'s LoaderContext, actually for?',
+    options: [
+      'A second content store for entries you want to keep separate from the main one',
+      'A small, string-only key/value store for a loader\'s own bookkeeping (a sync token, a last-fetched timestamp) — not a place for content entries',
+      'Metadata Astro generates automatically about the collection\'s schema',
+      'A cache of the rendered HTML for every entry',
+    ],
+    answer: 1,
+    explain: 'Proven directly from the real, installed MetaStore type: get/set/has/delete on plain strings only — deliberately separate from DataStore, which is where real content entries belong so getCollection() can find them.',
+  },
+  {
+    q: 'How does getLiveCollection() differ from reading a build-time collection with getCollection(), according to the real runtime.js source?',
+    options: [
+      'They are identical under the hood — both read from the same data store',
+      'getLiveCollection() calls the live loader\'s loadCollection(context) fresh, in full, on every single call — there is no store, no digest, no persistence at all',
+      'getLiveCollection() is just getCollection() with a different name',
+      'getLiveCollection() only works at build time, never per-request',
+    ],
+    answer: 1,
+    explain: 'Proven directly from astro/dist/content/runtime.js: createGetLiveCollection\'s returned function awaits loader.loadCollection(context) every time it\'s called — no store.get/store.set anywhere in that path.',
+  },
+  {
+    q: 'A custom loader writes every entry with store.set(...) on every load() call, without ever comparing a digest. What is the real, provable consequence?',
+    options: [
+      'Nothing — store.set is idempotent so this is harmless',
+      'Every entry is reparsed/rewritten on every single astro sync/build, even when nothing about that entry changed — proven above to be unnecessary work the real glob() loader avoids',
+      'Astro automatically adds digest checking for you regardless',
+      'It will throw a build error',
+    ],
+    answer: 1,
+    explain: 'Proven by contrast with the real glob() loader\'s guard clause in this lesson: skipping the digest check means store.set (and any parseData/render work upstream of it) runs unconditionally, every time, for every entry.',
+  },
+];
+
+<Quiz client:visible id="astro-internals/content-layer-internals" questions={quizContentLayer} />
+
+<ProgressTracker client:visible id="astro-internals/content-layer-internals" />

@@ -1,0 +1,183 @@
+---
+title: 'How Astro Works'
+description: 'The compiler output, island hydration, the content layer, the request pipeline, and the build pipeline — the internals that let you actually judge unfamiliar or AI-generated Astro code, not just use the framework.'
+sidebar:
+  order: 0
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## What this module is for
+
+Every earlier module in this course taught you to *use* Astro: components, islands, content collections, actions, middleware, adapters. None of it required knowing what actually happens to a `.astro` file after you write it, what ships to the browser when you add `client:load`, what `astro sync` actually writes to disk, what order a request runs through, or what `astro build` does between "Collecting build info..." and "Complete!". You can write a working component, a correct loader, a passing action — without ever asking what `$$createComponent` is, why an island waits for its parent to hydrate first, or why an unchanged content entry doesn't get reparsed.
+
+That gap is exactly where AI-generated Astro fails in ways that look fine on the surface: a nested island that assumes it hydrates independently of its parent, a custom loader that mutates the data store without a digest so every build reparses everything, a middleware that reads `context.request.body` twice, a route collision "fixed" by renaming a file instead of understanding static/dynamic/rest priority. None of these are syntax errors. None of them are caught by `astro check`. All of them are facts about the runtime and the build.
+
+This module has one job: give you five pieces of runtime knowledge that let you look at **someone else's Astro code** — not run it, not profile it, just read it — and answer:
+
+1. **What does this `.astro` file actually compile to?** (the compiler output — `$$createComponent`, `$$render`, scoped styles, slots, hydration metadata)
+2. **What happens the instant an island becomes interactive — and in what order, when islands are nested?** (island hydration — the real `<astro-island>` element, prop encoding, directive loaders)
+3. **What does `astro sync` write to disk, and when does a loader actually re-run?** (the content layer — the data store, digests, live vs. build-time loaders)
+4. **What order does an incoming request actually run through?** (the request pipeline — adapter → middleware → routing → page/endpoint/action → response)
+5. **What does `astro build` do, in what order, and why is a second build often faster?** (the build pipeline — Vite 8 + Rolldown, the prerender pass, the client bundle, the content-layer cache)
+
+Every claim in this module is backed by one of three things: [docs.astro.build](https://docs.astro.build/), the actual Astro source shipped in `node_modules/astro` (this course pins **7.3.5**), cited by file and function name; or a real, reproduced run — a `transform()` call against the installed `@astrojs/compiler-rs`, a vitest assertion, a real `curl` against a running build, or a real `astro build`/`astro sync` log — pasted below the claim, never a guess about internals.
+
+<Callout title="The one-line takeaway">
+This module doesn't add new Astro APIs — it explains the five things every `.astro` file, island, content collection, request, and build actually run through: the **compiler** (turns `.astro` into plain JS calls against `astro/runtime/server`, via the native Rust `@astrojs/compiler-rs` — not the older WASM `@astrojs/compiler` some tooling and this course's own in-browser playground still use), **island hydration** (a real `<astro-island>` custom element that waits for its parent before hydrating), the **content layer** (a digest-keyed data store that skips reparsing anything unchanged), the **request pipeline** (adapter → middleware `sequence()` → route matching by static/dynamic/rest priority → page/endpoint/action → response), and the **build pipeline** (Vite 8 + Rolldown, a prerender pass, then the client bundle, reusing the content-layer cache between builds). Every one of the five is on docs.astro.build or directly readable in the installed package — unfamiliar, not undocumented.
+</Callout>
+
+## What this module covers
+
+| Lesson | Answers the question |
+|---|---|
+| [Compiler Output](/astro/en/astro-internals/compiler-output/) | What does a `.astro` file with props, a scoped style, an expression, and a slot actually compile to? |
+| [Island Hydration](/astro/en/astro-internals/island-hydration/) | What does `<astro-island>` actually do at `connectedCallback`, and why do nested islands hydrate in a specific order? |
+| [Content Layer Internals](/astro/en/astro-internals/content-layer-internals/) | What does `astro sync` write to disk, and how does a loader know an entry hasn't changed? |
+| [Request Pipeline](/astro/en/astro-internals/request-pipeline/) | What is the real, provable order a request runs through, from the adapter to the response? |
+| [Build Pipeline](/astro/en/astro-internals/build-pipeline/) | What does `astro build` actually do, in what order, and what makes a second build faster? |
+
+The Foundations module already introduced "Astro ships zero JavaScript by default" and the component model from the outside. This module goes past that framing into the actual compiled output, the actual runtime, and the actual build.
+
+## A runnable question: what does a scoped style actually become?
+
+Before any of the deeper mechanism, here is a fact this whole module orbits: compiling the exact same `.astro` source twice, under two different file names, produces two different scoped-style hashes — proving the hash is derived from the file's path, not from a counter or the content alone.
+
+```ts
+// src/lib/scoped-hash.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">Hello {name}</div>
+`;
+
+test('transform(): the scoped-style hash is derived from the filename, not the content', () => {
+  const a = transform(source, { filename: 'src/components/Card.astro' });
+  const b = transform(source, { filename: 'src/components/RenamedCard.astro' });
+
+  const hashOf = (code: string) => code.match(/astro-([a-z0-9]+)/)?.[1];
+
+  expect(hashOf(a.code)).toBeTruthy();
+  expect(hashOf(b.code)).toBeTruthy();
+  expect(hashOf(a.code)).not.toBe(hashOf(b.code)); // same source, different file -> different hash
+});
+```
+
+```text
+✓ transform(): the scoped-style hash is derived from the filename, not the content
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+[Compiler Output](/astro/en/astro-internals/compiler-output/) walks the rest of this same `transform()` call in full — every import, every `$$`-prefixed call, and exactly why the hash changes with the filename.
+
+<Mermaid title="One .astro file, source to response" code={bigDiagram} />
+
+export const bigDiagram = `flowchart TD
+  src["\`.astro\` source"] --> compile["\`@astrojs/compiler-rs\` \`transform()\`"]
+  compile --> js["Compiled JS: \`$$createComponent\`/\`$$render\`\n\`$$addAttribute\`/scoped \`astro-*\` hash\n(Compiler Output)"]
+  js --> island["If hydrated: \`<astro-island>\` ships\nconnectedCallback -> hydrate()\n(Island Hydration)"]
+  content["\`astro sync\`: content collections -> data store\ndigest-keyed, skips unchanged entries"] --> js
+  req["Incoming Request"] --> adapter["adapter entry (e.g. \`@astrojs/node\`)"]
+  adapter --> mw["middleware \`sequence()\`"]
+  mw --> route["route matching: static > dynamic > rest\n(Request Pipeline)"]
+  route --> js
+  js --> resp["Response"]
+  build["\`astro build\`: Vite 8 + Rolldown\nprerender pass -> client bundle\n(Build Pipeline)"] --> js`;
+
+## Mental Model
+
+Reading unfamiliar Astro well means running a small machine in your head while your eyes only see the file: *what does this compile to, does it ship any JavaScript, and if it does, when does that JavaScript actually run relative to everything else on the page and in the request.* The five lessons here are exactly those questions, at compile time (Compiler Output), at hydration time (Island Hydration), at sync/build time for content (Content Layer Internals), per-request (Request Pipeline), and for the whole site (Build Pipeline). Nothing here is exotic — the compiled output is plain, readable JavaScript, and the runtime is a few hundred lines you can read directly in `node_modules/astro/dist/`.
+
+## Common Misconceptions
+
+- **"Astro's compiler is `@astrojs/compiler`, the WASM package."** Proven wrong in this module: Astro 7's real compiler — the one `astro check`/`astro build` actually run — is `@astrojs/compiler-rs`, a native Rust NAPI addon. `@astrojs/compiler` (the older, browser-loadable WASM package) still exists and is what this course's own in-browser `<AstroPlayground>` uses, because the real Rust compiler has no browser build — but it is not the compiler that gates this course's own snippets.
+- **"An island hydrates as soon as its own directive fires, independent of anything else on the page."** [Island Hydration](/astro/en/astro-internals/island-hydration/) proves the opposite with the real, installed `astro-island.js`: a nested island whose parent is still server-rendered-only (`ssr` attribute present) defers its own hydration until the parent actually hydrates.
+- **"Every `astro build` reparses every content entry from scratch."** [Content Layer Internals](/astro/en/astro-internals/content-layer-internals/) proves, with a real, unmodified `glob()` loader and two consecutive `astro sync` runs, that an entry whose content digest hasn't changed is never reparsed — only its module/asset imports are re-registered.
+
+## Reading AI-generated code
+
+The whole point of this module is this section, five times over — one per lesson. As a preview, here is the survey-level version: a snippet that renders correctly the first time and is still wrong.
+
+<SpotTheBug code={`---
+// src/components/Panel.astro
+import Inner from './Inner.jsx';
+---
+<div class="panel">
+  <Inner client:load />
+</div>
+
+<script>
+  // "runs once the island is interactive"
+  document.querySelector('.panel')?.classList.add('ready');
+</script>
+`}>
+This looks reasonable and even "works" — the class gets added. But the comment's claim is wrong: a plain `<script>` on the page runs on `DOMContentLoaded`/module-execution order, which has no relationship at all to when `Inner`'s island actually finishes hydrating. [Island Hydration](/astro/en/astro-internals/island-hydration/) proves the real signal: `astro-island.js` dispatches a real `astro:hydrate` `CustomEvent` on the island element itself, only once hydration has actually completed (`this.dispatchEvent(new CustomEvent('astro:hydrate'))` in the installed source). The fix is to listen for that event on the island's `<astro-island>` element (or a stable ancestor) instead of assuming script-tag order implies hydration order — `document.querySelector('astro-island')?.addEventListener('astro:hydrate', () => { ... })`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Five mechanisms decide what happens after you write Astro code: the **compiler** (`@astrojs/compiler-rs`'s `transform()` turns `.astro` into plain calls against `astro/runtime/server` — proven throughout this module with real `transform()` output), **island hydration** (a real `<astro-island>` custom element whose `hydrate()` method waits for a still-`ssr` parent before running), the **content layer** (a digest-keyed data store — `astro sync` skips reparsing anything whose content hash hasn't changed), the **request pipeline** (adapter → middleware `sequence()` → route matching by static/dynamic/rest priority → your page/endpoint/action), and the **build pipeline** (Vite 8 + Rolldown: a prerender pass, then the client bundle, reusing the content-layer cache). None of these are exotic — they're on docs.astro.build and in the `astro` package you already have installed — but almost no AI-generated code is written with them in mind, which is exactly why they're worth having in your head when you review one.
+</Callout>
+
+export const quizInternalsIndex = [
+  {
+    q: "What is this module's central goal?",
+    options: [
+      'Teach you to reimplement the Astro compiler',
+      'Let you judge, by reading unfamiliar Astro source, what it compiles to, when its JavaScript actually runs, and what the content layer and build actually do',
+      'Replace the need for astro check',
+      'Cover every internal Astro source file line by line',
+    ],
+    answer: 1,
+    explain: 'The module is scoped deliberately to reading skill: given someone else\'s Astro code, can you predict what the compiler, runtime, content layer, and build will actually do, from the source alone.',
+  },
+  {
+    q: 'Which package does Astro 7.3.5 actually use to compile `.astro` files during `astro check`/`astro build`?',
+    options: [
+      '`@astrojs/compiler`, a WASM package',
+      '`@astrojs/compiler-rs`, a native Rust NAPI addon — proven directly against this repo\'s installed dependencies',
+      'There is no separate compiler package; Astro parses files itself',
+      'Vite compiles `.astro` files directly with no separate package',
+    ],
+    answer: 1,
+    explain: 'Verified against the installed astro@7.3.5\'s own dependencies: it depends on @astrojs/compiler-rs, not @astrojs/compiler. The WASM package still exists and is what this course\'s in-browser playground uses instead, since the Rust compiler has no browser build.',
+  },
+  {
+    q: '```astro\n<Outer client:load>\n  <Inner client:load />\n</Outer>\n```\nIf `Inner` is a nested island inside `Outer`, what does the real astro-island.js source prove about hydration order?',
+    options: [
+      'Inner hydrates independently, whenever its own directive fires, with no relationship to Outer',
+      'Inner\'s hydrate() defers — via a real parentSsrIsland check — until Outer has actually hydrated first',
+      'Nested islands are not supported at all',
+      'Outer always hydrates after all of its children, unconditionally',
+    ],
+    answer: 1,
+    explain: 'Proven in Island Hydration with the real, unmodified astro-island.js: a child whose parent still carries the `ssr` attribute listens for that parent\'s astro:hydrate event before running its own hydrate() body.',
+  },
+  {
+    q: 'True or false: every internals claim in this module is either stated on docs.astro.build, quoted from the installed astro/@astrojs source with a file and function name, or proven by a reproduced run (compile, test, curl, or build log) whose real output is shown.',
+    options: ['True', 'False — some internals had to be guessed', 'Only the compiler-output lesson follows this rule', 'Only true for the request-pipeline lesson'],
+    answer: 0,
+    explain: 'This is the module\'s explicit sourcing rule, stated in the intro — no invented field names, hashes, or numbers anywhere in these five lessons.',
+  },
+  {
+    q: 'Which lesson explains what astro sync actually writes to disk, and when a content loader re-runs its parsing?',
+    options: ['Compiler Output', 'Island Hydration', 'Content Layer Internals', 'Build Pipeline'],
+    answer: 2,
+    explain: 'Content Layer Internals proves — with a real glob() loader run twice in a row — exactly when an entry\'s digest causes it to be skipped versus reparsed.',
+  },
+];
+
+<Quiz client:visible id="astro-internals/index" questions={quizInternalsIndex} />
+
+<ProgressTracker client:visible id="astro-internals/index" />

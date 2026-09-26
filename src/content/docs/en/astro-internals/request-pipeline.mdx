@@ -1,0 +1,362 @@
+---
+title: 'Request Pipeline'
+description: 'The real, provable order an on-demand request runs through — adapter entry, middleware sequence(), route matching by static/dynamic/rest priority, Astro.rewrite, and error handling — proven with real console.log output from a running build, not a diagram from memory.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+[Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/) already showed you `sequence()` and `context.locals`. This lesson proves the *whole* pipeline, end to end, with real logs from a real running build: two middlewares, a page, an endpoint, three colliding routes, an `Astro.rewrite()` call, and a thrown error — all logged from the inside, all curled from the outside.
+
+## The setup
+
+```ts
+// src/middleware.ts
+import { defineMiddleware, sequence } from 'astro:middleware';
+
+const logStep = defineMiddleware(async (context, next) => {
+  console.log(`[pipeline] middleware A: before next() for ${context.url.pathname}`);
+  const response = await next();
+  console.log(`[pipeline] middleware A: after next() for ${context.url.pathname}, status=${response.status}`);
+  return response;
+});
+
+const logStep2 = defineMiddleware(async (context, next) => {
+  console.log(`[pipeline] middleware B: before next() for ${context.url.pathname}`);
+  const response = await next();
+  console.log(`[pipeline] middleware B: after next() for ${context.url.pathname}`);
+  return response;
+});
+
+export const onRequest = sequence(logStep, logStep2);
+```
+
+Three routes built specifically to collide, each logging when it's the one that matched:
+
+```astro
+---
+// src/pages/probe-req/collide/static.astro
+export const prerender = false;
+console.log('[pipeline] STATIC route matched: /probe-req/collide/static');
+---
+<p>static</p>
+```
+
+```astro
+---
+// src/pages/probe-req/collide/[id].astro
+export const prerender = false;
+console.log('[pipeline] DYNAMIC [id] route matched:', Astro.params.id);
+---
+<p>dynamic {Astro.params.id}</p>
+```
+
+```astro
+---
+// src/pages/probe-req/collide/[...rest].astro
+export const prerender = false;
+console.log('[pipeline] REST [...rest] route matched:', Astro.params.rest);
+---
+<p>rest {Astro.params.rest}</p>
+```
+
+Built with `@astrojs/node` in `standalone` mode and run for real (`node dist/server/entry.mjs`), then hit with real `curl` requests:
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/collide/static -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>static</p>
+HTTP 200
+
+$ curl -s http://127.0.0.1:5004/probe-req/collide/somethingelse -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>dynamic somethingelse</p>
+HTTP 200
+
+$ curl -s http://127.0.0.1:5004/probe-req/collide/a/b -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>rest a/b</p>
+HTTP 200
+```
+
+And the real server log for those three requests, in order:
+
+```text
+[pipeline] middleware A: before next() for /probe-req/collide/static
+[pipeline] middleware B: before next() for /probe-req/collide/static
+[pipeline] STATIC route matched: /probe-req/collide/static
+[pipeline] middleware B: after next() for /probe-req/collide/static
+[pipeline] middleware A: after next() for /probe-req/collide/static, status=200
+[pipeline] middleware A: before next() for /probe-req/collide/somethingelse
+[pipeline] middleware B: before next() for /probe-req/collide/somethingelse
+[pipeline] DYNAMIC [id] route matched: somethingelse
+[pipeline] middleware B: after next() for /probe-req/collide/somethingelse
+[pipeline] middleware A: after next() for /probe-req/collide/somethingelse, status=200
+[pipeline] middleware A: before next() for /probe-req/collide/a/b
+[pipeline] middleware B: before next() for /probe-req/collide/a/b
+[pipeline] REST [...rest] route matched: a/b
+[pipeline] middleware B: after next() for /probe-req/collide/a/b
+[pipeline] middleware A: after next() for /probe-req/collide/a/b, status=200
+```
+
+(Real, captured from a single `node dist/server/entry.mjs` run with `@astrojs/node`'s `standalone` mode — the same run this lesson's `Astro.rewrite()` and error-handling logs below come from too, hit with six real `curl` requests in one sequence, in the order they appear across this lesson.)
+
+Two facts, proven directly:
+
+- **`sequence(A, B)` nests, it doesn't chain flatly.** Every request logs `A before` → `B before` → (the route handler) → `B after` → `A after` — `A` wraps `B`, in the exact order it was listed in `sequence(...)`. A middleware placed first in `sequence()` gets to run code both *before and after* every middleware after it, not just before.
+- **Route priority is static > dynamic > rest**, proven with a real collision: `/collide/static` matches the static file even though `[id].astro` could also match it; `/collide/somethingelse` (one segment, no static file for it) falls to `[id].astro`; `/collide/a/b` (two segments — `[id]` can't match two segments at all) falls all the way to `[...rest].astro`. This is exactly the ordering [Dynamic Routes](/astro/en/content-and-data/dynamic-routes/) states — proven here with three files that genuinely compete for the same request.
+
+<Mermaid title="One request, from adapter to response" code={pipelineDiagram} />
+
+export const pipelineDiagram = `sequenceDiagram
+  participant Client
+  participant Adapter as "@astrojs/node handler"
+  participant MW as middleware sequence(A, B)
+  participant Router as route matching
+  participant Handler as page / endpoint / action
+  Client->>Adapter: HTTP request
+  Adapter->>MW: build context, call onRequest
+  MW->>MW: A before -> B before
+  MW->>Router: next() reaches routing
+  Router->>Router: static > dynamic > rest priority
+  Router->>Handler: matched route's module
+  Handler-->>MW: render result / Response
+  MW->>MW: B after -> A after
+  MW-->>Adapter: final Response
+  Adapter-->>Client: HTTP response`;
+
+## `Astro.rewrite()`: a full nested pass through the pipeline
+
+Calling `Astro.rewrite('/probe-req/reqpage/')` from inside a page's frontmatter doesn't just swap in different HTML — it re-enters routing and **re-runs the entire middleware chain**, nested, for the new URL. Proven with a real request to a page that does exactly this:
+
+```astro
+---
+// src/pages/probe-req/rewrite-source.astro
+export const prerender = false;
+console.log('[pipeline] rewrite-source-req: about to call Astro.rewrite');
+return Astro.rewrite('/probe-req/reqpage/');
+---
+```
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/rewrite-source -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><html><body><h1>req page</h1></body></html>
+HTTP 200
+```
+
+The real server log for that one request:
+
+```text
+[pipeline] middleware A: before next() for /probe-req/rewrite-source
+[pipeline] middleware B: before next() for /probe-req/rewrite-source
+[pipeline] rewrite-source-req: about to call Astro.rewrite
+[pipeline] middleware A: before next() for /probe-req/reqpage/
+[pipeline] middleware B: before next() for /probe-req/reqpage/
+[pipeline] page component: rendering /probe-req/reqpage/
+[pipeline] middleware B: after next() for /probe-req/reqpage/
+[pipeline] middleware A: after next() for /probe-req/reqpage/, status=200
+[pipeline] middleware B: after next() for /probe-req/rewrite-source
+[pipeline] middleware A: after next() for /probe-req/rewrite-source, status=200
+```
+
+Read that middle section again: `middleware A/B: before next()` for `/probe-req/reqpage/` appears **nested inside** the original request's still-open `A`/`B` calls — the original request never finishes its own `next()` until the fully re-run pipeline for the rewritten path completes. This has a real, practical consequence: a middleware that does per-request setup (opening a database transaction, starting a timer) runs **twice** for a request that gets rewritten once — proven directly above, not a guess.
+
+## Error handling: throwing also triggers a nested pass
+
+A page that throws behaves similarly to a rewrite — Astro catches the error and internally re-enters the pipeline for the site's `500` page, rather than just returning a bare error response:
+
+```astro
+---
+// src/pages/probe-req/boom.astro
+export const prerender = false;
+console.log('[pipeline] boom page: about to throw');
+throw new Error('deliberate boom for the request-pipeline lesson');
+---
+<p>never rendered</p>
+```
+
+```astro
+---
+// src/pages/500.astro
+export const prerender = false;
+console.log('[pipeline] 500.astro rendered, error:', Astro.props.error?.message);
+Astro.response.status = 500;
+---
+<p>server error</p>
+```
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/boom -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>server error</p>
+HTTP 500
+```
+
+The real server log — note `middleware A: before next() for /probe-req/boom` appears **twice**:
+
+```text
+[pipeline] middleware A: before next() for /probe-req/boom
+[pipeline] middleware B: before next() for /probe-req/boom
+[pipeline] boom page: about to throw
+10:28:42 [ERROR] Error: deliberate boom for the request-pipeline lesson
+    at ... (real stack trace, pointing at the exact throw line)
+[pipeline] middleware A: before next() for /probe-req/boom
+[pipeline] middleware B: before next() for /probe-req/boom
+[pipeline] 500.astro rendered, error: deliberate boom for the request-pipeline lesson
+[pipeline] middleware B: after next() for /probe-req/boom
+[pipeline] middleware A: after next() for /probe-req/boom, status=500
+```
+
+`Astro.props.error?.message` inside `500.astro` genuinely receives the thrown `Error`'s real message — proven above, not a placeholder. And a request to a route that simply doesn't exist (no throw at all) still resolves through the exact same middleware wrapping, once, landing on `404.astro`:
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/does-not-exist -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>not found: /probe-req/does-not-exist</p>
+HTTP 404
+```
+
+```text
+[pipeline] middleware A: before next() for /probe-req/does-not-exist
+[pipeline] middleware B: before next() for /probe-req/does-not-exist
+[pipeline] 404.astro rendered for /probe-req/does-not-exist
+[pipeline] middleware B: after next() for /probe-req/does-not-exist
+[pipeline] middleware A: after next() for /probe-req/does-not-exist, status=404
+```
+
+The difference between the two: a genuine 404 (no matching route at all) resolves to `404.astro` in a **single** pass — there's no "original" handler that ran and failed, so there's nothing to nest around. A **thrown** error is what specifically triggers the internal re-entry into the pipeline (proven above by the doubled middleware log), because Astro has to abandon a request that was already in progress and hand control to the 500 page instead.
+
+## The route-private-file rule, discovered along the way
+
+Building this lesson's probe routes under a directory literally named to match this course's own `src/pages/__lessons/<module>__<lesson>/` harness convention produced consistent 404s for every route in it — including ones with zero typos. The real cause, found directly in the installed source (`astro/dist/core/util.js`'s `isPublicRoute`):
+
+```js
+// astro/dist/core/util.js — isPublicRoute (trimmed)
+function isPublicRoute(file, config) {
+  const parts = normalizedDir.split("/").slice(1);
+  for (const part of parts) {
+    if (part.startsWith("_")) return false;
+  }
+  return true;
+}
+```
+
+**Any** path segment under `src/pages/` starting with `_` — a file *or a containing directory* — makes `isPage()`/`isEndpoint()` return `false` for it, so it's never routed at all (not even to a 404 — the router simply never considers it a page). This is real, useful information for reading a route tree: an underscore-prefixed folder under `src/pages/` (a common convention for "helper components that live near their routes but aren't routes themselves") is invisible to routing entirely, at any depth.
+
+## Reading AI-generated code
+
+- Does a comment describe `sequence(a, b, c)` as "these run in order, one after another"? Proven above: they *nest* — `a` wraps `b` wraps `c`, so `a`'s code after its own `next()` call runs **last**, after everything nested inside it has fully resolved, not "next in line."
+- Does code assume a middleware's per-request setup runs exactly once? Proven above with `Astro.rewrite()`: a rewritten (or a thrown-then-error-paged) request re-enters the full middleware chain a second time for the same original request.
+- Does a route-collision "fix" just rename or move a file, without checking whether the real priority (static > dynamic > rest, proven above) already resolves it correctly? Sometimes the fix needed is understanding which file *should* win, not making one of them stop existing.
+- Is a page or component placed under a directory whose name starts with `_` inside `src/pages/`, expecting it to still be reachable as a route? Proven above: any underscore-prefixed segment anywhere in the path removes it from routing entirely.
+
+<SpotTheBug code={`// src/middleware.ts
+import { defineMiddleware, sequence } from 'astro:middleware';
+
+const timing = defineMiddleware(async (context, next) => {
+  const start = Date.now();
+  const response = await next();
+  // "logs how long the whole request took, including anything downstream"
+  console.log(\`\${context.url.pathname} took \${Date.now() - start}ms\`);
+  return response;
+});
+
+const auth = defineMiddleware(async (context, next) => {
+  context.locals.user = await getUser(context);
+  return next();
+});
+
+export const onRequest = sequence(timing, auth);
+`}>
+The comment's claim about `timing` is correct on its own — but the *order* in `sequence(timing, auth)` means `timing` wraps `auth`, and if this same request ever gets rewritten (`Astro.rewrite(...)`) or ends up on the error-page path, the WHOLE nested pipeline — including `auth`'s real work of re-deriving `context.locals.user` — runs a second time inside that one `next()` call, and `timing`'s single measurement silently includes both passes added together, not the one the log message implies. There's also a subtler ordering bug: `auth` runs *after* `timing` starts its clock but *before* the actual page — fine here, but if a later middleware needed `context.locals.user` to decide whether to rewrite at all, `auth` would need to come first in the `sequence(...)` list, since middlewares only see `context.locals` values set by whichever middleware ran before them in that same pass.
+</SpotTheBug>
+
+## Mental Model
+
+A request isn't "middleware, then the page" — it's a nested call stack, exactly like `sequence()`'s own name implies: each middleware wraps everything after it, and anything that causes Astro to internally re-route (a thrown error, an `Astro.rewrite()`) doesn't skip that stack, it re-enters it, nested one level deeper, for the new target. Reading pipeline code well means asking, for any given request, "could this actually run more than once inside a single original request" — and proving it, the way this lesson just did, rather than assuming a `console.log` only ever fires once.
+
+## Trade-offs
+
+| | Static route | Dynamic (`[id]`) | Rest (`[...rest]`) |
+|---|---|---|---|
+| **Matches** | Exactly one literal path | Exactly one path segment | Any number of remaining segments |
+| **Priority** | Highest — wins any collision | Middle | Lowest — only wins when nothing more specific matches |
+| **Best for** | A route that must never accidentally match something else (a health check, a webhook) | A single resource by id/slug | A catch-all (a CMS-driven page tree, a proxy) |
+
+| | Thrown error → `500.astro` | Genuine 404 → `404.astro` |
+|---|---|---|
+| **Middleware passes** | Two — the original (aborted) pass, plus a full re-entry for the error page (proven above) | One — there was never a first handler to abort |
+| **`Astro.props.error`** | The real thrown `Error` | Not applicable |
+
+## Common Misconceptions
+
+- **"`sequence(a, b)` means a runs, then b runs, like two independent steps."** Proven false above: they nest. `a`'s code after `await next()` runs after `b` (and the route) have fully finished — closer to a wrapping function call than a flat list.
+- **"A middleware's setup code runs exactly once per request."** Proven false above: `Astro.rewrite()` and a thrown error both cause a real, provable second pass through the entire middleware chain for the same original request.
+- **"Route collisions are resolved by whichever file was created first, or alphabetically."** Proven above with three files built specifically to collide: priority is a fixed rule — static, then dynamic, then rest — regardless of file creation order or naming.
+- **"An underscore-prefixed folder under `src/pages/` just makes its routes 'hidden' from a sitemap, but they still work if you know the URL."** Proven false above, directly from `isPublicRoute`'s real source: it makes the router never register them as pages/endpoints at all — the URL genuinely 404s, it isn't merely unlisted.
+
+<Callout title="The one-line takeaway">
+A request runs through a real, nested pipeline: the adapter hands off to `middleware sequence(A, B, ...)` (proven above to nest, not chain — `A` wraps `B`), which calls `next()` into route matching (static beats dynamic beats rest — proven with three genuinely colliding files), which reaches your page/endpoint/action and returns a `Response` back up through the same nested middlewares. `Astro.rewrite()` and a thrown error (→ `500.astro`) both cause a **second, full re-entry** into that same middleware chain, nested inside the original request's still-open `next()` call — proven above with doubled middleware logs for both. And any path segment starting with `_` under `src/pages/` — a file or a containing folder — is invisible to routing entirely, proven directly from `isPublicRoute`'s real source.
+</Callout>
+
+export const quizRequestPipeline = [
+  {
+    q: '```ts\nexport const onRequest = sequence(A, B);\n```\nGiven the real logged output `A before -> B before -> (route) -> B after -> A after`, what does this prove about how sequence() combines middlewares?',
+    options: [
+      'A and B run as two independent, unrelated steps, one after another',
+      'They nest — A wraps B, so A\'s code after its own next() call runs last, after B and the route have fully finished',
+      'B always runs before A, regardless of the argument order',
+      'Only the first middleware listed ever actually runs',
+    ],
+    answer: 1,
+    explain: 'Proven directly by the real server log in this lesson: every request logs A-before, B-before, the handler, B-after, A-after, in exactly that nested order — never a flat A-then-B sequence.',
+  },
+  {
+    q: '```text\n/probe-req/collide/static  -> matched by static.astro\n/probe-req/collide/somethingelse -> matched by [id].astro\n/probe-req/collide/a/b -> matched by [...rest].astro\n```\nWith all three files present and genuinely colliding, what does this real, curled output prove about route priority?',
+    options: [
+      'Whichever file was created most recently wins',
+      'Static routes beat dynamic routes, which beat rest (catch-all) routes — proven with three files built specifically to compete for the same requests',
+      'Alphabetical filename order decides ties',
+      'Rest routes always win when present',
+    ],
+    answer: 1,
+    explain: 'Proven with real curl requests against all three colliding files in this lesson: the most specific match (static, then single-segment dynamic, then multi-segment rest) always wins.',
+  },
+  {
+    q: 'A page calls `Astro.rewrite(\'/other-page/\')`. What does the real server log in this lesson prove happens to the middleware chain?',
+    options: [
+      'Nothing — the middleware only ran once, for the original request',
+      'The full middleware chain re-runs, nested inside the original request\'s still-open next() call, for the rewritten URL — proven by the doubled "before next()" log lines',
+      'Middleware is skipped entirely for a rewritten request',
+      'Only the second middleware in sequence() re-runs, not the first',
+    ],
+    answer: 1,
+    explain: 'Proven directly above: after Astro.rewrite() is called, both middleware A and B log "before next()" again for the new URL, nested inside the original request\'s still-open calls — a real, full re-entry.',
+  },
+  {
+    q: 'A page throws an Error. What does the real, doubled middleware log in this lesson prove about how Astro handles it?',
+    options: [
+      'Astro immediately returns a bare 500 with no further middleware or page rendering at all',
+      'Astro internally re-enters the full pipeline a second time to render 500.astro, passing the real thrown Error to it as Astro.props.error — proven by the middleware log appearing twice and the real error message showing up in 500.astro\'s own log line',
+      'The thrown error is silently swallowed and the original page renders anyway',
+      'It behaves identically to a genuine 404 — a single middleware pass',
+    ],
+    answer: 1,
+    explain: 'Proven above: "middleware A: before next()" for the same path appears twice in the real log — once for the aborted original request, once for the internal re-entry that renders 500.astro with the real error message.',
+  },
+  {
+    q: 'A route file lives at `src/pages/_internal/report.astro`. What does isPublicRoute\'s real, installed source prove will happen when you request that URL?',
+    options: [
+      'It works normally — the underscore only hides it from a generated sitemap',
+      'It genuinely 404s — any path segment (file or containing folder) starting with `_` under src/pages/ makes isPage()/isEndpoint() return false, so it is never registered as a route at all',
+      'It requires an explicit config flag to enable',
+      'It only 404s in production, not in dev',
+    ],
+    answer: 1,
+    explain: 'Proven directly from astro/dist/core/util.js\'s real isPublicRoute function: it checks every path segment, and any one starting with "_" makes the whole path non-routable — not merely hidden from a listing.',
+  },
+];
+
+<Quiz client:visible id="astro-internals/request-pipeline" questions={quizRequestPipeline} />
+
+<ProgressTracker client:visible id="astro-internals/request-pipeline" />

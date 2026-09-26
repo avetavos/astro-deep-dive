@@ -1,0 +1,280 @@
+---
+title: 'Build Pipeline'
+description: 'astro build ทำอะไรจริง ๆ ตามลำดับไหน — Vite 8 + Rolldown, prerender pass แล้วค่อย client bundle — พิสูจน์ด้วย build log จริงและ dist/ tree จริง พร้อม build.concurrency, --force, inlineStylesheets และทำไม content layer ทำให้ build รอบสองที่ไม่เปลี่ยนอะไรถูกกว่า ไม่ใช่แค่เร็วกว่า'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+module ก่อนหน้าทุกอันใช้ `astro build` เป็น black box: รันแล้วได้ folder `dist/` บทเรียนนี้เปิดกล่องนั้น — เกิดอะไรขึ้นจริง ๆ ตามลำดับไหน อ้างอิงจาก log จริงและ `dist/` tree จริงจาก astro@7.3.5 ที่ติดตั้งใน repo นี้เป๊ะ ไม่ใช่ diagram จากความจำ
+
+## ลำดับจริง จาก build log จริง
+
+รัน `astro build` กับ probe project ของคอร์สนี้เอง (`@astrojs/node` โหมด `standalone`) ได้ log จริงนี้ (ตัดออกแค่นิดหน่อย):
+
+```text
+$ npx astro build
+[content] Syncing content
+[content] Synced content
+[types] Generated 237ms
+[build] output: "static"
+[build] mode: "server"
+[build] adapter: @astrojs/node
+[build] Collecting build info...
+[build] ✓ Completed in 261ms.
+[build] Building server entrypoints...
+[vite] ✓ built in 103ms
+[vite] ✓ built in 58ms
+[vite] ✓ built in 12ms
+
+ prerendering static routes 
+  ├─ /index.html (+4ms)
+[build] ✓ Completed in 12ms.
+
+[build] Rearranging server assets...
+[build] ✓ Completed in 201ms.
+[build] Server built in 464ms
+[build] Complete!
+```
+
+ตามลำดับ แต่ละบรรทัดทำอะไรจริง ๆ (`build()` ของ `astro/dist/core/build/index.js` ซึ่งเรียกเข้า `astro/dist/core/build/static-build.js`):
+
+1. **`astro sync`** รันก่อนเสมอ ไม่มีเงื่อนไข — `load()` ของทุก loader รัน (ดู [Content Layer Internals](/astro/th/astro-internals/content-layer-internals/)) และ type ที่ generate ของ `.astro/` ถูกเขียนก่อน page ตัวไหนจะ render เลย
+2. **`Collecting build info...`** — `collectPagesData()` เดิน routes manifest แล้วตัดสินว่า page ไหน `prerender: true` เทียบกับ on-demand ก่อน Vite build จะเริ่มด้วยซ้ำ
+3. **`Building server entrypoints...`** — นี่คือ Vite (8.3.1 ใน repo นี้ พร้อม `rolldown@~1.2.9` เป็น dependency ตรง — bundler ที่ Vite 8 ใช้แทน Rollup) build SSR bundle: ทุก page/component compile เป็น JavaScript แล้ว แต่ยังไม่ render เป็น HTML
+4. **`prerendering static routes`** — page ที่ mark `prerender: true` (default ภายใต้ `output: 'static'` หรือระบุเจาะจงต่อ page ภายใต้ server output) ถูก *render* จริง ๆ ตรงนี้ — นี่คือที่ top-level code ของ page คุณเอง (รวม `console.log` ใด ๆ ใน frontmatter) รันจริง ครั้งเดียว ตอน build time
+5. **`Rearranging server assets...`** — output ที่ build แล้วถูกย้ายเข้ารูปร่างสุดท้ายของ `dist/` (`dist/client/` + `dist/server/` สำหรับ adapter build)
+
+## `dist/` tree จริง: static output เทียบกับ adapter build
+
+source เดียวกันเป๊ะ build สองแบบต่างกัน ได้รูปร่าง `dist/` ต่างกันจริง ๆ ด้วย `output: 'static'` และไม่มี adapter (ไซต์ของคอร์สนี้เอง):
+
+```text
+dist/
+├── 404.html
+├── _astro/
+│   ├── Quiz.DfRUMXlD.js
+│   ├── ProgressTracker.Bz4GQ3Zm.js
+│   ├── client.E2o2D-C-.js
+│   ├── common.DRolbLKG.css
+│   └── ...
+├── en/
+│   ├── index.html
+│   ├── islands/
+│   └── ...
+└── th/
+```
+
+ด้วย `@astrojs/node` โหมด `standalone` (probe project ของบทเรียนนี้):
+
+```text
+dist/
+├── client/
+│   ├── _astro/
+│   ├── favicon.ico
+│   └── index.html
+└── server/
+    ├── entry.mjs
+    ├── virtual_astro_middleware.mjs
+    └── chunks/
+```
+
+output ของ static build *คือ* ไซต์เอง — ทุก route เป็นไฟล์ `.html` จริง พร้อม serve จาก static host ไหนก็ได้ adapter build แยกเป็น `dist/client/` (สิ่งที่ static build จะผลิตพอดี — asset ที่ browser เห็น, รูป และ page ที่ prerender แล้ว) กับ `dist/server/entry.mjs` (Node module จริง — export `handler`/`startServer` พิสูจน์ตรง ๆ ใน [Request Pipeline](/astro/th/astro-internals/request-pipeline/)) ที่ต้องรันจริงเพื่อ serve route แบบ **on-demand** ใด ๆ
+
+## chunk naming: `_astro/<name>.<hash>.<ext>`
+
+ทุก chunk ใน `_astro/` ได้ content hash ฝังเข้าไปในชื่อไฟล์ (`Quiz.DfRUMXlD.js`, `common.DRolbLKG.css`) — นี่คือ content-hashing ของ Vite/Rolldown เอง กลไกเดียวกันที่ทำให้ static host cache ไฟล์เหล่านี้ตลอดไปได้ (`Cache-Control: immutable`) โดยไม่ serve JavaScript ที่เก่าเลยหลัง deploy: URL เองเปลี่ยนทันทีที่ content เปลี่ยน
+
+## `build.inlineStylesheets`: `'auto'` แปลว่า "ต่ำกว่า 4096 byte" จริง ๆ
+
+default config จริง จาก schema ที่ติดตั้งไว้ (`astro/dist/core/config/schemas/defaults.js`):
+
+```js
+build: {
+  // ...
+  inlineStylesheets: "auto",
+  concurrency: 1
+}
+```
+
+threshold จริงของ `'auto'` ไม่ใช่ตัวเลขกลม ๆ ที่คิดขึ้นเอง — มันคือ `assetsInlineLimit` ของ Vite เอง เช็คโดย inlining plugin จริงที่ติดตั้งไว้:
+
+```js
+// astro/dist/core/build/plugins/util.js (trimmed)
+function shouldInlineAsset(assetContent, assetPath, assetsInlineLimit) {
+  if (typeof assetsInlineLimit === "function") {
+    const result = assetsInlineLimit(assetPath, Buffer.from(assetContent));
+    if (result != null) return result;
+  }
+  return Buffer.byteLength(assetContent) < 4096;
+}
+```
+
+```js
+// astro/dist/core/build/plugins/plugin-css.js (trimmed)
+const toBeInlined = inlineConfig === "always" ? true
+  : inlineConfig === "never" ? false
+  : shouldInlineAsset(stylesheet.source, stylesheet.fileName, assetsInlineLimit);
+```
+
+ดังนั้น `'auto'` (default) inline CSS ของ page ตรงเข้า HTML (เป็น `<style>` tag ประหยัด request ที่ block render) เมื่อ stylesheet นั้นต่ำกว่า **4096 byte** และ emit ไฟล์ `_astro/*.css` แยก ที่ cache ได้จริงถ้าไม่ใช่ `'always'`/`'never'` ข้ามการเช็คขนาดไปเลย นี่คือ threshold จริงที่พิสูจน์ได้ — ไม่ใช่ "stylesheet เล็ก ๆ ถูก inline โดยประมาณ"
+
+## `build.concurrency`: sequential โดย default page กับรูปถูกจัดการต่างกัน
+
+`build.concurrency` (default `1` ตาม schema ข้างบน) ควบคุมว่า **page** กี่ตัวถูก render พร้อมกันระหว่าง prerender pass — พิสูจน์ตรง ๆ ใน generator จริง (`astro/dist/core/build/generate.js`):
+
+```js
+// astro/dist/core/build/generate.js (trimmed)
+if (config.build.concurrency > 1) {
+  const limit = PLimit(config.build.concurrency);
+  // ...paths.map(({ pathname, route, cacheKey }) => limit(() => generatePage(...)))
+}
+```
+
+ที่ default `1` page render ทีละตัว — ตั้งใจ เพราะ page สองตัว render พร้อมกันอาจ race กันบน build state ที่ mutable ร่วมกัน (เช่น global CSS-collection map) การ generate **รูป** เป็น concurrency knob คนละตัวเลย concurrent เสมอไม่ว่า `build.concurrency` จะเป็นอะไร ขนาดตาม CPU count จริง:
+
+```js
+// astro/dist/core/build/generate.js (trimmed)
+const cpuCount = os.availableParallelism();
+const queue = new PQueue({ concurrency: Math.max(cpuCount, 1) });
+```
+
+การเพิ่ม `build.concurrency` ทำให้ build ที่มี page เยอะและไม่แชร์ mutable state ข้าม render เร็วขึ้น มันไม่มีผลอะไรเลยกับ image optimization ซึ่ง concurrent เท่าที่เครื่องรองรับอยู่แล้ว
+
+## `--force`: เคลียร์ content-layer cache เฉพาะเจาะจง
+
+[Content Layer Internals](/astro/th/astro-internals/content-layer-internals/) พิสูจน์ว่า content entry ที่ไม่เปลี่ยนถูกข้าม ไม่ reparse ตอน `astro sync`/`astro build` ปกติ `--force` มีไว้เพื่อปิดสิ่งนั้นโดยเฉพาะ: มันลบ data store บนดิสก์ก่อน sync ดังนั้นทุก loader ปฏิบัติกับทุก entry เหมือนเป็นของใหม่ source จริงที่ติดตั้งไว้ (`astro/dist/core/sync/index.js`):
+
+```js
+// astro/dist/core/sync/index.js (trimmed)
+async function clearContentLayerCache({ settings, logger, fs, isDev }) {
+  // ...
+  await fs.promises.rm(dataStore, { force: true, recursive: true });
+}
+// called when the CLI's --force flag is set
+```
+
+นี่คือ invalidation แบบเจาะจง ไม่ใช่ clean เต็มรูปแบบ: `--force` ไม่แตะ build cache ของ Vite เองหรือ `node_modules` เลย — มัน force เฉพาะให้ content layer โหลดทุกอย่างใหม่ ซึ่งเป็นเครื่องมือที่ตรงเป้าหมายพอดีถ้า logic ของ loader เองเปลี่ยน (ไม่ใช่ content ที่มันอ่าน) และ entry เก่าที่ cache ไว้ต้องถูกคำนวณใหม่ แม้ digest ของ content ต้นทางจะไม่เปลี่ยนก็ตาม
+
+## content layer ทำให้ build รอบสองที่ไม่เปลี่ยนอะไรถูกกว่า — ไม่ใช่แค่ (เฉพาะ) เร็วกว่า
+
+claim แบบ wall-clock "build รอบสองเร็วกว่า" มี noise ในทางปฏิบัติ (cache, disk, OS scheduling ต่างกันทุก run) — claim จริงที่พิสูจน์ได้แคบกว่าและแข็งแรงกว่า: digest proof ของ [Content Layer Internals](/astro/th/astro-internals/content-layer-internals/) (`glob()` loader จริง ที่ instrument ด้วย log บรรทัดเดียว รันสามครั้ง) แสดงตรง ๆ ว่า `parseData`/`renderMarkdown` ของ entry ที่ไม่เปลี่ยนไม่รันซ้ำเลยตอน sync รอบสอง — และ `astro build` เรียก `sync` ก่อนเสมอ build ที่มี content collection ใหญ่และไม่เปลี่ยนเป็นส่วนใหญ่ ข้ามงาน parsing/rendering จริงที่หลีกเลี่ยงได้ในทุก build หลังจากตัวแรก ส่วนจะรวมกันเป็น *build ที่เร็วขึ้นแบบ wall-clock* จริงไหม ขึ้นกับว่างาน parsing นั้นเป็นสัดส่วนเท่าไหร่ของเวลา build ทั้งหมด เทียบกับ bundling ของ Vite เองและ page-render pass ข้างบน
+
+<Mermaid title="astro build ตามลำดับ" code={buildDiagram} />
+
+export const buildDiagram = `flowchart TD
+  sync["astro sync\n(load() ของทุก loader — Content Layer Internals)"] --> info["Collecting build info...\ncollectPagesData(): prerender vs on-demand"]
+  info --> vite["Building server entrypoints...\nVite 8 + Rolldown: SSR bundle"]
+  vite --> prerender["prerendering static routes\npage render เป็น HTML จริงตรงนี้"]
+  prerender --> rearrange["Rearranging server assets...\ndist/client/ + dist/server/ (adapter)\nหรือ dist/ แบน ๆ (static)"]
+  rearrange --> done["Complete!"]
+  force["--force flag"] -.เคลียร์ data store ก่อน.-> sync
+  concurrency["build.concurrency (default 1)"] -.-> prerender
+  cpu["os.availableParallelism()"] -.concurrent เสมอ.-> images["image optimization queue"]`;
+
+## อ่านโค้ดที่ AI เขียน
+
+- comment อ้างว่า `build.concurrency` ทำให้ image optimization เร็วขึ้นไหม? พิสูจน์ข้างบน: image generation ใช้ queue ของตัวเอง concurrent เสมอ ขนาดตาม CPU count — `build.concurrency` มีผลแค่กับ page rendering เท่านั้น
+- คำแนะนำแก้ปัญหา "content เก่าค้างหลังแก้ transform logic ของ loader" แนะนำให้ลบ `node_modules` หรือ `dist` ไหม? เครื่องมือที่เจาะจงจริง ๆ คือ `--force` (พิสูจน์ข้างบนว่าเคลียร์ data store ของ content layer โดยเฉพาะ) — ลบ `node_modules` ทิ้ง cache ของ Vite เองไปด้วยโดยไม่ได้ประโยชน์อะไรกับปัญหาจริง
+- claim เกี่ยวกับ `inlineStylesheets: 'auto'` อธิบายว่า "stylesheet เล็ก ๆ ถูก inline" โดยไม่มีตัวเลขไหม? พิสูจน์ข้างบน: threshold จริงเจาะจงและเช็คได้ — ต่ำกว่า 4096 byte (`assetsInlineLimit` ของ Vite) ไม่ใช่ heuristic คลุมเครือ
+- คำอธิบายสมมติว่า `dist/` เป็น folder แบน ๆ ของไฟล์ HTML เสมอไหม? พิสูจน์ข้างบน: adapter build แยกเป็น `dist/client/` และ `dist/server/entry.mjs` จริง — Node module จริงที่ต้องรัน ไม่ใช่แค่ static file ที่ serve ได้เฉย ๆ
+
+<SpotTheBug code={`# CI script — "makes builds faster by warming everything from scratch"
+rm -rf node_modules/.astro dist node_modules
+npm ci
+npx astro build --force
+`}>
+สิ่งนี้ทำงานได้ แต่ทิ้งมากกว่าที่จำเป็นไปมาก และทำตรงข้ามกับที่ comment อ้าง: ลบ `node_modules` (แล้ว reinstall ด้วย `npm ci`) ทิ้ง dependency pre-bundling cache ของ Vite เองไปด้วยพร้อมทุกอย่าง และ `--force` บน install ใหม่เอี่ยมเป็น no-op สำหรับความสด (ไม่มี content-layer cache ให้เคลียร์อยู่แล้ว — `node_modules/.astro/data-store.json` ที่พิสูจน์ใน Content Layer Internals ว่าอยู่ตรงนั้น เพิ่งถูกลบไปพร้อม `node_modules` ที่เหลือ) แต่ยังเพิ่ม overhead ของตัวเอง: บังคับทุก loader reparse ทุก entry ใหม่หมด บน build ที่จะทำแบบนั้นอยู่แล้ว ถ้าเป้าหมายคือ "การันตี content-layer state ที่สะอาด" `--force` เดี่ยว ๆ (โดยไม่แตะ `node_modules`/`dist` เลย) คือเครื่องมือจริงที่เจาะจง — พิสูจน์ข้างบนว่าเคลียร์แค่ data store ปล่อย cache ของ Vite และ dependency ที่ติดตั้งไว้ไม่ถูกแตะ ทำให้ install และ build ครั้งต่อไปเร็วขึ้นจริง
+</SpotTheBug>
+
+## Mental Model
+
+`astro build` คือห้า phase จริงตามลำดับตายตัว: sync content (loader, เช็คด้วย digest), เก็บข้อมูล routing (prerender เทียบกับ on-demand ตัดสินก่อน render), build SSR bundle ด้วย Vite/Rolldown, render page ที่ prerender เป็น HTML จริง แล้วจัดเรียง output เข้ารูปร่างสุดท้าย ทุก option "เพิ่มเติม" ของบทเรียนนี้ (`concurrency`, `--force`, `inlineStylesheets`) คือ knob จริงที่เจาะจงกับ phase ใดหนึ่งในห้า ไม่ใช่ switch คลุมเครือที่ "ทำให้ build ทำงานต่างไป" แบบกว้าง ๆ
+
+## ข้อแลกเปลี่ยน
+
+| ตัวเลือก | ได้อะไร | เสียอะไร |
+|---|---|---|
+| `output: 'static'` (ไม่มี adapter) | `dist/` คือทั้งไซต์ — serve จาก static host ไหนก็ได้ ไม่มี runtime | page ที่ต้องการพฤติกรรมต่อ request จริง ๆ ต้องแยกเป็นเรื่องอื่น (island, edge function ที่อื่น) |
+| adapter (`@astrojs/node` ฯลฯ) | route on-demand, action, server island ทำงานได้จริง | `dist/server/entry.mjs` ต้องรันจริงที่ไหนสักที่ — `dist/` เดี่ยว ๆ deploy ไป static host เปล่า ๆ ไม่ได้ |
+| `build.concurrency > 1` | prerender เร็วขึ้นบนเครื่องหลายคอร์ สำหรับ page ที่ไม่แชร์ mutable state ตอน render | มีความเสี่ยง race จริงใน code ที่สมมติว่า render ทีละ page เดียวแบบ single-threaded (เหตุผลจริงที่ default เป็น `1`) |
+| `inlineStylesheets: 'auto'` (เทียบกับ `'always'`/`'never'`) | stylesheet เล็ก ๆ ข้าม request หนึ่งครั้ง ตัวใหญ่ยัง cache ได้และไม่ทำให้ HTML ของทุก page บวม | เส้น 4096 byte เป็นหน้าผาจริง — stylesheet ที่โตเกินมันเปลี่ยนจาก "อยู่ใน HTML ของทุก page" เป็น "request แยกที่ cache ได้" ซึ่งเป็นลักษณะการโหลดที่ต่างกันจริงจากการเปลี่ยน content เล็กน้อย |
+| `--force` | invalidate content-layer cache แบบเจาะจง โดยไม่ clean เต็มรูปแบบ | การ reparse *ทุกอย่าง* เป็นงานจริงที่หลีกเลี่ยงได้ ถ้ามีแค่ loader เดียว (หรือ entry เดียว) ที่ต้องการจริง ๆ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`astro build` render page ก่อน แล้วค่อยคิดเรื่อง routing"** พิสูจน์ว่าผิดข้างบนด้วย log order จริง: `Collecting build info...` (การตัดสิน prerender/on-demand) เกิด*ก่อน* `Building server entrypoints...` และ prerender pass จริง
+- **"`build.concurrency` ทำให้ build ทั้งหมด (รวมรูป) parallel มากขึ้น"** พิสูจน์ว่าผิดข้างบน: image optimization รันบน queue ของตัวเองขนาดตาม CPU count อยู่แล้วไม่ว่า setting นี้จะเป็นอะไร `build.concurrency` มีผลแค่กับ page rendering และ default เป็น sequential เต็มรูปแบบ
+- **"folder `dist/` ใหม่เป็นแค่ static file ที่ serve ตรง ๆ ได้เสมอ"** พิสูจน์ว่าผิดข้างบน: `dist/server/entry.mjs` ของ adapter build เป็น Node module จริงที่ต้องรัน — มีแค่ `dist/client/` ที่เป็น static asset ที่ serve ได้
+- **"`inlineStylesheets: 'auto'` เป็น heuristic คลุมเครือ ไม่ใช่ตัวเลขจริง"** พิสูจน์ว่าผิดข้างบน: มันคือ `assetsInlineLimit` ของ Vite เอง เช็คกับ threshold 4096 byte จริงที่เจาะจงใน source ที่ติดตั้งไว้
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`astro build` รันห้า phase จริงตามลำดับตายตัว — `astro sync` (loader เช็คด้วย digest พิสูจน์ใน Content Layer Internals), เก็บข้อมูล routing (prerender เทียบกับ on-demand ตัดสินไว้ก่อน), build SSR bundle ด้วย Vite 8 + Rolldown, render page ที่ prerender เป็น HTML จริง แล้วจัดเรียง output เข้า `dist/client/` + `dist/server/entry.mjs` (adapter build) หรือ `dist/` แบนที่ static เต็มรูปแบบ (ไม่มี adapter) — พิสูจน์ข้างบนด้วย log จริงและ `dist/` tree จริงทั้งสองรูปแบบ `build.concurrency` (default `1`) มีผลแค่กับ page rendering แบบ sequential โดย default; image optimization รันบน queue ขนาดตาม CPU ของตัวเองเสมอไม่ว่ากัน `inlineStylesheets: 'auto'` inline CSS ที่ต่ำกว่า threshold 4096 byte จริง (`assetsInlineLimit` ของ Vite) ไม่ใช่ heuristic คลุมเครือ `--force` เคลียร์เฉพาะ data store ของ content layer — วิธีแก้ที่เจาะจงสำหรับ loader output ที่ค้าง ไม่ใช่เหตุผลให้ลบ `node_modules`
+</Callout>
+
+export const quizBuildPipeline = [
+  {
+    q: '```text\n[build] Collecting build info...\n[build] Building server entrypoints...\n\n prerendering static routes \n```\nbuild log จริงตามลำดับนี้พิสูจน์อะไรเกี่ยวกับตอนที่ Astro ตัดสิน prerender เทียบกับ on-demand ของแต่ละ route?',
+    options: [
+      'มันตัดสินหลัง render ทุก page แล้ว เป็น cleanup pass',
+      'ข้อมูล routing/prerender ถูกเก็บ ก่อน Vite SSR build และ prerender pass จริง — พิสูจน์ตรง ๆ ด้วยลำดับ log',
+      'adapter เป็นตัวตัดสินทั้งหมด ไม่ใช่ astro build เอง',
+      'ทุก route ถูก prerender เสมอ on-demand เป็นแนวคิดของ dev เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ ด้วย build log จริงในบทเรียนนี้: "Collecting build info..." (route ไหน prerender เทียบกับ on-demand) เสร็จก่อน "Building server entrypoints..." และขั้นตอน prerender จริง',
+  },
+  {
+    q: '```js\nif (config.build.concurrency > 1) {\n  const limit = PLimit(config.build.concurrency);\n  // ...\n}\n// separately:\nconst queue = new PQueue({ concurrency: Math.max(os.availableParallelism(), 1) });\n```\nsource จริงนี้จาก astro/dist/core/build/generate.js พิสูจน์อะไรเกี่ยวกับ build.concurrency?',
+    options: [
+      'มันควบคุมทั้ง page rendering และ image optimization ด้วยกัน',
+      'มันควบคุมแค่ concurrency ของ page rendering เท่านั้น (default 1 sequential เต็มรูปแบบ) image optimization รันบน queue แยกขนาดตาม CPU ของตัวเองเสมอ ไม่ว่า setting นี้จะเป็นอะไร',
+      'มันไม่มีผลอะไรเลยใน Astro 7',
+      'มันควบคุมว่า astro build process กี่ตัวรันพร้อมกันได้',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ จาก source จริงที่ติดตั้งไว้: concurrency แบบ PLimit ห่อแค่ page generation ผูกกับ build.concurrency; image queue เป็น PQueue แยกขนาดตาม os.availableParallelism() ไม่มีเงื่อนไข',
+  },
+  {
+    q: '```js\nreturn Buffer.byteLength(assetContent) < 4096;\n```\nfunction จริงนี้ (เบื้องหลัง build.inlineStylesheets: "auto") พิสูจน์อะไรเกี่ยวกับ threshold ของการ inline จริง?',
+    options: [
+      'มันเป็น heuristic คลุมเครือตามว่าไฟล์ดู "เล็ก" แค่ไหน',
+      'มันเป็น threshold ที่เจาะจงและจริง (4096 byte, assetsInlineLimit ของ Vite เอง) — stylesheet ที่ต่ำกว่านั้นถูก inline เข้า HTML ของ page ตัวที่เท่ากับหรือมากกว่ากลายเป็นไฟล์แยกที่ cache ได้',
+      'มันใช้แค่กับ JavaScript ไม่ใช่ CSS',
+      'มันเป็น 1000 byte เป๊ะเสมอ ไม่ว่า Vite config จะเป็นอะไร',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ จาก function shouldInlineAsset จริงของ astro/dist/core/build/plugins/util.js: case "auto" เช็ค Buffer.byteLength(...) < 4096 (หรือ function assetsInlineLimit ที่ config เองถ้ามี)',
+  },
+  {
+    q: '--force เคลียร์อะไรจริง ๆ ตาม source จริงของ astro/dist/core/sync/index.js?',
+    options: [
+      'ทุก cache ใน project รวม node_modules และ build cache ของ Vite เอง',
+      'เฉพาะ data store บนดิสก์ของ content layer (node_modules/.astro/data-store.json) บังคับให้ทุก loader ปฏิบัติกับทุก entry เหมือนของใหม่',
+      'แค่ HTTP cache ของ browser สำหรับไซต์ที่ deploy แล้ว',
+      'มันไม่มีผลจริงเลย — เป็น flag no-op ที่เก็บไว้เพื่อ backwards compatibility',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ จาก clearContentLayerCache ใน astro/dist/core/sync/index.js จริงที่ติดตั้งไว้: มันลบ directory ของ data store เฉพาะเจาะจง เมื่อ flag --force ของ CLI ถูกตั้ง — ไม่มีอะไรอื่นเลย',
+  },
+  {
+    q: 'build สองครั้งของ project เดียวกันติดกัน มี content collection ใหญ่แต่ไม่เปลี่ยนอะไรเลย ความต่างจริงที่พิสูจน์ได้ในงานของ loader ระหว่างสองครั้งคืออะไร?',
+    options: [
+      'งานเหมือนกันทั้งสองครั้ง — content ถูก reparse เต็มทุก build เสมอ',
+      'loader ของ build ครั้งที่สองข้าม parseData/renderMarkdown ทั้งหมดสำหรับทุก entry ที่ไม่เปลี่ยน (พิสูจน์ด้วย glob() loader จริงที่ instrument แล้วรันใน Content Layer Internals) — งานจริงที่หลีกเลี่ยงได้ถูกข้ามจริง',
+      'build ครั้งที่สองข้าม content ไปเลยและ serve data เก่า',
+      'มีแค่รูปที่ cache ข้าม build content ถูก reparse เสมอ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ใน Content Layer Internals และอ้างถึงที่นี่: การเช็ค digest ของ glob() loader จริงทำให้ parseData/renderMarkdown ถูกข้ามสำหรับ entry ไหนก็ตามที่ content ไม่เปลี่ยนตั้งแต่ sync ล่าสุด — astro build เรียก sync ก่อนเสมอ จึงใช้ได้กับทุก build',
+  },
+];
+
+<Quiz client:visible id="astro-internals/build-pipeline" questions={quizBuildPipeline} />
+
+<ProgressTracker client:visible id="astro-internals/build-pipeline" />

@@ -1,0 +1,314 @@
+---
+title: 'Content Layer Internals'
+description: 'astro sync เขียนอะไรลงดิสก์จริง ๆ — .astro/ กับ node_modules/.astro/ output จริง, DataStore/MutableDataStore/MetaStore API ที่ loader ได้รับ และการพิสูจน์ (ด้วย glob() loader จริงที่รันสองครั้ง) ว่า entry ที่ไม่เปลี่ยนไม่ถูก reparse — เทียบกับ live loader ที่ไม่มี store เลย'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+module content-and-data สอน define collection และเรียก `getCollection()`/`getEntry()` ไปแล้ว บทเรียนนี้ว่าด้วยสิ่งที่เกิดขึ้นจริงข้างใต้: `astro sync` เขียนอะไรลงดิสก์, loader ได้รับอะไรจริง ๆ (`context.store`) และ — พิสูจน์ได้ ไม่ใช่แค่อ่านเอกสาร — `load()` ของ loader ข้าม reparse entry เมื่อไหร่จริง ๆ
+
+## `astro sync` เขียนอะไรลงดิสก์จริง ๆ
+
+รัน `astro sync` กับ project ที่มี collection `authors` จริง (JSON ไฟล์เดียว) และ collection `blog` จริง (Markdown ไฟล์เดียว มีรูป `cover`):
+
+```text
+$ npx astro sync
+[content] Syncing content
+[content] Synced content
+[types] Generated 283ms
+```
+
+มีสอง**ที่ต่างกัน**ที่เก็บ content-layer output และเก็บคนละอย่างกัน — ควรระบุให้ชัดเพราะเผลอสมมติได้ง่ายว่าทุกอย่างอยู่ใน `.astro/` ที่ root ของ project:
+
+```text
+.astro/
+├── content.d.ts          (type ของ collection จริง — DataEntryMap, รูปร่างต่อ collection)
+├── types.d.ts             (ไฟล์บาง ๆ: มีแค่สองบรรทัด /// <reference> ไม่มีอะไรอื่น)
+├── content-assets.mjs     (Map จริงจาก image-import specifier -> import จริง)
+└── content-modules.mjs    (Map จริงสำหรับ deferred-render module import)
+
+node_modules/.astro/
+└── data-store.json        (content จริง — ทุก entry, digest, HTML ที่ render แล้ว)
+```
+
+`.astro/content.d.ts` ตัดให้เหลือสอง collection จริงที่ run นี้ผลิต:
+
+```ts
+type DataEntryMap = {
+	"authors": Record<string, {
+  id: string;
+  body?: string;
+  collection: "authors";
+  data: InferEntrySchema<"authors">;
+  rendered?: RenderedContent;
+  filePath?: string;
+  digest?: string | number;
+}>;
+"blog": Record<string, {
+  id: string;
+  body?: string;
+  collection: "blog";
+  data: InferEntrySchema<"blog">;
+  rendered?: RenderedContent;
+  filePath?: string;
+  digest?: string | number;
+}>;
+};
+```
+
+`.astro/content-assets.mjs` — `Map` จริงที่ generate จาก image-import specifier ไปยัง import ที่ Vite resolve แล้วจริง (นี่คือวิธีที่ field schema `image()` กลายเป็น `ImageMetadata` จริงตอนอ่าน):
+
+```js
+import __ASTRO_IMAGE_IMPORT_0 from "./cover.png?astroContentImageFlag=&importer=src%2Fdata%2Fblog%2Fhello-world.md";
+export default new Map([["./cover.png?astroContentImageFlag=&importer=src%2Fdata%2Fblog%2Fhello-world.md", __ASTRO_IMAGE_IMPORT_0]]);
+```
+
+และเนื้อหาจริงของ `node_modules/.astro/data-store.json` จาก run เดียวกันนั้น — ไม่ใช่ JSON แยกต่อ collection ธรรมดา แต่เป็น **array แบบ deduplicate แบน ๆ** (string ที่ซ้ำ เช่นชื่อไฟล์หรือ digest ถูกเก็บครั้งเดียวแล้วอ้างด้วย index เทคนิคเดียวกับที่ `devalue` ใช้กับ wire format ของ action-error ในบทเรียน actions):
+
+```json
+[
+  ["Map", 1, 2, 9, 10, 41, 42],
+  "authors",
+  ["Map", 3, 4],
+  "jane",
+  { "id": 3, "data": 5, "filePath": 7, "digest": 8 },
+  { "name": 6 },
+  "Jane Doe",
+  "src/data/authors/jane.json",
+  "70a6649a93b60adf",
+  "blog",
+  ["Map", 11, 12],
+  "hello-world",
+  { "id": 11, "data": 13, "body": 24, "filePath": 25, "digest": 30, "rendered": 31 },
+  { "title": 14, "pubDate": 15, "...": "..." }
+]
+```
+
+นี่คือ correction จริงที่มีประโยชน์เวลาต้องอ่าน generated output: `data-store.json` — ข้อมูล entry จริง, `digest` ทุกตัว และ `rendered.html` ทุกตัว — อยู่ใต้ **`node_modules/.astro/`** ไม่ใช่ folder `.astro/` ที่ root ของ project ตามที่เดาเร็ว ๆ (หรือ blog post เก่า) อาจสมมติ folder `.astro/` ที่ root เก็บแค่ *type และ asset-import glue* ไม่ใช่ตัวข้อมูลเอง
+
+## loader ได้รับอะไรจริง ๆ: `LoaderContext`
+
+function `load(context)` ของ custom loader ได้รับ object ที่มีรูปร่างตรงกับ type จริงที่ติดตั้งไว้เป๊ะ (`astro/dist/content/loaders/types.d.ts`):
+
+```ts
+export interface LoaderContext {
+	collection: string;
+	store: DataStore;
+	meta: MetaStore;
+	logger: AstroIntegrationLogger;
+	config: AstroConfig;
+	parseData<TData extends Record<string, unknown>>(props: ParseDataOptions<TData>): Promise<TData>;
+	renderMarkdown(content: string, options?: RenderMarkdownOptions): Promise<RenderedContent>;
+	generateDigest(data: Record<string, unknown> | string): string;
+	watcher?: FSWatcher;
+	refreshContextData?: Record<string, unknown>;
+}
+```
+
+`context.store` คือ `DataStore` แบบ **scoped** — ผูกกับ collection นี้ตัวเดียวไว้แล้ว loader เลยไม่ต้องระบุชื่อ collection ของตัวเองเวลาอ่าน/เขียน (`astro/dist/content/mutable-data-store.d.ts`):
+
+```ts
+export interface DataStore {
+	get: <TData extends Record<string, unknown> = Record<string, unknown>>(key: string) => DataEntry<TData> | undefined;
+	entries: () => Array<[id: string, DataEntry]>;
+	set: <TData extends Record<string, unknown>>(opts: DataEntry<TData>) => boolean;
+	values: () => Array<DataEntry>;
+	keys: () => Array<string>;
+	delete: (key: string) => void;
+	clear: () => void;
+	has: (key: string) => boolean;
+	addModuleImport: (fileName: string) => void;
+}
+
+export interface MetaStore {
+	get: (key: string) => string | undefined;
+	set: (key: string, value: string) => void;
+	has: (key: string) => boolean;
+	delete: (key: string) => void;
+}
+```
+
+`meta` แยกจาก `store` โดยตั้งใจ: มันคือ key/value store แบบ string ล้วนเล็ก ๆ ที่มีไว้ให้ loader เก็บบัญชีของตัวเอง (sync token, timestamp ล่าสุดที่ fetch, ETag) — data ที่ไม่ใช่ content entry เองและไม่ควรโผล่ใน `getCollection()`
+
+## พิสูจน์: entry ที่ไม่เปลี่ยนไม่ถูก reparse เลย
+
+`glob()` loader จริงที่ไม่ได้แก้ไข (`astro/dist/content/loaders/glob.js`) คำนวณ digest ของ content แต่ละไฟล์ หา entry เดิมด้วย id แล้ว — นี่คือบรรทัดสำคัญ — return **ก่อนจะเรียก `parseData` หรือ render อะไรเลย** เมื่อ digest ตรงกัน:
+
+```js
+// astro/dist/content/loaders/glob.js (trimmed to the load-bearing check)
+const existingEntry = store.get(id);
+const digest = generateDigest(contents);
+if (existingEntry && existingEntry.digest === digest && existingEntry.filePath) {
+  if (existingEntry.deferredRender) store.addModuleImport(existingEntry.filePath);
+  if (existingEntry.assetImports?.length) store.addAssetImports(existingEntry.assetImports, existingEntry.filePath);
+  fileToIdMap.set(filePath2, id);
+  return; // <-- parseData/render never run for this entry on this sync
+}
+// ...only reached when the digest is new or different:
+const parsedData = await parseData({ id, data, filePath: filePath2 });
+```
+
+พิสูจน์โดยไม่แก้ logic จริงของ package ที่ติดตั้งไว้ — แค่เพิ่ม `console.log` หนึ่งบรรทัดที่ guard นั้นเป๊ะ แล้วรัน `astro sync` สามครั้งกับ collection `authors`/`blog` จริงข้างบน:
+
+```text
+$ npx astro sync   # run 1: empty store, both entries are new
+[digest-probe] jane: existing=undefined new=70a6649a93b60adf REPARSE
+[digest-probe] hello-world: existing=undefined new=d5537621606f1b3b REPARSE
+
+$ npx astro sync   # run 2: nothing on disk changed
+[digest-probe] jane: existing=70a6649a93b60adf new=70a6649a93b60adf SKIP-reparse
+[digest-probe] hello-world: existing=d5537621606f1b3b new=d5537621606f1b3b SKIP-reparse
+
+$ # edit hello-world.md's body, leave jane.json untouched, then:
+$ npx astro sync   # run 3
+[digest-probe] hello-world: existing=d5537621606f1b3b new=255c56c997251696 REPARSE
+[digest-probe] jane: existing=70a6649a93b60adf new=70a6649a93b60adf SKIP-reparse
+```
+
+run 2 พิสูจน์ claim ตรง ๆ: ไม่มีไฟล์เปลี่ยนเลย ทั้งสอง entry เจอ `SKIP-reparse` — `parseData` และ `renderMarkdown` ไม่รันเลยสักตัว run 3 พิสูจน์ว่ามันเจาะจงต่อ entry จริง ๆ: แก้แค่ `hello-world.md` reparse แค่ entry นั้น; `jane.json` ที่ไม่แตะเลยยัง skip อยู่ นี่คือเหตุผลเป๊ะ ๆ ที่ content collection ขนาดใหญ่มากไม่ช้าลงตอน `sync`/`build` เมื่อมันโต *โดยไม่เปลี่ยน* — มีแค่ไฟล์ที่เปลี่ยนจริงตั้งแต่รอบก่อนเท่านั้นที่มีต้นทุนอะไรเลย
+
+<Mermaid title="glob() loader: digest ตัดสิน reparse หรือ skip" code={digestDiagram} />
+
+export const digestDiagram = `flowchart TD
+  start["สำหรับแต่ละไฟล์ที่ match"] --> read["อ่านไฟล์ คำนวณ digest = generateDigest(contents)"]
+  read --> lookup["existingEntry = store.get(id)"]
+  lookup --> cmp{"existingEntry?.digest === digest?"}
+  cmp -->|ใช่| skip["register module/asset import ใหม่เท่านั้น\nreturn — parseData/render ไม่ถูกเรียกเลย"]
+  cmp -->|ไม่ใช่| parse["parseData(...) + renderMarkdown(...)\nstore.set({ ...digest, rendered, ... })"]`;
+
+## Loader lifecycle: dev เทียบกับ build
+
+`load()` รันครั้งเดียวต่อ `astro sync` (ซึ่ง `astro build` และตอน `astro dev` เริ่มต้นก็ trigger ทั้งคู่) ใน `astro dev` `context.watcher` (Vite `FSWatcher` จริง) ให้ loader trigger `load()` ของตัวเองใหม่ได้เมื่อไฟล์ที่เกี่ยวข้องเปลี่ยน แทนที่จะรอ sync รอบเต็มถัดไป — นี่คือสิ่งที่ทำให้แก้ไฟล์ Markdown ตอน `astro dev` โผล่ขึ้นมาโดยไม่ต้อง restart server `refreshContextData` มีไว้สำหรับ re-trigger path คนละแบบเลย: **integration** เรียก refresh function ของ content layer พร้อม data พิเศษ (เช่น "webhook เพิ่งบอกว่า collection X เปลี่ยน") แล้ว `load()` ของทุก loader รันใหม่พร้อม data นั้นให้ใช้บน `context.refreshContextData` — live loader ไม่เห็นสิ่งนี้เลย เพราะมันไม่มี persistent store ให้ refresh ตั้งแต่แรก
+
+## loader แบบ `file`/`glob` เทียบกับ live loader: มี store เทียบกับไม่มี store
+
+ทั้งหมดข้างบน — store, digest, การ skip — เจาะจงกับ loader แบบ **build-time** (`glob`, `file` และตัวที่สร้างเองแบบเดียวกัน) **live loader** (`defineLiveCollection`) เป็น code path คนละแบบเลยที่ไม่มี store เลย function runtime จริงเบื้องหลัง `getLiveCollection()` (`astro/dist/content/runtime.js`):
+
+```js
+// astro/dist/content/runtime.js (trimmed)
+function createGetLiveCollection({ liveCollections }) {
+  return async function getLiveCollection(collection, filter) {
+    const context = { filter, collection };
+    const response = await liveCollections[collection].loader?.loadCollection?.(context);
+    // ...validate response.entries against the schema, return { entries } or { error }
+  };
+}
+```
+
+ไม่มี `store.get`/`store.set` ที่ไหนใน path นี้เลย — `loadCollection(context)` รัน **ใหม่หมด ทุกครั้งที่เรียก** สำหรับทุก request ที่เรียก `getLiveCollection()` นี่คือความต่างทั้งหมดในหนึ่งประโยค: หน้าที่ของ build-time loader คือดูแล store ที่ persistent และเช็คด้วย digest ให้ทันสมัย (การอ่านเลยฟรี); หน้าที่ของ live loader คือตอบ request นี้เดี๋ยวนี้ (การอ่านทุกครั้งมีต้นทุนจริง — fetch จริง, query จริง — ทุกครั้ง) การเลือกใช้ `defineCollection` + `glob`/`file` สำหรับ data ที่ static ต่อ build จริง ๆ และ `defineLiveCollection` เฉพาะ data ที่ต้องสดทุก request คือ trade-off จริง ไม่ใช่แค่ความชอบด้าน style
+
+## อ่านโค้ดที่ AI เขียน
+
+- custom loader mutate `context.store` โดยไม่คำนวณหรือเทียบ digest เลยไหม? มันจะทำงานได้ — data ลง store ทั้งคู่ — แต่ทุก `astro sync`/`astro build` จะ reparse และ re-render ทุก entry ใหม่หมด พิสูจน์ข้างบนว่าไม่จำเป็นสำหรับอะไรที่ไม่เปลี่ยน
+- code สมมติว่า `data-store.json` อยู่ใน `.astro/` folder ที่ root project ไหม? พิสูจน์ข้างบน: มันอยู่ใต้ `node_modules/.astro/` — script หรือ CI step ที่อ่าน/ตรวจมันตรง ๆ ต้องใช้ path จริง ไม่ใช่ path ที่สมมติ
+- `getLiveCollection()` ถูกเรียกใน loop หรือ cache ไว้ "เพื่อ performance" แบบที่ผล `getCollection()` ตอน build-time อาจถูก cache ไหม? พิสูจน์ข้างบน: มันไม่มี store — มันตั้งใจให้ถูกเรียกต่อ request; การ cache เองแค่เพิ่ม cache กลับมาโดยไม่มี digest-based invalidation ที่ content layer ให้ build-time collection ฟรีอยู่แล้ว
+- `context.meta` ถูกใช้เก็บ content entry จริง ("แค่แยกไว้ต่างหาก") ไหม? มันคือ key/value store แบบ string ล้วนสำหรับบัญชีของ loader เอง ไม่ใช่ data store ตัวที่สอง content entry จริงต้องอยู่ใน `context.store` ที่ `getCollection()` หาเจอจริง
+
+<SpotTheBug code={`// A custom loader for a hypothetical CMS
+export function cmsLoader() {
+  return {
+    name: 'cms-loader',
+    load: async ({ store, config }) => {
+      const res = await fetch('https://cms.example.com/api/posts');
+      const posts = await res.json();
+      for (const post of posts) {
+        // "always write the latest data — simplest way to stay in sync"
+        store.set({ id: post.id, data: post });
+      }
+    },
+  };
+}`}>
+loader นี้ทำงานได้ แต่มันทิ้งจุดประสงค์ทั้งหมดของ store ในระบบ content layer ไปเลย: มันไม่เคยอ่าน `existingEntry`/คำนวณ digest เลย ดังนั้น `store.set(...)` รันสำหรับ**ทุก** post ใน**ทุก** `astro sync`/`astro build` — reparse เต็ม, งานที่เกี่ยวกับ rebuild เต็ม ไม่ว่า CMS จะเปลี่ยนอะไรจริงหรือไม่ มันยังไม่เคยลบ entry ของ post ที่ถูกลบไปแล้วต้นทางด้วย (ไม่มีการ track แบบ `untouchedEntries` เหมือน `glob()` loader จริงในบทเรียนนี้) ดังนั้น CMS post ที่ถูกลบยังอยู่ใน store ตลอดไป วิธีแก้ตาม pattern จริงของ `glob()`: คำนวณ `const digest = context.generateDigest(post)` เทียบกับ `store.get(post.id)?.digest` แล้วข้ามการเขียนเมื่อตรงกัน และ track ว่า id ไหนถูกเห็นใน run นี้บ้าง เพื่อให้ id ที่เหลืออยู่ใน store หลังจากนั้นถูก `store.delete()` ได้
+</SpotTheBug>
+
+## Mental Model
+
+content layer คือ database เล็ก ๆ ที่มีหน้าที่เดียว: อย่าทำงานซ้ำสอง `astro sync` เรียก `load()` ของทุก loader แต่ละ loader ตัดสิน — ต่อ entry ด้วย digest — ว่าอะไรต้อง reparse จริง ๆ ไหม และผลลัพธ์ลงไปที่ไฟล์จริงที่ตรวจสอบได้ (`node_modules/.astro/data-store.json`) ที่ `getCollection()`/`getEntry()` อ่านตอน runtime โดยไม่มีต้นทุน parse ตอนอ่านเลย live loader เลือกที่จะไม่ทำแบบนี้เลยโดยตั้งใจ: ไม่มี store, ไม่มี digest, ไม่มี persistence — แค่ "ตอบ request นี้เดี๋ยวนี้"
+
+## ข้อแลกเปลี่ยน
+
+| | Loader แบบ build-time (`glob`/`file`/custom) | Live loader (`defineLiveCollection`) |
+|---|---|---|
+| **data อยู่ที่ไหน** | `node_modules/.astro/data-store.json` เขียนโดย `astro sync` | ไม่มีที่ persistent เลย — fetch ใหม่ทุกครั้งที่เรียก |
+| **ต้นทุนของการเรียกซ้ำ** | ฟรี — `getCollection()` อ่านจาก store ที่ parse ไว้แล้ว | มีต้นทุนจริงทุกครั้ง — `loadCollection()` รันใหม่เต็ม |
+| **ความสด** | สดเท่ากับ `astro sync`/build ล่าสุด | สดเท่ากับตอน request จริง ๆ เสมอ |
+| **ต้นทุนของ entry ที่ไม่เปลี่ยน** | ศูนย์ พิสูจน์ข้างบน — ข้ามด้วย digest | ไม่เกี่ยวข้อง — ไม่มี entry persistent ให้เทียบ |
+| **เหมาะกับ** | content ที่เปลี่ยนตอน author/deploy (blog post, doc, product catalog ที่ sync เป็นช่วง ๆ) | data ที่ต้องสะท้อน *ขณะนี้เป๊ะ ๆ* (inventory สด, ราคาที่เปลี่ยนทุกนาที) |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`astro sync` reparse ทุก content file ทุกครั้ง เพื่อความปลอดภัย"** พิสูจน์ว่าผิดข้างบนด้วย `glob()` loader จริงที่รันสองครั้งติดกัน: entry ที่ digest ไม่เปลี่ยนไม่ถูก reparse เลย มีแค่ module/asset import ที่ถูก register ใหม่
+- **"content-layer data อยู่ใน `.astro/` folder ของ project เอง"** พิสูจน์ข้างบน: `data-store.json` — entry จริง, digest และ HTML ที่ render แล้ว — อยู่ใต้ `node_modules/.astro/`; folder `.astro/` ที่ root project เก็บ *type* ที่ generate และ asset-import glue ไม่ใช่ตัวข้อมูล
+- **"live collection ก็แค่ content collection ที่บังเอิญ mark เป็น live — caching ข้างใต้เหมือนกัน"** พิสูจน์ว่าผิดข้างบนจาก source จริงของ `getLiveCollection()`: ไม่มี store ไม่มี digest ไม่มี persistence เลย `loadCollection()` รันเต็มทุกครั้งที่เรียก
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`astro sync` เขียน **type** ที่ generate แล้วและ asset-import map ลง folder `.astro/` ที่ root project แต่ content จริง — ทุก entry, `digest` และ HTML ที่ render แล้ว — อยู่ใน `node_modules/.astro/data-store.json` (พิสูจน์ข้างบน เป็นไฟล์ JSON แบบ deduplicated-array จริง) loader ได้รับ `LoaderContext` ที่มี `store` scope ต่อ collection (`get`/`set`/`entries`/`delete`/`clear`) และ `meta` store แยกที่เป็น string ล้วนสำหรับบัญชีของตัวเอง `glob()` loader จริงที่ไม่ได้แก้ไข พิสูจน์ — ด้วย `astro sync` จริงสามครั้งติดกัน — ว่า entry ที่ content digest ไม่เปลี่ยน **ไม่ถูก** reparse เลย มีแค่ register ใหม่ live loader (`defineLiveCollection`) เป็น path คนละแบบเลยที่ไม่มี store: `getLiveCollection()` เรียก `loadCollection(context)` ใหม่เต็มทุกครั้งที่เรียก — trade-off จริงคือความสดตอน build-time (อ่านฟรี) เทียบกับความสดตอน request-time (มีต้นทุนจริงทุกครั้ง)
+</Callout>
+
+export const quizContentLayer = [
+  {
+    q: 'astro sync เขียน data ของ content layer จริง ๆ — ทุก entry, digest และ HTML ที่ render แล้ว — ไว้ที่ไหน?',
+    options: [
+      'folder .astro/ ที่ root project ใน data-store.json',
+      'node_modules/.astro/data-store.json — พิสูจน์ตรง ๆ ในบทเรียนนี้; folder .astro/ ที่ root project เก็บ type ที่ generate และ asset-import map แทน',
+      'เก็บแค่ในหน่วยความจำ ไม่เขียนลงดิสก์เลย',
+      'ข้างใน src/content.config.ts เอง',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบนด้วยการรัน astro sync จริงแล้วตรวจ filesystem: data-store.json อยู่ใต้ node_modules/.astro/ ไม่ใช่ folder .astro/ ที่ root project ตามที่เดาเร็ว ๆ อาจสมมติ',
+  },
+  {
+    q: '```js\nif (existingEntry && existingEntry.digest === digest && existingEntry.filePath) {\n  // ...\n  return;\n}\nconst parsedData = await parseData({ id, data, filePath });\n```\ncode ของ glob() loader จริงนี้ และการรัน astro sync จริงสามครั้งในบทเรียนนี้ พิสูจน์อะไร?',
+    options: [
+      'ทุก entry ถูก reparse เสมอทุก sync เพื่อความปลอดภัย',
+      'entry ที่ content digest ตรงกับที่เก็บไว้ไม่ถูก reparse เลย — parseData/render ถูกข้ามทั้งหมด มีแค่ไฟล์ที่เปลี่ยนจริงเท่านั้นที่ reparse',
+      'digest ถูกใช้แค่ตอน production build ไม่เคยใช้ตอน sync',
+      'parseData รันก่อนเสมอ แล้วค่อยเช็ค digest ทีหลัง',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ด้วย astro sync จริงสามครั้ง: run 2 (ไม่มีไฟล์เปลี่ยน) เจอ SKIP-reparse ทั้งสอง entry; run 3 (แก้ไฟล์เดียว) reparse แค่ entry นั้น — ตัวที่ไม่แตะยัง skip',
+  },
+  {
+    q: 'context.meta ใน LoaderContext ของ loader มีไว้ทำอะไรจริง ๆ?',
+    options: [
+      'content store ตัวที่สองสำหรับ entry ที่อยากแยกจากตัวหลัก',
+      'key/value store แบบ string ล้วนขนาดเล็กสำหรับบัญชีของ loader เอง (sync token, timestamp ล่าสุดที่ fetch) — ไม่ใช่ที่สำหรับ content entry',
+      'metadata ที่ Astro generate อัตโนมัติเกี่ยวกับ schema ของ collection',
+      'cache ของ HTML ที่ render แล้วสำหรับทุก entry',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ จาก type MetaStore จริงที่ติดตั้งไว้: get/set/has/delete บน string ธรรมดาเท่านั้น — แยกจาก DataStore โดยตั้งใจ ซึ่งเป็นที่ที่ content entry จริงควรอยู่เพื่อให้ getCollection() หาเจอ',
+  },
+  {
+    q: 'getLiveCollection() ต่างจากการอ่าน build-time collection ด้วย getCollection() ยังไง ตาม source จริงของ runtime.js?',
+    options: [
+      'เหมือนกันทุกประการข้างใน — อ่านจาก data store เดียวกัน',
+      'getLiveCollection() เรียก loadCollection(context) ของ live loader ใหม่เต็มทุกครั้งที่เรียก — ไม่มี store ไม่มี digest ไม่มี persistence เลย',
+      'getLiveCollection() ก็แค่ getCollection() ที่เปลี่ยนชื่อ',
+      'getLiveCollection() ทำงานแค่ตอน build time ไม่ใช่ต่อ request',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ จาก astro/dist/content/runtime.js: function ที่ createGetLiveCollection คืนมา await loader.loadCollection(context) ทุกครั้งที่ถูกเรียก — ไม่มี store.get/store.set เลยใน path นั้น',
+  },
+  {
+    q: 'custom loader เขียนทุก entry ด้วย store.set(...) ทุกครั้งที่เรียก load() โดยไม่เคยเทียบ digest เลย ผลลัพธ์จริงที่พิสูจน์ได้คืออะไร?',
+    options: [
+      'ไม่มีอะไร — store.set เป็น idempotent ทำแบบนี้ไม่เป็นไร',
+      'ทุก entry ถูก reparse/เขียนใหม่ทุก astro sync/build แม้ entry นั้นไม่เปลี่ยนอะไรเลย — พิสูจน์ข้างบนว่าเป็นงานที่ไม่จำเป็นซึ่ง glob() loader จริงหลีกเลี่ยงได้',
+      'Astro เพิ่ม digest checking ให้อัตโนมัติอยู่ดี',
+      'มันจะทำให้ build error',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ด้วยการเทียบกับ guard clause จริงของ glob() loader ในบทเรียนนี้: ข้ามการเช็ค digest แปลว่า store.set (และงาน parseData/render ที่มาก่อนมัน) รันแบบไม่มีเงื่อนไข ทุกครั้ง ทุก entry',
+  },
+];
+
+<Quiz client:visible id="astro-internals/content-layer-internals" questions={quizContentLayer} />
+
+<ProgressTracker client:visible id="astro-internals/content-layer-internals" />

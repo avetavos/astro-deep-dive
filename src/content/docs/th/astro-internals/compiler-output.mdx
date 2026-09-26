@@ -1,0 +1,444 @@
+---
+title: 'Compiler Output'
+description: 'ไฟล์ .astro ที่มี prop, scoped style, expression และ slot compile ออกมาเป็นอะไรจริง ๆ ใน Astro 7.3.5 — พิสูจน์ด้วย transform() call จริงกับ @astrojs/compiler-rs (Rust) ที่ติดตั้งจริง ไม่ใช่ paraphrase — พร้อม $$addAttribute, set:html และ hydration directive metadata'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
+
+## หน้าที่ของ compiler ในหนึ่งประโยค
+
+compiler ของ Astro แปลงไฟล์ `.astro` ให้เป็น JavaScript module ธรรมดาที่เรียก function ที่ export จาก `astro/runtime/server/index.js` ไม่มี framework runtime ไหนมา "แปลความ" component ของคุณตอน render — การแปลความเกิดขึ้นครั้งเดียวแล้ว ใน compiler package ที่ทำงานนี้จริง ๆ ใน Astro 7 คือ **`@astrojs/compiler-rs`** ซึ่งเป็น native Rust NAPI addon (`transform()`/`parse()`) — ไม่ใช่ `@astrojs/compiler` รุ่นเก่าที่เป็น WASM ล้วนซึ่ง tooling บางตัว (และ playground ในเบราว์เซอร์ของคอร์สนี้เองด้านล่าง) ยังใช้อยู่ ทุก claim ในบทเรียนนี้ได้จากการรัน `transform()` จริงของ package ที่ repo นี้ติดตั้งไว้ (`@astrojs/compiler-rs@0.5.1` resolve จาก `tools/probe/node_modules`) — นี่คือ compiler ตัวเดียวกันเป๊ะที่ `astro check` และ `astro build` รันกับ code ของคุณ
+
+## component ที่มี prop, scoped style, expression และ slot
+
+```astro
+---
+// src/components/Card.astro
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+```
+
+รัน `transform()` ของ compiler ที่ติดตั้งจริงตรง ๆ กับ source นั้นเป๊ะ (`filename: 'src/components/Card.astro'`):
+
+```ts
+// src/lib/compile-card.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+`;
+
+test('transform(): props + scoped style + expression + slot', () => {
+  const result = transform(source, { filename: 'src/components/Card.astro' });
+
+  expect(result.code).toContain('$$createComponent');
+  expect(result.code).toContain('$$maybeRenderHead');
+  expect(result.code).toContain('$$renderSlot');
+  expect(result.css[0]).toMatch(/\.card:where\(\.astro-[a-z0-9]+\)/);
+  expect(result.code).toMatch(/class="card astro-[a-z0-9]+"/);
+});
+```
+
+```text
+✓ transform(): props + scoped style + expression + slot
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+compiled output จริงเต็ม ๆ ของ source นั้น:
+
+```js
+import { render as $$render, createAstro as $$createAstro, createComponent as $$createComponent, maybeRenderHead as $$maybeRenderHead, renderSlot as $$renderSlot } from "astro/runtime/server/index.js";
+import "src/components/Card.astro?astro&type=style&index=0&lang.css";
+const $$Astro = $$createAstro("https://astro.build");
+const Astro = $$Astro;
+const $$Card = $$createComponent(($$result, $$props, $$slots) => {
+	const Astro = $$result.createAstro($$props, $$slots);
+	Astro.self = $$Card;
+	const { name } = Astro.props;
+	return $$render`${$$maybeRenderHead($$result)}<div class="card astro-3dcq3mxs">
+  <h2 class="astro-3dcq3mxs">Hello ${name}</h2>
+  ${$$renderSlot($$result, $$slots["default"])}
+</div>`;
+}, "src/components/Card.astro", undefined);
+export default $$Card;
+```
+
+ทุกส่วนทำงานจริงและเจาะจง:
+
+- **`$$createComponent(renderFn, filename, moduleId)`** — ห่อ render function ของคุณให้เป็น component จริงที่ runtime ของ Astro เรียก `$$Astro.self` ให้ component reference ตัวเอง (ใช้กับ recursive component)
+- **`$$createAstro(site)`** — สร้าง `$$Astro` global ร่วมที่ identifier `Astro` เปล่า ๆ ใน frontmatter ของคุณ bind อยู่ ก่อนบรรทัด `const { name } = Astro.props` ของคุณเองจะรัน
+- **`$$maybeRenderHead($$result)`** — emit เนื้อหา `<head>` แบบ lazy ครั้งแรกที่ element *ใดก็ตาม* render — พิสูจน์ด้วยตำแหน่งของมัน: มันอยู่ตรงก่อน markup จริงตัวแรก ไม่ใช่บนสุดของ function
+- **`$$render` / tagged template** — body ทั้งหมดคือ tagged template literal เดียว ทุก `${...}` ที่ interpolate เป็นได้ทั้ง plain value (escape อัตโนมัติโดย runtime) หรือ renderer call อื่น (`$$renderSlot`, `$$renderComponent` สำหรับ child component)
+- **scoped-style hash (`astro-3dcq3mxs`)** — ถูกเติมเป็น CSS class จริงบนทุก element ที่ selector ของ `<style>` block เข้าถึง และ hash เดียวกันปรากฏใน CSS ที่ emit ออกมาเป็น `:where(.astro-3dcq3mxs)` wrapper (`:where` ทำให้ scoping ไม่เพิ่ม specificity ของ selector — พิสูจน์ข้างบน: `.card:where(.astro-3dcq3mxs) { color: red; }`)
+- **`$$renderSlot($$result, $$slots["default"])`** — `<slot />` กลายเป็น call ที่หา named slot (`"default"` ในที่นี้) จาก `$$slots` ที่ส่งเข้ามาโดยตัวที่ render `<Card>`
+
+## scoped-style hash มาจากชื่อไฟล์ — พิสูจน์ด้วยการเปลี่ยนชื่อ
+
+compile source string เดียวกันเป๊ะภายใต้ `filename` สองชื่อ ได้ hash สองแบบที่ต่างกัน:
+
+```ts
+// src/lib/scoped-hash-rename.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+`;
+
+test('renaming the file changes the scoped-style hash, for identical source', () => {
+  const original = transform(source, { filename: 'src/components/Card.astro' });
+  const renamed = transform(source, { filename: 'src/components/RenamedCard.astro' });
+
+  const hashOf = (code: string) => code.match(/astro-([a-z0-9]+)/)?.[1];
+
+  expect(hashOf(original.code)).toBe('3dcq3mxs');
+  expect(hashOf(renamed.code)).toBe('izcegd4j');
+  expect(hashOf(original.code)).not.toBe(hashOf(renamed.code));
+});
+```
+
+```text
+✓ renaming the file changes the scoped-style hash, for identical source
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+ค่าจริงที่ capture ได้จากการรันนี้เป๊ะ: `src/components/Card.astro` → `astro-3dcq3mxs`; source เดียวกันเป๊ะที่บันทึกเป็น `RenamedCard.astro` → `astro-izcegd4j` นี่คือข้อมูลที่มีประโยชน์จริงตอนอ่าน diff: scoped-style hash ที่เปลี่ยนใน PR ที่แค่เปลี่ยนชื่อไฟล์ (ไม่ได้เปลี่ยน content) เป็นเรื่องที่คาดหวังได้ ไม่ใช่สัญญาณของการแก้ไขแปลก ๆ — และการ copy-paste compiled output ของ component ไปไฟล์อื่นโดยไม่ compile ใหม่จะพก hash *ผิด* ติดไปด้วย
+
+## dynamic attribute: `$$addAttribute` และ `set:html` เทียบกับ plain expression
+
+```astro
+---
+// src/components/AttrCard.astro
+const { name, htmlContent } = Astro.props;
+const id = `card-${name}`;
+---
+<div id={id} class="card">
+  <p set:html={htmlContent} />
+  <p>{htmlContent}</p>
+</div>
+```
+
+```ts
+// src/lib/compile-attr.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+const { name, htmlContent } = Astro.props;
+const id = \`card-\${name}\`;
+---
+<div id={id} class="card">
+  <p set:html={htmlContent} />
+  <p>{htmlContent}</p>
+</div>
+`;
+
+test('transform(): a dynamic attribute becomes $$addAttribute; set:html becomes $$unescapeHTML, a plain expression does not', () => {
+  const result = transform(source, { filename: 'src/components/AttrCard.astro' });
+
+  expect(result.code).toContain('$$addAttribute(id, "id")');
+
+  // set:html's paragraph goes through $$unescapeHTML exactly once...
+  const unescapedCalls = result.code.match(/\$\$unescapeHTML\(htmlContent\)/g) ?? [];
+  expect(unescapedCalls).toHaveLength(1);
+
+  // ...while the plain {htmlContent} expression on the next line stays a bare,
+  // auto-escaped interpolation — no $$unescapeHTML wrapping it at all.
+  expect(result.code).toContain('<p>${htmlContent}</p>');
+});
+```
+
+```text
+✓ transform(): a dynamic attribute becomes $$addAttribute; set:html becomes $$unescapeHTML, a plain expression does not
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+compiled output จริงเต็ม ๆ:
+
+```js
+import { render as $$render, createAstro as $$createAstro, createComponent as $$createComponent, maybeRenderHead as $$maybeRenderHead, unescapeHTML as $$unescapeHTML, addAttribute as $$addAttribute } from "astro/runtime/server/index.js";
+const $$Astro = $$createAstro("https://astro.build");
+const Astro = $$Astro;
+const $$AttrCard = $$createComponent(($$result, $$props, $$slots) => {
+	const Astro = $$result.createAstro($$props, $$slots);
+	Astro.self = $$AttrCard;
+	const { name, htmlContent } = Astro.props;
+	const id = `card-${name}`;
+	return $$render`${$$maybeRenderHead($$result)}<div${$$addAttribute(id, "id")} class="card">
+  <p>${$$unescapeHTML(htmlContent)}</p>
+  <p>${htmlContent}</p>
+</div>`;
+}, "src/components/AttrCard.astro", undefined);
+export default $$AttrCard;
+```
+
+สองข้อเท็จจริงที่พิสูจน์ตรง ๆ:
+
+- **`id={id}`** — attribute ไหนก็ตามที่ value เป็น expression (ไม่ใช่ string literal) compile เป็น `$$addAttribute(value, "name")` — เป็น runtime call ไม่ใช่ string interpolation เข้าไปใน tag เพราะมันต้องจัดการ boolean ด้วย (`disabled={false}` ต้อง *ไม่ใส่* attribute เลย ไม่ใช่ render `disabled="false"`) และ object แบบ `class:list`
+- **`set:html={htmlContent}`** compile เป็น `$$unescapeHTML(htmlContent)` — string ถูกใส่เข้าไป **เป็น raw HTML แบบไม่ escape** บรรทัดถัดไปทันที `{htmlContent}` เป็น plain expression ไม่มี directive interpolate value *เดียวกัน* โดยไม่มี `$$unescapeHTML` call เลย — tagged-template renderer ของ runtime escape plain interpolation ให้อัตโนมัติ นี่คือความต่างทั้งหมดระหว่าง "render เป็น HTML" กับ "render เป็น text" ใน Astro: directive เดียว, compiled call เดียวที่เจาะจง
+
+## hydration directive metadata: `client:load` เทียบกับ `client:only`
+
+```tsx
+// src/components/Counter.tsx
+import { useState } from 'preact/hooks';
+
+export default function Counter({ count }: { count: number }) {
+  const [n, setN] = useState(count);
+  return <button onClick={() => setN(n + 1)}>Count: {n}</button>;
+}
+```
+
+```astro
+---
+// src/pages/island-demo.astro
+import Counter from '../components/Counter.tsx';
+---
+<Counter client:load count={5} />
+```
+
+```ts
+// src/lib/compile-hydration.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+test('transform(): client:load renders the component AND emits hydration metadata', () => {
+  const source = `---
+import Counter from '../components/InternalsCounter.jsx';
+---
+<Counter client:load count={5} />
+`;
+  const result = transform(source, { filename: 'src/pages/island-demo.astro', resolvePath: (s) => s });
+
+  expect(result.code).toContain('"client:load": true');
+  expect(result.code).toContain('"client:component-hydration": "load"');
+  expect(result.code).toContain('"client:component-path": "../components/InternalsCounter.jsx"');
+  expect(result.code).toContain('"client:component-export": "default"');
+  // The component itself IS passed to $$renderComponent (server-rendered, then hydrated):
+  expect(result.code).toMatch(/\$\$renderComponent\(\$\$result, "Counter", Counter, \{/);
+  expect(result.hydratedComponents).toHaveLength(1);
+  expect(result.hydratedComponents[0].specifier).toBe('../components/InternalsCounter.jsx');
+});
+
+test('transform(): client:only passes null instead of the component — no server render at all', () => {
+  const source = `---
+import Counter from '../components/InternalsCounter.jsx';
+---
+<Counter client:only="preact" count={5} />
+`;
+  const result = transform(source, { filename: 'src/pages/island-only-demo.astro', resolvePath: (s) => s });
+
+  expect(result.code).toContain('"client:only": "preact"');
+  expect(result.code).toContain('"client:component-hydration": "only"');
+  // The THIRD argument to $$renderComponent (the component reference) is null:
+  expect(result.code).toMatch(/\$\$renderComponent\(\$\$result, "Counter", null, \{/);
+  expect(result.clientOnlyComponents).toHaveLength(1);
+});
+```
+
+```text
+✓ transform(): client:load renders the component AND emits hydration metadata
+✓ transform(): client:only passes null instead of the component — no server render at all
+
+Test Files  1 passed (1)
+     Tests  2 passed (2)
+```
+
+compiled output จริงของ `client:load`:
+
+```js
+import { render as $$render, createComponent as $$createComponent, renderComponent as $$renderComponent } from "astro/runtime/server/index.js";
+import Counter from "../components/InternalsCounter.jsx";
+const $$IslandDemo = $$createComponent(($$result, $$props, $$slots) => {
+	return $$render`${$$renderComponent($$result, "Counter", Counter, {
+		"client:load": true,
+		"count": 5,
+		"client:component-hydration": "load",
+		"client:component-path": "../components/InternalsCounter.jsx",
+		"client:component-export": "default"
+	})}`;
+}, "src/pages/island-demo.astro", undefined);
+export default $$IslandDemo;
+```
+
+...และของ `client:only="preact"` — สังเกต **argument ตัวที่สามของ `$$renderComponent` เป็น `null`** ไม่ใช่ `Counter` ที่ import มา:
+
+```js
+$$render`${$$renderComponent($$result, "Counter", null, {
+	"client:only": "preact",
+	"count": 5,
+	"client:component-hydration": "only",
+	"client:component-path": "../components/InternalsCounter.jsx",
+	"client:component-export": "default"
+})}`;
+```
+
+`null` นั้นคือ compiled proof ที่อยู่เบื้องหลัง "`client:only` ข้าม server rendering ไปเลย" (ดู [Client Directives](/astro/th/islands/client-directives/)): function `renderComponent` ของ runtime ไม่มี component reference จริงให้เรียกบน server เลยสำหรับ island ที่เป็น `client:only` — มีแค่ `client:component-path` ที่ browser จะ `import()` ทีหลัง [Island Hydration](/astro/th/astro-internals/island-hydration/) รับต่อจากตรงนี้ ตรงจังหวะที่ metadata นี้กลายเป็น attribute จริงของ `<astro-island>` element ใน HTML ที่ render ออกมา
+
+## ลองเองดู
+
+<AstroPlayground code={sampleCode} id="internals-compiler-output" />
+
+export const sampleCode = `---
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+`;
+
+playground นี้ compile source เดียวกันกับที่แสดงข้างบน — แต่ผ่าน `@astrojs/compiler` (WASM package รุ่นเก่าที่โหลดใน browser ได้) ไม่ใช่ `@astrojs/compiler-rs` (native Rust compiler ที่ test `transform()` ในบทเรียนนี้รันจริง) ทั้งสองตัวเห็นด้วยกันใน *รูปร่าง* — ทั้งคู่ผลิต body แบบ `$$createComponent`/`$$render` พร้อม scoped `astro-*` class — แต่เป็นคนละ package กันจริง ๆ และ runtime import path ที่แน่นอนกับชื่อ internal helper อาจต่างกันได้ เชื่อ `transform()` output ที่ test แล้วข้างบนว่าเป็นสิ่งที่ `astro check`/`astro build` รันจริง ใช้ playground นี้เพื่อสำรวจ ไม่ใช่เป็น source of truth ที่สอง
+
+## อ่านโค้ดที่ AI เขียน
+
+- คำอธิบายอ้างว่า Astro "แปลความ" ไฟล์ `.astro` ตอน request time แบบ template engine ไหม? ไม่มีขั้นตอนแปลความตอน runtime เลย — `transform()` ผลิต plain JavaScript call ไปแล้ว พิสูจน์ตลอดบทเรียนนี้ request แค่เรียก function ที่ได้มา
+- diff แสดง scoped-style hash เปลี่ยนโดยไม่มีเหตุผลที่เห็นได้ไหม? พิสูจน์ข้างบน: hash เป็น function ของ path ของไฟล์ ไม่ใช่ (แค่) content — การเปลี่ยนชื่อ ย้ายไฟล์ หรือ copy-paste component ไปตำแหน่งใหม่ ล้วนเปลี่ยน hash และนั่นคือสิ่งที่คาดหวังได้ ไม่ใช่สัญญาณของความคลาดเคลื่อน
+- `set:html` ถูกใช้กับ value ที่ยังไม่ถูก trust/sanitize เป็น HTML แล้วหรือเปล่า? พิสูจน์ข้างบน: มัน compile เป็น `$$unescapeHTML` ซึ่งข้าม escape อัตโนมัติของ runtime ไปเลย — กลไกเดียวกับที่ `{expression}` เปล่า ๆ ใช้เพื่อความปลอดภัย
+- comment สมมติว่า component ที่เป็น `client:only` "render บน server แล้วค่อย hydrate" ไหม? พิสูจน์ข้างบน: compiled call ส่ง `null` ในตำแหน่งที่ควรเป็น component reference — ไม่มี server render ให้พูดถึงเลยสำหรับ island ที่เป็น `client:only`
+
+<SpotTheBug code={`---
+// src/components/Notice.astro
+const { userComment } = Astro.props;
+---
+<!-- "using set:html so line breaks in the user's comment render properly" -->
+<p set:html={userComment} />`}>
+เจตนาของ comment (รักษา line break) ไม่จำเป็นต้องใช้ `set:html` เลย และการใช้ตรงนี้เป็น bug ที่จริงจังมาก: `set:html` compile เป็น `$$unescapeHTML(userComment)` พิสูจน์ข้างบนว่าข้าม HTML escape อัตโนมัติของ runtime ไปเลย ถ้า `userComment` เป็น input ที่ user ป้อนโดยไม่ trust นี่คือช่องโหว่ stored XSS จริง — `<script>` หรือ `onerror` handler ใดก็ตามที่ผู้เข้าชมพิมพ์ใส่ field นั้นจะถูกใส่เข้าไปในหน้าตรง ๆ และรันให้ผู้ชมคนอื่นทุกคน วิธีแก้คือใช้ plain expression ต่อไป (`<p>{userComment}</p>` ซึ่ง compiled output ข้างบนพิสูจน์ว่ายัง escape อยู่) แล้วจัดการ line break ด้วย CSS (`white-space: pre-wrap`) หรือ render แต่ละบรรทัดใน element ของตัวเอง — ไม่ใช่ปิด escape สำหรับ text ที่ไม่ trust
+</SpotTheBug>
+
+## Mental Model
+
+compiler คือตัวแปลครั้งเดียว ไม่ใช่ตัวแปลความตอน runtime: ทุกการอ่าน prop, ทุก scoped style, ทุก `{expression}`, ทุก directive (`set:html`, `client:load`, `client:only`) กลายเป็น plain JavaScript call ที่เจาะจงไปยัง `astro/runtime/server` — ตัดสินใจครั้งเดียวตอนเดินไฟล์ ไม่มีการตัดสินใจใหม่ตอน render การอ่าน compiled output คือการอ่านโปรแกรมจริงที่รัน ไม่มี layer ที่สองซ่อนอยู่ข้างใต้
+
+## ข้อแลกเปลี่ยน
+
+| ตัวเลือก | ได้อะไร | เสียอะไร |
+|---|---|---|
+| native Rust compiler (`@astrojs/compiler-rs`) แทนตัว WASM | `astro check`/`astro build` เร็วขึ้น ไม่มี overhead ของการ instantiate WASM | ไม่มี browser build เลย — Astro playground ที่รันในเบราว์เซอร์จริง ๆ (รวมถึง `<AstroPlayground>` ของบทเรียนนี้) ต้อง fallback ไปใช้ WASM package รุ่นเก่าซึ่งอาจต่างกันเล็กน้อย |
+| scoped-style hash ที่มาจากชื่อไฟล์ | deterministic โดยไม่ต้องมี counter ทั้ง build — build สองครั้งของไฟล์เดียวกันได้ค่าตรงกันเสมอ | เปลี่ยนชื่อหรือย้ายไฟล์ทำให้ scoped class ทุกตัวของมันเปลี่ยน ซึ่งดูเป็น diff ใหญ่ใน HTML/CSS ที่ generate สำหรับสิ่งที่จริง ๆ ไม่เปลี่ยนอะไรเลย |
+| escape อัตโนมัติของ plain `{expression}` interpolation | ปลอดภัยโดย default — text ที่ไม่ trust ใส่ markup ไม่ได้ เว้นแต่ directive จะปิดมันตรง ๆ | ตัวปิด (`set:html`) ดูเหมือนต่างจาก default ที่ปลอดภัยแค่คำเดียว ซึ่งทำให้เผลอใช้ตามความเคยชินได้ง่าย |
+| `client:only` ส่ง `null` สำหรับ component reference | ไม่เสียเวลา render บน server สำหรับ component ที่รันบนนั้นไม่ได้อยู่แล้ว | HTML แรกของหน้าไม่มี fallback content สำหรับ slot นั้นเลย — network ช้าหมายถึงช่องว่างจริง ๆ จนกว่า client-only bundle จะโหลดเสร็จ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ไฟล์ `.astro` ถูก runtime แปลความ เหมือน template engine อ่านไฟล์ `.ejs`/`.hbs`"** พิสูจน์ว่าผิดตลอดบทเรียนนี้: `transform()` ผลิต JavaScript module ที่สมบูรณ์ล่วงหน้า "runtime" ของ Astro (`astro/runtime/server`) เป็นแค่ set เล็ก ๆ ของ helper function (`$$createComponent`, `$$render`, `$$addAttribute`, ...) ที่ compiled output เรียกเข้าไป — ไม่มีการ parse template ใหม่ต่อ request
+- **"scoped style hash ที่เปลี่ยนระหว่างไฟล์สองเวอร์ชันแปลว่า CSS เปลี่ยนไปแล้ว"** พิสูจน์ว่าผิดข้างบน: เปลี่ยนชื่อไฟล์ที่ content และ CSS เหมือนกันเป๊ะ ได้ hash ต่างกัน hash มาจาก path ไม่ใช่ content
+- **"`{expression}` กับ `set:html={expression}` คือสิ่งเดียวกัน แค่ syntax ต่างกัน"** พิสูจน์ว่าผิดข้างบน: ตัวหนึ่ง compile เป็น plain interpolation ที่ escape อัตโนมัติ อีกตัว compile เป็น `$$unescapeHTML` ซึ่งเป็น call เฉพาะที่ข้าม escape ไปเลย ใช้ตัวผิดกับ input ที่ไม่ trust คือช่องโหว่ XSS จริง ไม่ใช่แค่ความชอบด้าน style
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`transform()` (จาก `@astrojs/compiler-rs` ที่ติดตั้งจริง) แปลงไฟล์ `.astro` เป็น JavaScript module ธรรมดา: `$$createComponent`/`$$render` ห่อทั้งหมดไว้, `$$maybeRenderHead` emit เนื้อหา `<head>` แบบ lazy ตอน markup ตัวแรก, `<style>` block ที่ scope ได้ hash **มาจาก path ของไฟล์** (พิสูจน์ด้วยการเปลี่ยนชื่อ), ทุก dynamic attribute กลายเป็น `$$addAttribute`, `set:html` กลายเป็น `$$unescapeHTML` (ข้าม escape อัตโนมัติที่ `{expression}` เปล่า ๆ ได้ — ความเสี่ยง XSS จริงกับ input ที่ไม่ trust) และทุก hydration directive (`client:load`, `client:only`, ...) กลายเป็น metadata (`client:component-hydration`, `client:component-path`, `client:component-export`) ที่ส่งไปพร้อม component reference ให้ `$$renderComponent` — ยกเว้น `client:only` ที่ส่ง `null` แทน reference นั้นเพราะไม่มีอะไรรันบน server เลย นี่คือ compiler ตัวเดียวกันกับที่ `astro check`/`astro build` รันกับ code ของคุณ ส่วน playground ในเบราว์เซอร์ข้างบนใช้ package (เก่ากว่า, WASM) คนละตัวสำหรับ output รูปร่างเดียวกัน
+</Callout>
+
+export const quizCompilerOutput = [
+  {
+    q: 'compiler จริงที่ `astro check`/`astro build` ใช้ แปลงไฟล์ `.astro` เป็นอะไร?',
+    options: [
+      'ไม่มีอะไร — Astro แปลความไฟล์ตรง ๆ ตอน request time',
+      'JavaScript module ธรรมดาที่เรียก function จาก astro/runtime/server (`$$createComponent`, `$$render`, ...) — พิสูจน์ตรง ๆ ด้วย transform()',
+      'WebAssembly binary ที่รันในเบราว์เซอร์',
+      'JSON ที่อธิบาย component แล้ว parse ใหม่ทุก request',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตลอดบทเรียนนี้ด้วย transform() output จริง: ผลลัพธ์ที่ compile แล้วคือ JavaScript ธรรมดาที่เรียกเข้าไปยัง astro/runtime/server — ไม่มีการแปลความใหม่ต่อ request',
+  },
+  {
+    q: '```js\n.card:where(.astro-3dcq3mxs) { color: red; }\n```\ncompile source เดียวกันเป๊ะ byte ต่อ byte แต่บันทึกภายใต้ชื่อไฟล์ต่างกัน ได้ผลอะไร?',
+    options: [
+      'hash เดียวกันเป๊ะ — hash มาจาก content อย่างเดียว',
+      'hash ต่างกัน — พิสูจน์ตรง ๆ: เปลี่ยนชื่อ Card.astro เป็น RenamedCard.astro เปลี่ยน astro-3dcq3mxs เป็นค่าอื่นทั้งที่ source เหมือนกัน',
+      'compiler error',
+      'ไม่มี hash เลย — class ถูกทิ้ง',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ด้วย transform() test จริงในบทเรียนนี้: scoped-style hash มาจาก path ของไฟล์ (option filename) ไม่ใช่จาก content อย่างเดียว',
+  },
+  {
+    q: '```astro\n<p set:html={userComment} />\n```\nถ้า `userComment` เป็น input ที่ user ป้อนโดยไม่ trust compiled output พิสูจน์อะไรเกี่ยวกับบรรทัดนี้?',
+    options: [
+      'ปลอดภัยเหมือน `<p>{userComment}</p>` ทุกประการ — escape อัตโนมัติทั้งคู่',
+      'compile เป็น `$$unescapeHTML(userComment)` ซึ่งข้าม escape อัตโนมัติของ runtime ไปเลย — ความเสี่ยง XSS จริง',
+      'Astro ปฏิเสธตอน compile time',
+      'มีผลแค่กับ styling ไม่ใช่ HTML content',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ ด้วย transform() output และ SpotTheBug ข้างบน: set:html compile เป็น call เฉพาะ คือ $$unescapeHTML ซึ่งข้าม escape ที่ {expression} เปล่า ๆ ได้อัตโนมัติ',
+  },
+  {
+    q: '```js\n$$renderComponent($$result, "Counter", null, { "client:only": "preact", ... })\n```\n`null` argument ตัวที่สามพิสูจน์อะไรเกี่ยวกับ `client:only`?',
+    options: [
+      'Counter import ไม่สำเร็จ',
+      'client:only ข้าม server-side rendering ของ component ไปเลย — ไม่มี component reference ให้ render บน server',
+      'null แปลว่า component render ด้วย default prop',
+      'นี่เป็น compiler bug',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ ข้างบน: client:load ส่ง component ที่ import จริงเป็น argument ตัวที่สาม; client:only ส่ง null แทน เพราะ component ไม่รันบน server เลย',
+  },
+  {
+    q: '`<AstroPlayground>` ในเบราว์เซอร์ของคอร์สนี้ compile ด้วย package ไหน และทำไมมันต่างจากที่ `astro check`/`astro build` ใช้จริง?',
+    options: [
+      '@astrojs/compiler-rs ตัวเดียวกัน โหลดผ่าน WebAssembly',
+      '@astrojs/compiler รุ่นเก่า (WASM package แบบ classic) — เพราะ @astrojs/compiler-rs เป็น native Rust NAPI addon ที่ไม่มี browser build',
+      'มันส่ง code ไป compile บน server',
+      'มันใช้ TypeScript compiler แทน',
+    ],
+    answer: 1,
+    explain: 'ระบุไว้ตรง ๆ ในบทเรียนนี้และใน doc comment ของ astro-playground-runtime.ts เอง: @astrojs/compiler-rs รันในเบราว์เซอร์ไม่ได้ (พิสูจน์ว่า link ไม่ผ่านด้วยซ้ำเมื่อลอง) playground เลย fallback ไปใช้ @astrojs/compiler รุ่น classic ที่สร้างมาสำหรับเบราว์เซอร์โดยเฉพาะแทน',
+  },
+];
+
+<Quiz client:visible id="astro-internals/compiler-output" questions={quizCompilerOutput} />
+
+<ProgressTracker client:visible id="astro-internals/compiler-output" />

@@ -1,0 +1,183 @@
+---
+title: 'How Astro Works'
+description: 'compiler output, island hydration, content layer, request pipeline และ build pipeline — internals ที่ทำให้คุณตัดสิน Astro code ที่ไม่คุ้นเคยหรือ AI เขียนได้จริง ไม่ใช่แค่ใช้ framework เป็น'
+sidebar:
+  order: 0
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## module นี้มีไว้ทำอะไร
+
+ทุก module ก่อนหน้าในคอร์สนี้สอนให้คุณ *ใช้* Astro: component, island, content collection, action, middleware, adapter ไม่มีอันไหนต้องรู้ว่าจริง ๆ แล้วเกิดอะไรขึ้นกับไฟล์ `.astro` หลังจากคุณเขียนมันเสร็จ, JavaScript อะไรถูกส่งไป browser เมื่อคุณเพิ่ม `client:load`, `astro sync` เขียนอะไรลงดิสก์จริง ๆ, request วิ่งผ่าน order ไหน หรือ `astro build` ทำอะไรระหว่าง "Collecting build info..." กับ "Complete!" คุณเขียน component ที่ทำงานได้, loader ที่ถูกต้อง, action ที่ผ่านได้ — โดยไม่เคยต้องถามว่า `$$createComponent` คืออะไร, ทำไม island ที่ซ้อนกันต้องรอ parent hydrate ก่อน หรือทำไม content entry ที่ไม่เปลี่ยนถึงไม่ถูก reparse
+
+ช่องว่างนั้นแหละคือจุดที่ Astro code ที่ AI เขียนพังในแบบที่ดูดีตอนแรก: island ที่ซ้อนกันซึ่งสมมติว่า hydrate เป็นอิสระจาก parent, custom loader ที่ mutate data store โดยไม่มี digest ทำให้ทุก build reparse ทุกอย่างใหม่, middleware ที่อ่าน `context.request.body` สองครั้ง, route ที่ชนกันแล้ว "แก้" ด้วยการเปลี่ยนชื่อไฟล์แทนที่จะเข้าใจ priority ของ static/dynamic/rest ไม่มีอันไหนเป็น syntax error ไม่มีอันไหนถูกจับโดย `astro check` ทั้งหมดเป็นข้อเท็จจริงเกี่ยวกับ runtime และ build
+
+module นี้มีหน้าที่เดียว: ให้ความรู้ runtime ห้าอย่างที่ทำให้คุณดู **Astro code ของคนอื่น** — ไม่ต้องรัน ไม่ต้อง profile แค่อ่าน — แล้วตอบได้ว่า:
+
+1. **ไฟล์ `.astro` นี้ compile ออกมาเป็นอะไรจริง ๆ?** (compiler output — `$$createComponent`, `$$render`, scoped style, slot, hydration metadata)
+2. **เกิดอะไรขึ้นตอนที่ island กลายเป็น interactive — และเรียงลำดับยังไงเมื่อ island ซ้อนกัน?** (island hydration — `<astro-island>` จริง, prop encoding, directive loader)
+3. **`astro sync` เขียนอะไรลงดิสก์ และ loader รันใหม่จริง ๆ เมื่อไหร่?** (content layer — data store, digest, loader แบบ live vs build-time)
+4. **request ที่เข้ามาวิ่งผ่าน order ไหนจริง ๆ?** (request pipeline — adapter → middleware → routing → page/endpoint/action → response)
+5. **`astro build` ทำอะไร ตามลำดับไหน และทำไม build รอบสองมักเร็วกว่า?** (build pipeline — Vite 8 + Rolldown, prerender pass, client bundle, content-layer cache)
+
+ทุก claim ใน module นี้อ้างอิงจากสามอย่าง: [docs.astro.build](https://docs.astro.build/), Astro source จริงที่ shipped ใน `node_modules/astro` (คอร์สนี้ pin ไว้ที่ **7.3.5**) อ้างด้วยชื่อไฟล์และ function; หรือการรันจริงที่ reproduce ได้ — เรียก `transform()` กับ `@astrojs/compiler-rs` ที่ติดตั้งจริง, vitest assertion, `curl` จริงกับ build ที่รันอยู่ หรือ log จริงจาก `astro build`/`astro sync` — วางไว้ใต้ claim นั้นเลย ไม่มีการเดา internals
+
+<Callout title="สรุปหนึ่งบรรทัด">
+module นี้ไม่ได้เพิ่ม Astro API ใหม่ — มันอธิบายห้าอย่างที่ไฟล์ `.astro`, island, content collection, request และ build ทุกตัววิ่งผ่านจริง ๆ: **compiler** (แปลง `.astro` เป็น plain JS call ไปยัง `astro/runtime/server` ผ่าน native Rust `@astrojs/compiler-rs` — ไม่ใช่ WASM `@astrojs/compiler` รุ่นเก่าที่ tooling บางตัวและ playground ในเบราว์เซอร์ของคอร์สนี้เองยังใช้อยู่), **island hydration** (`<astro-island>` custom element จริงที่รอ parent ก่อนจะ hydrate), **content layer** (data store ที่ key ด้วย digest — ข้าม reparse อะไรก็ตามที่ไม่เปลี่ยน), **request pipeline** (adapter → middleware `sequence()` → route matching ตาม priority static/dynamic/rest → page/endpoint/action → response) และ **build pipeline** (Vite 8 + Rolldown, prerender pass แล้วค่อย client bundle ใช้ content-layer cache ซ้ำระหว่าง build) ทั้งห้าอย่างอยู่บน docs.astro.build หรืออ่านได้ตรง ๆ ใน package ที่ติดตั้งไว้ — ไม่คุ้นเคย ไม่ใช่ไม่มีเอกสาร
+</Callout>
+
+## module นี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | ตอบคำถามอะไร |
+|---|---|
+| [Compiler Output](/astro/th/astro-internals/compiler-output/) | ไฟล์ `.astro` ที่มี prop, scoped style, expression และ slot compile ออกมาเป็นอะไรจริง ๆ? |
+| [Island Hydration](/astro/th/astro-internals/island-hydration/) | `<astro-island>` ทำอะไรจริง ๆ ตอน `connectedCallback` และทำไม island ที่ซ้อนกันถึง hydrate ตามลำดับที่แน่นอน? |
+| [Content Layer Internals](/astro/th/astro-internals/content-layer-internals/) | `astro sync` เขียนอะไรลงดิสก์ และ loader รู้ได้ยังไงว่า entry ไม่เปลี่ยน? |
+| [Request Pipeline](/astro/th/astro-internals/request-pipeline/) | order จริงที่พิสูจน์ได้ของ request คืออะไร ตั้งแต่ adapter ถึง response? |
+| [Build Pipeline](/astro/th/astro-internals/build-pipeline/) | `astro build` ทำอะไรจริง ๆ ตามลำดับไหน และอะไรทำให้ build รอบสองเร็วกว่า? |
+
+module Foundations แนะนำ "Astro ส่ง JavaScript เป็นศูนย์โดย default" และ component model จากภายนอกไปแล้ว module นี้ไปไกลกว่า framing นั้นเข้าไปใน compiled output จริง, runtime จริง และ build จริง
+
+## คำถามที่รันได้จริง: scoped style กลายเป็นอะไรจริง ๆ
+
+ก่อนกลไกที่ลึกกว่านี้ นี่คือข้อเท็จจริงที่ module ทั้งหมดวนรอบ: compile source `.astro` เดียวกันเป๊ะสองครั้ง ภายใต้ชื่อไฟล์สองชื่อ ได้ scoped-style hash สองแบบที่ต่างกัน — พิสูจน์ว่า hash มาจาก path ของไฟล์ ไม่ใช่จาก counter หรือ content อย่างเดียว
+
+```ts
+// src/lib/scoped-hash.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">Hello {name}</div>
+`;
+
+test('transform(): the scoped-style hash is derived from the filename, not the content', () => {
+  const a = transform(source, { filename: 'src/components/Card.astro' });
+  const b = transform(source, { filename: 'src/components/RenamedCard.astro' });
+
+  const hashOf = (code: string) => code.match(/astro-([a-z0-9]+)/)?.[1];
+
+  expect(hashOf(a.code)).toBeTruthy();
+  expect(hashOf(b.code)).toBeTruthy();
+  expect(hashOf(a.code)).not.toBe(hashOf(b.code)); // same source, different file -> different hash
+});
+```
+
+```text
+✓ transform(): the scoped-style hash is derived from the filename, not the content
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+[Compiler Output](/astro/th/astro-internals/compiler-output/) เดิน `transform()` call เดียวกันนี้ต่อแบบเต็ม ๆ — ทุก import, ทุก call ที่ขึ้นต้นด้วย `$$` และเหตุผลที่ hash เปลี่ยนตามชื่อไฟล์
+
+<Mermaid title="ไฟล์ .astro หนึ่งไฟล์ จาก source ถึง response" code={bigDiagram} />
+
+export const bigDiagram = `flowchart TD
+  src["\`.astro\` source"] --> compile["\`@astrojs/compiler-rs\` \`transform()\`"]
+  compile --> js["Compiled JS: \`$$createComponent\`/\`$$render\`\n\`$$addAttribute\`/scoped \`astro-*\` hash\n(Compiler Output)"]
+  js --> island["ถ้า hydrate: \`<astro-island>\` ถูกส่งไป\nconnectedCallback -> hydrate()\n(Island Hydration)"]
+  content["\`astro sync\`: content collections -> data store\ndigest-keyed, ข้าม entry ที่ไม่เปลี่ยน"] --> js
+  req["Request ที่เข้ามา"] --> adapter["adapter entry (เช่น \`@astrojs/node\`)"]
+  adapter --> mw["middleware \`sequence()\`"]
+  mw --> route["route matching: static > dynamic > rest\n(Request Pipeline)"]
+  route --> js
+  js --> resp["Response"]
+  build["\`astro build\`: Vite 8 + Rolldown\nprerender pass -> client bundle\n(Build Pipeline)"] --> js`;
+
+## Mental Model
+
+อ่าน Astro ที่ไม่คุ้นเคยได้ดี คือรันเครื่องเล็ก ๆ ในหัวขณะที่ตาเห็นแค่ไฟล์: *สิ่งนี้ compile เป็นอะไร, มัน ship JavaScript ไหม และถ้า ship JavaScript นั้นรันเมื่อไหร่เทียบกับทุกอย่างบนหน้าและใน request* ห้าบทเรียนในนี้คือคำถามนั้นเป๊ะ ๆ ตอน compile time (Compiler Output), ตอน hydration time (Island Hydration), ตอน sync/build time สำหรับ content (Content Layer Internals), ต่อ request (Request Pipeline) และสำหรับทั้งไซต์ (Build Pipeline) ไม่มีอะไรในนี้แปลกใหม่ — compiled output เป็น JavaScript ธรรมดาที่อ่านได้ และ runtime ก็แค่ไม่กี่ร้อยบรรทัดที่อ่านตรง ๆ ได้ใน `node_modules/astro/dist/`
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"compiler ของ Astro คือ `@astrojs/compiler` ตัว WASM"** พิสูจน์ว่าผิดใน module นี้: compiler จริงของ Astro 7 — ตัวที่ `astro check`/`astro build` รันจริง — คือ `@astrojs/compiler-rs` ซึ่งเป็น native Rust NAPI addon `@astrojs/compiler` (WASM package รุ่นเก่าที่โหลดใน browser ได้) ยังมีอยู่และเป็นตัวที่ `<AstroPlayground>` ในเบราว์เซอร์ของคอร์สนี้ใช้ เพราะ Rust compiler จริงไม่มี browser build — แต่มันไม่ใช่ compiler ที่ gate snippet ของคอร์สนี้เอง
+- **"island hydrate ทันทีที่ directive ของตัวเองทำงาน ไม่เกี่ยวกับอะไรอื่นบนหน้า"** [Island Hydration](/astro/th/astro-internals/island-hydration/) พิสูจน์ตรงข้ามด้วย `astro-island.js` จริงที่ติดตั้งอยู่: island ที่ซ้อนกันซึ่ง parent ยัง server-rendered-only อยู่ (มี attribute `ssr`) จะ defer การ hydrate ของตัวเองจนกว่า parent จะ hydrate จริง
+- **"`astro build` ทุกครั้ง reparse ทุก content entry ใหม่หมด"** [Content Layer Internals](/astro/th/astro-internals/content-layer-internals/) พิสูจน์ ด้วย `glob()` loader จริงที่ไม่ได้แก้ไข และรัน `astro sync` สองครั้งติดกัน ว่า entry ที่ content digest ไม่เปลี่ยนจะไม่ถูก reparse เลย — มีแค่ module/asset import ที่ถูก register ใหม่
+
+## อ่านโค้ดที่ AI เขียน
+
+จุดประสงค์ทั้งหมดของ module นี้คือ section นี้ ห้าครั้ง — บทเรียนละครั้ง เป็นตัวอย่างระดับภาพรวม: snippet ที่ render ถูกต้องครั้งแรกแต่ยังผิดอยู่
+
+<SpotTheBug code={`---
+// src/components/Panel.astro
+import Inner from './Inner.jsx';
+---
+<div class="panel">
+  <Inner client:load />
+</div>
+
+<script>
+  // "runs once the island is interactive"
+  document.querySelector('.panel')?.classList.add('ready');
+</script>
+`}>
+ดูสมเหตุสมผลและ "ทำงาน" ด้วยซ้ำ — class ถูกเพิ่มจริง แต่ comment อ้างผิด: `<script>` ธรรมดาบนหน้ารันตาม order ของ `DOMContentLoaded`/module execution ซึ่งไม่เกี่ยวอะไรเลยกับตอนที่ island ของ `Inner` hydrate เสร็จจริง ๆ [Island Hydration](/astro/th/astro-internals/island-hydration/) พิสูจน์ signal จริง: `astro-island.js` dispatch `CustomEvent` ชื่อ `astro:hydrate` จริงบน island element เอง เฉพาะตอนที่ hydration เสร็จจริงแล้วเท่านั้น (`this.dispatchEvent(new CustomEvent('astro:hydrate'))` ใน source ที่ติดตั้งจริง) วิธีแก้คือ listen event นั้นบน `<astro-island>` element ของ island (หรือ ancestor ที่แน่นอน) แทนที่จะสมมติว่า order ของ script tag แปลว่า hydration order — `document.querySelector('astro-island')?.addEventListener('astro:hydrate', () => { ... })`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ห้ากลไกตัดสินว่าเกิดอะไรขึ้นหลังคุณเขียน Astro code: **compiler** (`transform()` ของ `@astrojs/compiler-rs` แปลง `.astro` เป็น call ธรรมดาไปยัง `astro/runtime/server` — พิสูจน์ตลอด module นี้ด้วย `transform()` output จริง), **island hydration** (`<astro-island>` custom element จริงที่ method `hydrate()` รอ parent ที่ยัง `ssr` อยู่ก่อนจะรัน), **content layer** (data store ที่ key ด้วย digest — `astro sync` ข้าม reparse อะไรก็ตามที่ content hash ไม่เปลี่ยน), **request pipeline** (adapter → middleware `sequence()` → route matching ตาม priority static/dynamic/rest → page/endpoint/action ของคุณ) และ **build pipeline** (Vite 8 + Rolldown: prerender pass แล้วค่อย client bundle ใช้ content-layer cache ซ้ำ) ไม่มีอันไหนแปลกใหม่ — อยู่บน docs.astro.build และใน package `astro` ที่ติดตั้งไว้แล้ว — แต่แทบไม่มี Astro code ที่ AI เขียนคำนึงถึงมัน นี่แหละคือเหตุผลว่าทำไมมันควรอยู่ในหัวตอน review
+</Callout>
+
+export const quizInternalsIndex = [
+  {
+    q: "เป้าหมายหลักของ module นี้คืออะไร?",
+    options: [
+      'สอนให้ reimplement Astro compiler',
+      'ให้คุณตัดสิน โดยอ่าน Astro source ที่ไม่คุ้นเคย ว่ามัน compile เป็นอะไร, JavaScript ของมันรันเมื่อไหร่จริง ๆ และ content layer กับ build ทำอะไรจริง ๆ',
+      'แทนที่ความจำเป็นของ astro check',
+      'ครอบคลุม internal Astro source ทุกไฟล์ทีละบรรทัด',
+    ],
+    answer: 1,
+    explain: 'module นี้ถูก scope ไว้เฉพาะทักษะการอ่านโดยตั้งใจ: ให้ Astro code ของคนอื่น คุณทำนายได้ไหมว่า compiler, runtime, content layer และ build จะทำอะไรจริง ๆ จาก source อย่างเดียว',
+  },
+  {
+    q: 'Astro 7.3.5 ใช้ package ไหนจริง ๆ ในการ compile ไฟล์ `.astro` ตอน `astro check`/`astro build`?',
+    options: [
+      '`@astrojs/compiler` ซึ่งเป็น WASM package',
+      '`@astrojs/compiler-rs` native Rust NAPI addon — พิสูจน์ตรงกับ dependency จริงที่ติดตั้งใน repo นี้',
+      'ไม่มี compiler package แยก Astro parse ไฟล์เอง',
+      'Vite compile ไฟล์ `.astro` ตรง ๆ โดยไม่มี package แยก',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบกับ dependency จริงของ astro@7.3.5 ที่ติดตั้งไว้: มันขึ้นกับ @astrojs/compiler-rs ไม่ใช่ @astrojs/compiler WASM package ยังมีอยู่และเป็นตัวที่ playground ในเบราว์เซอร์ของคอร์สนี้ใช้แทน เพราะ Rust compiler ไม่มี browser build',
+  },
+  {
+    q: '```astro\n<Outer client:load>\n  <Inner client:load />\n</Outer>\n```\nถ้า `Inner` เป็น island ที่ซ้อนอยู่ใน `Outer` astro-island.js source จริงพิสูจน์อะไรเกี่ยวกับ hydration order?',
+    options: [
+      'Inner hydrate เป็นอิสระ เมื่อ directive ของตัวเองทำงาน ไม่เกี่ยวกับ Outer เลย',
+      'hydrate() ของ Inner defer — ผ่านการเช็ค parentSsrIsland จริง — จนกว่า Outer จะ hydrate ก่อนจริง ๆ',
+      'ไม่รองรับ island ที่ซ้อนกันเลย',
+      'Outer hydrate หลัง children ทุกตัวเสมอ แบบไม่มีเงื่อนไข',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ใน Island Hydration ด้วย astro-island.js จริงที่ไม่ได้แก้ไข: child ที่ parent ยังมี attribute ssr อยู่จะ listen event astro:hydrate ของ parent นั้นก่อนจะรัน hydrate() ของตัวเอง',
+  },
+  {
+    q: 'จริงหรือเท็จ: ทุก claim เกี่ยวกับ internals ใน module นี้ ระบุไว้บน docs.astro.build, อ้างจาก astro/@astrojs source ที่ติดตั้งจริงพร้อมชื่อไฟล์และ function หรือพิสูจน์ด้วยการรันจริง (compile, test, curl หรือ build log) ที่แสดง output จริง',
+    options: ['จริง', 'เท็จ — internals บางอย่างต้องเดา', 'มีแค่บทเรียน compiler-output เท่านั้นที่ทำตามกฎนี้', 'จริงเฉพาะบทเรียน request-pipeline'],
+    answer: 0,
+    explain: 'นี่คือกฎการอ้างอิงที่ระบุไว้ชัดเจนใน intro ของ module — ไม่มีชื่อ field, hash หรือตัวเลขที่คิดขึ้นเองในห้าบทเรียนนี้เลย',
+  },
+  {
+    q: 'บทเรียนไหนอธิบายว่า astro sync เขียนอะไรลงดิสก์จริง ๆ และ content loader รันการ parse ใหม่เมื่อไหร่?',
+    options: ['Compiler Output', 'Island Hydration', 'Content Layer Internals', 'Build Pipeline'],
+    answer: 2,
+    explain: 'Content Layer Internals พิสูจน์ — ด้วย glob() loader จริงที่รันสองครั้งติดกัน — ว่า digest ของ entry ทำให้มันถูกข้ามหรือ reparse ใหม่เมื่อไหร่กันแน่',
+  },
+];
+
+<Quiz client:visible id="astro-internals/index" questions={quizInternalsIndex} />
+
+<ProgressTracker client:visible id="astro-internals/index" />

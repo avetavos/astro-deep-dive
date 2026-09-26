@@ -1,0 +1,280 @@
+---
+title: 'Build Pipeline'
+description: 'What astro build actually does, in order — Vite 8 + Rolldown, the prerender pass, then the client bundle — proven with real build logs and real dist/ trees, plus build.concurrency, --force, inlineStylesheets, and why the content layer makes an unchanged second build cheaper, not just faster.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+Every earlier module used `astro build` as a black box: run it, get a `dist/` folder. This lesson opens the box — what actually happens, in what order, backed by real log output and real `dist/` trees from this exact repo's installed astro@7.3.5, not a remembered diagram.
+
+## The real order, from a real build log
+
+Running `astro build` against this course's own probe project (`@astrojs/node`, `standalone` mode) produces this real, only-lightly-trimmed log:
+
+```text
+$ npx astro build
+[content] Syncing content
+[content] Synced content
+[types] Generated 237ms
+[build] output: "static"
+[build] mode: "server"
+[build] adapter: @astrojs/node
+[build] Collecting build info...
+[build] ✓ Completed in 261ms.
+[build] Building server entrypoints...
+[vite] ✓ built in 103ms
+[vite] ✓ built in 58ms
+[vite] ✓ built in 12ms
+
+ prerendering static routes 
+  ├─ /index.html (+4ms)
+[build] ✓ Completed in 12ms.
+
+[build] Rearranging server assets...
+[build] ✓ Completed in 201ms.
+[build] Server built in 464ms
+[build] Complete!
+```
+
+In order, what each line is actually doing (`astro/dist/core/build/index.js`'s `build()`, which calls into `astro/dist/core/build/static-build.js`):
+
+1. **`astro sync`** runs first, unconditionally — every loader's `load()` runs (see [Content Layer Internals](/astro/en/astro-internals/content-layer-internals/)), and `.astro/`'s generated types are written before a single page renders.
+2. **`Collecting build info...`** — `collectPagesData()` walks the routes manifest and figures out which pages are `prerender: true` vs. on-demand, before any Vite build starts.
+3. **`Building server entrypoints...`** — this is Vite (8.3.1 in this repo, with `rolldown@~1.2.9` as a direct dependency — the bundler Vite 8 uses in place of Rollup) building the SSR bundle: every page/component compiled to JavaScript, but not yet rendered to HTML.
+4. **`prerendering static routes`** — pages marked `prerender: true` (the default under `output: 'static'`, or explicitly per-page under a server output) are actually *rendered*, here — this is where your page's own top-level code (including any `console.log` in its frontmatter) really runs, once, at build time.
+5. **`Rearranging server assets...`** — the built output is moved into its final `dist/` shape (`dist/client/` + `dist/server/` for an adapter build).
+
+## Real `dist/` trees: static output vs. an adapter build
+
+The exact same source, built two different ways, produces genuinely different `dist/` shapes. With `output: 'static'` and no adapter (this course's own site):
+
+```text
+dist/
+├── 404.html
+├── _astro/
+│   ├── Quiz.DfRUMXlD.js
+│   ├── ProgressTracker.Bz4GQ3Zm.js
+│   ├── client.E2o2D-C-.js
+│   ├── common.DRolbLKG.css
+│   └── ...
+├── en/
+│   ├── index.html
+│   ├── islands/
+│   └── ...
+└── th/
+```
+
+With `@astrojs/node` in `standalone` mode (this lesson's probe project):
+
+```text
+dist/
+├── client/
+│   ├── _astro/
+│   ├── favicon.ico
+│   └── index.html
+└── server/
+    ├── entry.mjs
+    ├── virtual_astro_middleware.mjs
+    └── chunks/
+```
+
+The static build's output *is* the site — every route is a real `.html` file, ready to serve from any static host. An adapter build splits into `dist/client/` (exactly what a static build would have produced — the browser-facing assets, images, and any prerendered pages) and `dist/server/entry.mjs` (a real Node module — `handler`/`startServer` exports, proven directly in [Request Pipeline](/astro/en/astro-internals/request-pipeline/)) that has to actually run to serve any **on-demand** route.
+
+## Chunk naming: `_astro/<name>.<hash>.<ext>`
+
+Every chunk in `_astro/` gets its content hash baked into the filename (`Quiz.DfRUMXlD.js`, `common.DRolbLKG.css`) — this is Vite/Rolldown's own content-hashing, the same mechanism that lets a static host cache these files forever (`Cache-Control: immutable`) without ever serving stale JavaScript after a deploy: the URL itself changes the moment the content does.
+
+## `build.inlineStylesheets`: `'auto'` really means "under 4096 bytes"
+
+The real config default, from the installed schema (`astro/dist/core/config/schemas/defaults.js`):
+
+```js
+build: {
+  // ...
+  inlineStylesheets: "auto",
+  concurrency: 1
+}
+```
+
+`'auto'`'s actual threshold is not a made-up round number — it's Vite's own `assetsInlineLimit`, checked by the real, installed inlining plugin:
+
+```js
+// astro/dist/core/build/plugins/util.js (trimmed)
+function shouldInlineAsset(assetContent, assetPath, assetsInlineLimit) {
+  if (typeof assetsInlineLimit === "function") {
+    const result = assetsInlineLimit(assetPath, Buffer.from(assetContent));
+    if (result != null) return result;
+  }
+  return Buffer.byteLength(assetContent) < 4096;
+}
+```
+
+```js
+// astro/dist/core/build/plugins/plugin-css.js (trimmed)
+const toBeInlined = inlineConfig === "always" ? true
+  : inlineConfig === "never" ? false
+  : shouldInlineAsset(stylesheet.source, stylesheet.fileName, assetsInlineLimit);
+```
+
+So `'auto'` (the default) inlines a page's CSS directly into its HTML (as a `<style>` tag, saving a render-blocking request) when that stylesheet is under **4096 bytes**, and emits a real, separate, cacheable `_astro/*.css` file otherwise. `'always'`/`'never'` skip the size check entirely. This is a real, provable threshold — not "small stylesheets get inlined, roughly."
+
+## `build.concurrency`: sequential by default, pages and images treated differently
+
+`build.concurrency` (default `1`, per the schema above) controls how many **pages** are rendered concurrently during the prerender pass — proven directly in the real generator (`astro/dist/core/build/generate.js`):
+
+```js
+// astro/dist/core/build/generate.js (trimmed)
+if (config.build.concurrency > 1) {
+  const limit = PLimit(config.build.concurrency);
+  // ...paths.map(({ pathname, route, cacheKey }) => limit(() => generatePage(...)))
+}
+```
+
+At the default of `1`, pages render one at a time — deliberately, since two pages rendering concurrently could race on shared, mutable build state (a global CSS-collection map, for instance). **Image** generation is a genuinely separate concurrency knob, always concurrent regardless of `build.concurrency`, sized to the real CPU count:
+
+```js
+// astro/dist/core/build/generate.js (trimmed)
+const cpuCount = os.availableParallelism();
+const queue = new PQueue({ concurrency: Math.max(cpuCount, 1) });
+```
+
+Raising `build.concurrency` speeds up a build with many pages that don't share mutable state across renders; it does nothing at all for image optimization, which was already running as concurrently as your machine allows.
+
+## `--force`: clears the content-layer cache specifically
+
+[Content Layer Internals](/astro/en/astro-internals/content-layer-internals/) proved that an unchanged content entry is skipped, not reparsed, on a normal `astro sync`/`astro build`. `--force` exists specifically to disable that: it deletes the on-disk data store before syncing, so every loader treats every entry as new. The real, installed source (`astro/dist/core/sync/index.js`):
+
+```js
+// astro/dist/core/sync/index.js (trimmed)
+async function clearContentLayerCache({ settings, logger, fs, isDev }) {
+  // ...
+  await fs.promises.rm(dataStore, { force: true, recursive: true });
+}
+// called when the CLI's --force flag is set
+```
+
+This is a targeted invalidation, not a full clean: `--force` doesn't touch Vite's own build cache or `node_modules` at all — it specifically forces the content layer to re-load everything, which is exactly the tool to reach for if a loader's own logic changed (not the content it reads) and old, cached entries need to be recomputed even though their source content digest hasn't changed.
+
+## The content layer makes an unchanged second build cheaper — not (only) faster
+
+A wall-clock "second build is faster" claim is noisy in practice (caches, disk, OS scheduling all vary run to run) — the real, provable claim is narrower and stronger: [Content Layer Internals](/astro/en/astro-internals/content-layer-internals/)'s digest proof (a real `glob()` loader, instrumented with one log line, run three times) showed directly that an unchanged entry's `parseData`/`renderMarkdown` never re-run on a second `sync` — and `astro build` always calls `sync` first. A build with a large, mostly-unchanged content collection genuinely skips real parsing/rendering work on every build after the first; whether that nets out to a *faster wall-clock build* depends on how much of the total build time that parsing work was in the first place, next to Vite's own bundling and the page-render pass above.
+
+<Mermaid title="astro build, in order" code={buildDiagram} />
+
+export const buildDiagram = `flowchart TD
+  sync["astro sync\n(every loader's load() — Content Layer Internals)"] --> info["Collecting build info...\ncollectPagesData(): prerender vs on-demand"]
+  info --> vite["Building server entrypoints...\nVite 8 + Rolldown: SSR bundle"]
+  vite --> prerender["prerendering static routes\npages actually render to HTML here"]
+  prerender --> rearrange["Rearranging server assets...\ndist/client/ + dist/server/ (adapter)\nor a flat dist/ (static)"]
+  rearrange --> done["Complete!"]
+  force["--force flag"] -.clears data store before.-> sync
+  concurrency["build.concurrency (default 1)"] -.-> prerender
+  cpu["os.availableParallelism()"] -.always concurrent.-> images["image optimization queue"]`;
+
+## Reading AI-generated code
+
+- Does a comment claim `build.concurrency` speeds up image optimization? Proven above: image generation uses its own, always-concurrent queue sized to the CPU count — `build.concurrency` only affects page rendering.
+- Does troubleshooting advice for "stale content after editing a loader's transform logic" suggest deleting `node_modules` or `dist`? The targeted, real tool is `--force` (proven above to specifically clear the content-layer's data store) — deleting `node_modules` throws away Vite's own cache too, for no benefit to the actual problem.
+- Does a claim about `inlineStylesheets: 'auto'` describe it as "small stylesheets get inlined" without a number? Proven above: the real threshold is a specific, checkable one — under 4096 bytes (Vite's `assetsInlineLimit`), not a fuzzy heuristic.
+- Does an explanation assume `dist/` always looks like a flat folder of HTML files? Proven above: an adapter build genuinely splits into `dist/client/` and `dist/server/entry.mjs` — a real Node module that must run, not something you can serve as static files alone.
+
+<SpotTheBug code={`# CI script — "makes builds faster by warming everything from scratch"
+rm -rf node_modules/.astro dist node_modules
+npm ci
+npx astro build --force
+`}>
+This does work, but it throws away far more than it needs to, and does the *opposite* of what the comment claims: deleting `node_modules` (and reinstalling with `npm ci`) discards Vite's own dependency pre-bundling cache along with everything else, and `--force` on top of a fully fresh install is a no-op for freshness (there was no content-layer cache to clear — `node_modules/.astro/data-store.json`, proven in Content Layer Internals to live there, was just deleted along with the rest of `node_modules`) but still adds its own overhead: forcing every loader to reparse every entry from scratch, on a build that was already going to do that anyway. If the goal is "guarantee a clean content-layer state," `--force` alone (without touching `node_modules`/`dist` at all) is the real, targeted tool — proven above to only clear the data store, leaving Vite's caches and installed dependencies untouched for genuinely faster subsequent installs and builds.
+</SpotTheBug>
+
+## Mental Model
+
+`astro build` is five real phases in a fixed order: sync content (loaders, digest-checked), collect routing info (prerender vs. on-demand, decided before any rendering), build the SSR bundle with Vite/Rolldown, actually render prerendered pages to HTML, then rearrange the output into its final shape. Every one of the "extra" build options in this lesson (`concurrency`, `--force`, `inlineStylesheets`) is a real, specific knob on one of those five phases — not a vague global "make the build behave differently" switch.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `output: 'static'` (no adapter) | `dist/` is the whole site — serve from any static host, no runtime | Any page needing true per-request behavior must be a separate concern (an island, an edge function elsewhere) |
+| An adapter (`@astrojs/node`, etc.) | On-demand routes, actions, server islands all work for real | `dist/server/entry.mjs` must actually run somewhere — `dist/` alone isn't deployable to a plain static host |
+| `build.concurrency > 1` | Faster prerendering on a machine with many cores, for pages that don't share mutable render-time state | Real risk of races in code that assumes single-threaded, one-page-at-a-time rendering (the actual reason the default is `1`) |
+| `inlineStylesheets: 'auto'` (vs. `'always'`/`'never'`) | Small stylesheets skip a request; large ones stay cacheable and don't bloat every page's HTML | The 4096-byte line is a real cliff — a stylesheet that grows past it changes from "in every page's HTML" to "a separate cached request," a meaningfully different loading characteristic for a small content change |
+| `--force` | Targeted content-layer cache invalidation, without a full clean | Reparsing *everything* is real, avoidable work if only one loader (or one entry) actually needed it |
+
+## Common Misconceptions
+
+- **"`astro build` renders pages, then figures out routing."** Proven false above by the real log order: `Collecting build info...` (routing/prerender decisions) happens *before* `Building server entrypoints...` and the actual prerender pass.
+- **"`build.concurrency` makes the whole build (images included) more parallel."** Proven false above: image optimization already runs on its own, CPU-count-sized queue regardless of this setting; `build.concurrency` only affects page rendering, and defaults to fully sequential.
+- **"A fresh `dist/` folder is always just static files you can serve directly."** Proven false above: an adapter build's `dist/server/entry.mjs` is a real Node module that must run — only `dist/client/` is static, servable assets.
+- **"`inlineStylesheets: 'auto'` is a fuzzy heuristic, not a real number."** Proven false above: it's Vite's own `assetsInlineLimit`, checked against a specific, real 4096-byte threshold in the installed source.
+
+<Callout title="The one-line takeaway">
+`astro build` runs five real phases in a fixed order — `astro sync` (loaders, digest-checked, proven in Content Layer Internals), collecting routing info (prerender vs. on-demand, decided up front), building the SSR bundle with Vite 8 + Rolldown, actually rendering prerendered pages to HTML, then rearranging output into `dist/client/` + `dist/server/entry.mjs` (an adapter build) or a flat, fully static `dist/` (no adapter) — proven above with real logs and real `dist/` trees for both shapes. `build.concurrency` (default `1`) only affects page rendering, sequentially by default; image optimization always runs on its own CPU-sized queue regardless. `inlineStylesheets: 'auto'` inlines CSS under a real 4096-byte threshold (Vite's `assetsInlineLimit`), not a vague heuristic. `--force` clears specifically the content-layer's data store — the targeted fix for stale loader output, not a reason to delete `node_modules`.
+</Callout>
+
+export const quizBuildPipeline = [
+  {
+    q: '```text\n[build] Collecting build info...\n[build] Building server entrypoints...\n\n prerendering static routes \n```\nWhat does this real, ordered build log prove about when Astro decides prerender vs. on-demand for each route?',
+    options: [
+      'It decides this after rendering every page, as a cleanup pass',
+      'Routing/prerender info is collected BEFORE the Vite SSR build and the actual prerender pass — proven directly by the log order',
+      'It is decided entirely by the adapter, not by astro build itself',
+      'Every route is always prerendered; on-demand is a dev-only concept',
+    ],
+    answer: 1,
+    explain: 'Proven directly by the real build log in this lesson: "Collecting build info..." (which routes are prerender vs on-demand) completes before "Building server entrypoints..." and the actual prerendering step.',
+  },
+  {
+    q: '```js\nif (config.build.concurrency > 1) {\n  const limit = PLimit(config.build.concurrency);\n  // ...\n}\n// separately:\nconst queue = new PQueue({ concurrency: Math.max(os.availableParallelism(), 1) });\n```\nWhat does this real source from astro/dist/core/build/generate.js prove about build.concurrency?',
+    options: [
+      'It controls both page rendering and image optimization together',
+      'It only controls page-rendering concurrency (default 1, fully sequential); image optimization always runs on its own, separate, CPU-sized queue regardless of this setting',
+      'It has no effect at all in Astro 7',
+      'It controls how many astro build processes can run at once',
+    ],
+    answer: 1,
+    explain: 'Proven directly from the real, installed source: the PLimit-based concurrency only wraps page generation, gated on build.concurrency; the image queue is a separate PQueue sized to os.availableParallelism(), unconditional.',
+  },
+  {
+    q: '```js\nreturn Buffer.byteLength(assetContent) < 4096;\n```\nWhat does this real function (behind build.inlineStylesheets: "auto") prove about the actual inlining threshold?',
+    options: [
+      'It is a vague heuristic based on how "small" the file looks',
+      'It is a specific, real byte threshold (4096 bytes, Vite\'s own assetsInlineLimit) — a stylesheet under it gets inlined into the page HTML, one at or over it becomes a separate cacheable file',
+      'It only applies to JavaScript, not CSS',
+      'It is always exactly 1000 bytes, regardless of Vite config',
+    ],
+    answer: 1,
+    explain: 'Proven directly from astro/dist/core/build/plugins/util.js\'s real shouldInlineAsset function: the "auto" case checks Buffer.byteLength(...) < 4096 (or a custom assetsInlineLimit function if configured).',
+  },
+  {
+    q: 'What does --force actually clear, according to the real astro/dist/core/sync/index.js source?',
+    options: [
+      'Every cache in the project, including node_modules and Vite\'s own build cache',
+      'Specifically the content layer\'s on-disk data store (node_modules/.astro/data-store.json), forcing every loader to treat every entry as new',
+      'Only the browser\'s HTTP cache for the deployed site',
+      'It has no real effect — it is a no-op flag kept for backwards compatibility',
+    ],
+    answer: 1,
+    explain: 'Proven directly from clearContentLayerCache in the real, installed astro/dist/core/sync/index.js: it removes the data store directory specifically, when the CLI\'s --force flag is set — nothing else.',
+  },
+  {
+    q: 'Two builds of the same project, back to back, with a large but completely unchanged content collection. What is the real, provable difference in loader work between them?',
+    options: [
+      'Identical work both times — content is always fully reparsed on every build',
+      'The second build\'s loader(s) skip parseData/renderMarkdown entirely for every unchanged entry (proven with a real, instrumented glob() loader run in Content Layer Internals) — real, avoidable work is genuinely skipped',
+      'The second build skips content entirely and serves stale data',
+      'Only images are cached between builds; content is always reparsed',
+    ],
+    answer: 1,
+    explain: 'Proven in Content Layer Internals and referenced here: the real glob() loader\'s digest check causes parseData/renderMarkdown to be skipped for any entry whose content hasn\'t changed since the last sync — astro build always calls sync first, so this applies on every build.',
+  },
+];
+
+<Quiz client:visible id="astro-internals/build-pipeline" questions={quizBuildPipeline} />
+
+<ProgressTracker client:visible id="astro-internals/build-pipeline" />

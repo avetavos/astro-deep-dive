@@ -1,0 +1,444 @@
+---
+title: 'Compiler Output'
+description: 'What a .astro file with props, a scoped style, an expression, and a slot actually compiles to in Astro 7.3.5 — proven with real transform() calls against the installed @astrojs/compiler-rs (native Rust), not paraphrased — plus $$addAttribute, set:html, and hydration directive metadata.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
+
+## The compiler's job, in one sentence
+
+Astro's compiler turns a `.astro` file into a plain JavaScript module that calls functions exported from `astro/runtime/server/index.js`. There is no framework runtime "interpreting" your component at render time — the interpretation already happened, once, in the compiler. The package that actually does this in Astro 7 is **`@astrojs/compiler-rs`**, a native Rust NAPI addon (`transform()`/`parse()`) — not the older, purely-WASM `@astrojs/compiler` package some tooling (and this course's own in-browser playground below) still uses. Every claim in this lesson was produced by running `transform()` from the exact package this repo has installed (`@astrojs/compiler-rs@0.5.1`, resolved from `tools/probe/node_modules`) — this is the same compiler `astro check` and `astro build` actually run against your code.
+
+## A component with props, a scoped style, an expression, and a slot
+
+```astro
+---
+// src/components/Card.astro
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+```
+
+Running the installed compiler's `transform()` directly against that exact source (`filename: 'src/components/Card.astro'`):
+
+```ts
+// src/lib/compile-card.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+`;
+
+test('transform(): props + scoped style + expression + slot', () => {
+  const result = transform(source, { filename: 'src/components/Card.astro' });
+
+  expect(result.code).toContain('$$createComponent');
+  expect(result.code).toContain('$$maybeRenderHead');
+  expect(result.code).toContain('$$renderSlot');
+  expect(result.css[0]).toMatch(/\.card:where\(\.astro-[a-z0-9]+\)/);
+  expect(result.code).toMatch(/class="card astro-[a-z0-9]+"/);
+});
+```
+
+```text
+✓ transform(): props + scoped style + expression + slot
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+The full, real compiled output for that source:
+
+```js
+import { render as $$render, createAstro as $$createAstro, createComponent as $$createComponent, maybeRenderHead as $$maybeRenderHead, renderSlot as $$renderSlot } from "astro/runtime/server/index.js";
+import "src/components/Card.astro?astro&type=style&index=0&lang.css";
+const $$Astro = $$createAstro("https://astro.build");
+const Astro = $$Astro;
+const $$Card = $$createComponent(($$result, $$props, $$slots) => {
+	const Astro = $$result.createAstro($$props, $$slots);
+	Astro.self = $$Card;
+	const { name } = Astro.props;
+	return $$render`${$$maybeRenderHead($$result)}<div class="card astro-3dcq3mxs">
+  <h2 class="astro-3dcq3mxs">Hello ${name}</h2>
+  ${$$renderSlot($$result, $$slots["default"])}
+</div>`;
+}, "src/components/Card.astro", undefined);
+export default $$Card;
+```
+
+Every piece does real, specific work:
+
+- **`$$createComponent(renderFn, filename, moduleId)`** — wraps your render function into the actual component Astro's runtime calls. `$$Astro.self` lets the component reference itself (used for recursive components).
+- **`$$createAstro(site)`** — builds the shared `$$Astro` global your frontmatter's bare `Astro` identifier is bound to, before your own `const { name } = Astro.props` line runs.
+- **`$$maybeRenderHead($$result)`** — emits `<head>` content lazily, the first time *any* element renders — proven by its position: it's inlined right before the first real markup, not at the top of the function.
+- **`$$render` / a tagged template** — the whole body is one tagged template literal; every `${...}` interpolation is either a plain value (escaped automatically by the runtime) or another renderer call (`$$renderSlot`, `$$renderComponent` for child components).
+- **The scoped-style hash (`astro-3dcq3mxs`)** — appended as a real CSS class on every element the `<style>` block's selectors reach, and the same hash appears in the emitted CSS as a `:where(.astro-3dcq3mxs)` wrapper (`:where` keeps scoping from adding to the selector's specificity — proven above: `.card:where(.astro-3dcq3mxs) { color: red; }`).
+- **`$$renderSlot($$result, $$slots["default"])`** — a `<slot />` becomes a call that looks up the named slot (`"default"` here) on `$$slots`, passed in by whatever renders `<Card>`.
+
+## The scoped-style hash is derived from the filename — proof by renaming
+
+Compiling the *exact same source string* under two different `filename`s produces two different hashes:
+
+```ts
+// src/lib/scoped-hash-rename.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+`;
+
+test('renaming the file changes the scoped-style hash, for identical source', () => {
+  const original = transform(source, { filename: 'src/components/Card.astro' });
+  const renamed = transform(source, { filename: 'src/components/RenamedCard.astro' });
+
+  const hashOf = (code: string) => code.match(/astro-([a-z0-9]+)/)?.[1];
+
+  expect(hashOf(original.code)).toBe('3dcq3mxs');
+  expect(hashOf(renamed.code)).toBe('izcegd4j');
+  expect(hashOf(original.code)).not.toBe(hashOf(renamed.code));
+});
+```
+
+```text
+✓ renaming the file changes the scoped-style hash, for identical source
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+Real, captured values from this exact run: `src/components/Card.astro` → `astro-3dcq3mxs`; the identical source saved as `RenamedCard.astro` → `astro-izcegd4j`. This is real, useful information when reading a diff: a scoped-style hash changing in a PR that only renames a file (no content change) is expected, not a sign of a stray edit — and copy-pasting a component's compiled output into a different file without recompiling would carry the *wrong* hash.
+
+## Dynamic attributes: `$$addAttribute`, and `set:html` vs. a plain expression
+
+```astro
+---
+// src/components/AttrCard.astro
+const { name, htmlContent } = Astro.props;
+const id = `card-${name}`;
+---
+<div id={id} class="card">
+  <p set:html={htmlContent} />
+  <p>{htmlContent}</p>
+</div>
+```
+
+```ts
+// src/lib/compile-attr.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+const source = `---
+const { name, htmlContent } = Astro.props;
+const id = \`card-\${name}\`;
+---
+<div id={id} class="card">
+  <p set:html={htmlContent} />
+  <p>{htmlContent}</p>
+</div>
+`;
+
+test('transform(): a dynamic attribute becomes $$addAttribute; set:html becomes $$unescapeHTML, a plain expression does not', () => {
+  const result = transform(source, { filename: 'src/components/AttrCard.astro' });
+
+  expect(result.code).toContain('$$addAttribute(id, "id")');
+
+  // set:html's paragraph goes through $$unescapeHTML exactly once...
+  const unescapedCalls = result.code.match(/\$\$unescapeHTML\(htmlContent\)/g) ?? [];
+  expect(unescapedCalls).toHaveLength(1);
+
+  // ...while the plain {htmlContent} expression on the next line stays a bare,
+  // auto-escaped interpolation — no $$unescapeHTML wrapping it at all.
+  expect(result.code).toContain('<p>${htmlContent}</p>');
+});
+```
+
+```text
+✓ transform(): a dynamic attribute becomes $$addAttribute; set:html becomes $$unescapeHTML, a plain expression does not
+
+Test Files  1 passed (1)
+     Tests  1 passed (1)
+```
+
+The real, full compiled output:
+
+```js
+import { render as $$render, createAstro as $$createAstro, createComponent as $$createComponent, maybeRenderHead as $$maybeRenderHead, unescapeHTML as $$unescapeHTML, addAttribute as $$addAttribute } from "astro/runtime/server/index.js";
+const $$Astro = $$createAstro("https://astro.build");
+const Astro = $$Astro;
+const $$AttrCard = $$createComponent(($$result, $$props, $$slots) => {
+	const Astro = $$result.createAstro($$props, $$slots);
+	Astro.self = $$AttrCard;
+	const { name, htmlContent } = Astro.props;
+	const id = `card-${name}`;
+	return $$render`${$$maybeRenderHead($$result)}<div${$$addAttribute(id, "id")} class="card">
+  <p>${$$unescapeHTML(htmlContent)}</p>
+  <p>${htmlContent}</p>
+</div>`;
+}, "src/components/AttrCard.astro", undefined);
+export default $$AttrCard;
+```
+
+Two facts this proves directly:
+
+- **`id={id}`** — any attribute whose value is an expression (not a string literal) compiles to `$$addAttribute(value, "name")` — a runtime call, not string interpolation into the tag, because it also has to handle booleans (`disabled={false}` must *omit* the attribute, not render `disabled="false"`) and `class:list`-style objects.
+- **`set:html={htmlContent}`** compiles to `$$unescapeHTML(htmlContent)` — the string is inserted **as raw HTML, unescaped**. The very next line, a plain `{htmlContent}` expression with no directive, interpolates the *same* value with no `$$unescapeHTML` call at all — the runtime's tagged-template renderer HTML-escapes plain interpolations automatically. This is the entire difference between "renders as HTML" and "renders as text" in Astro: one directive, one specific compiled call.
+
+## Hydration directive metadata: `client:load` vs. `client:only`
+
+```tsx
+// src/components/Counter.tsx
+import { useState } from 'preact/hooks';
+
+export default function Counter({ count }: { count: number }) {
+  const [n, setN] = useState(count);
+  return <button onClick={() => setN(n + 1)}>Count: {n}</button>;
+}
+```
+
+```astro
+---
+// src/pages/island-demo.astro
+import Counter from '../components/Counter.tsx';
+---
+<Counter client:load count={5} />
+```
+
+```ts
+// src/lib/compile-hydration.test.ts
+import { transform } from '@astrojs/compiler-rs';
+import { expect, test } from 'vitest';
+
+test('transform(): client:load renders the component AND emits hydration metadata', () => {
+  const source = `---
+import Counter from '../components/InternalsCounter.jsx';
+---
+<Counter client:load count={5} />
+`;
+  const result = transform(source, { filename: 'src/pages/island-demo.astro', resolvePath: (s) => s });
+
+  expect(result.code).toContain('"client:load": true');
+  expect(result.code).toContain('"client:component-hydration": "load"');
+  expect(result.code).toContain('"client:component-path": "../components/InternalsCounter.jsx"');
+  expect(result.code).toContain('"client:component-export": "default"');
+  // The component itself IS passed to $$renderComponent (server-rendered, then hydrated):
+  expect(result.code).toMatch(/\$\$renderComponent\(\$\$result, "Counter", Counter, \{/);
+  expect(result.hydratedComponents).toHaveLength(1);
+  expect(result.hydratedComponents[0].specifier).toBe('../components/InternalsCounter.jsx');
+});
+
+test('transform(): client:only passes null instead of the component — no server render at all', () => {
+  const source = `---
+import Counter from '../components/InternalsCounter.jsx';
+---
+<Counter client:only="preact" count={5} />
+`;
+  const result = transform(source, { filename: 'src/pages/island-only-demo.astro', resolvePath: (s) => s });
+
+  expect(result.code).toContain('"client:only": "preact"');
+  expect(result.code).toContain('"client:component-hydration": "only"');
+  // The THIRD argument to $$renderComponent (the component reference) is null:
+  expect(result.code).toMatch(/\$\$renderComponent\(\$\$result, "Counter", null, \{/);
+  expect(result.clientOnlyComponents).toHaveLength(1);
+});
+```
+
+```text
+✓ transform(): client:load renders the component AND emits hydration metadata
+✓ transform(): client:only passes null instead of the component — no server render at all
+
+Test Files  1 passed (1)
+     Tests  2 passed (2)
+```
+
+The real compiled output for `client:load`:
+
+```js
+import { render as $$render, createComponent as $$createComponent, renderComponent as $$renderComponent } from "astro/runtime/server/index.js";
+import Counter from "../components/InternalsCounter.jsx";
+const $$IslandDemo = $$createComponent(($$result, $$props, $$slots) => {
+	return $$render`${$$renderComponent($$result, "Counter", Counter, {
+		"client:load": true,
+		"count": 5,
+		"client:component-hydration": "load",
+		"client:component-path": "../components/InternalsCounter.jsx",
+		"client:component-export": "default"
+	})}`;
+}, "src/pages/island-demo.astro", undefined);
+export default $$IslandDemo;
+```
+
+...and for `client:only="preact"` — note the **third argument to `$$renderComponent` is `null`**, not the imported `Counter`:
+
+```js
+$$render`${$$renderComponent($$result, "Counter", null, {
+	"client:only": "preact",
+	"count": 5,
+	"client:component-hydration": "only",
+	"client:component-path": "../components/InternalsCounter.jsx",
+	"client:component-export": "default"
+})}`;
+```
+
+That `null` is the compiled proof behind "`client:only` skips server rendering entirely" (see [Client Directives](/astro/en/islands/client-directives/)): the runtime's `renderComponent` function never has an actual component reference to call on the server for a `client:only` island — only `client:component-path`, which the browser will `import()` later. [Island Hydration](/astro/en/astro-internals/island-hydration/) picks up from here, at the exact moment this metadata becomes the real `<astro-island>` element's attributes in the rendered HTML.
+
+## Try it yourself
+
+<AstroPlayground code={sampleCode} id="internals-compiler-output" />
+
+export const sampleCode = `---
+interface Props {
+  name: string;
+}
+const { name } = Astro.props;
+---
+<style>
+  .card { color: red; }
+</style>
+<div class="card">
+  <h2>Hello {name}</h2>
+  <slot />
+</div>
+`;
+
+This playground compiles the same source shown above — but through `@astrojs/compiler` (the classic, browser-loadable WASM package), not `@astrojs/compiler-rs` (the native Rust compiler this lesson's `transform()` tests actually ran against). The two agree in *shape* — both produce a `$$createComponent`/`$$render` body with a scoped `astro-*` class — but are genuinely different packages, and the exact runtime import path and internal helper names can differ between them. Trust the tested `transform()` output above as what `astro check`/`astro build` really run; use this playground to explore, not as a second source of truth.
+
+## Reading AI-generated code
+
+- Does an explanation claim Astro "interprets" `.astro` files at request time, the way a template engine does? There is no interpretation step at runtime — `transform()` already produced plain JavaScript calls, proven throughout this lesson; a request just calls the resulting function.
+- Does a diff show a scoped-style hash changing with no visible reason? Proven above: the hash is a function of the file's path, not (only) its content — a rename, a move, or copy-pasting a component into a new file location all change it, and that's expected, not a sign of drift.
+- Is `set:html` used on a value that isn't already trusted, sanitized HTML? Proven above: it compiles to `$$unescapeHTML`, which skips the runtime's automatic escaping entirely — the exact same mechanism a plain `{expression}` uses to stay safe.
+- Does a comment assume a `client:only` component is "rendered on the server, then hydrated"? Proven above: the compiled call passes `null` where the component reference would be — there is no server render to speak of for a `client:only` island.
+
+<SpotTheBug code={`---
+// src/components/Notice.astro
+const { userComment } = Astro.props;
+---
+<!-- "using set:html so line breaks in the user's comment render properly" -->
+<p set:html={userComment} />`}>
+The comment's intent (preserve line breaks) doesn't require `set:html` at all, and using it here is a real, serious bug: `set:html` compiles to `$$unescapeHTML(userComment)`, proven above to skip the runtime's automatic HTML escaping entirely. If `userComment` is untrusted user input, this is a stored XSS vulnerability — any `<script>` or `onerror` handler a visitor types into that field is inserted into the page verbatim and executes for every other viewer. The fix is to keep the plain expression (`<p>{userComment}</p>`, which the compiled output above proves stays escaped) and handle line breaks with CSS (`white-space: pre-wrap`) or by rendering each line inside its own element — never by turning off escaping for untrusted text.
+</SpotTheBug>
+
+## Mental Model
+
+The compiler is a one-time translator, not a runtime interpreter: every prop read, every scoped style, every `{expression}`, every directive (`set:html`, `client:load`, `client:only`) becomes a specific, plain JavaScript call against `astro/runtime/server` — decided once, by walking the file, never re-decided at render time. Reading compiled output is reading the actual program that runs; there is no second, hidden layer underneath it.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Native Rust compiler (`@astrojs/compiler-rs`) instead of the WASM one | Faster `astro check`/`astro build`; no WASM instantiation overhead | No browser build exists — a genuinely in-browser Astro playground (this lesson's `<AstroPlayground>` included) has to fall back to the older WASM package, which can disagree in small ways |
+| Filename-derived scoped-style hash | Deterministic without a build-wide counter — two builds of the same file always agree | Renaming or moving a file changes every one of its scoped classes, which shows up as a large-looking diff in generated HTML/CSS for what is otherwise a no-op change |
+| Automatic escaping of plain `{expression}` interpolations | Safe by default — untrusted text can't inject markup unless a directive explicitly opts out | The opt-out (`set:html`) looks like a small, one-word difference from the safe default, which is exactly what makes it easy to reach for by habit |
+| `client:only` passing `null` for the component reference | No wasted server-side render work for a component that can't run there anyway | The page's initial HTML has no fallback content for that slot at all — a slow network means a real empty gap until the client-only bundle loads |
+
+## Common Misconceptions
+
+- **"`.astro` files are interpreted by a runtime, like a template engine reads `.ejs`/`.hbs` files."** Proven false throughout this lesson: `transform()` produces a complete, plain JavaScript module ahead of time. Astro's "runtime" (`astro/runtime/server`) is just the small set of helper functions (`$$createComponent`, `$$render`, `$$addAttribute`, ...) that compiled output calls into — there is no template re-parsing per request.
+- **"A scoped style hash changing between two versions of a file means something about the CSS changed."** Proven false above: renaming a file with byte-identical content and CSS produces a different hash. The hash is path-derived, not content-derived.
+- **"`{expression}` and `set:html={expression}` are the same thing, just different syntax."** Proven false above: one compiles to a plain, auto-escaped interpolation; the other compiles to `$$unescapeHTML`, a specific call that skips escaping entirely. Using the wrong one on untrusted input is a real XSS vector, not a style preference.
+
+<Callout title="The one-line takeaway">
+`transform()` (from the real, installed `@astrojs/compiler-rs`) turns a `.astro` file into a plain JavaScript module: `$$createComponent`/`$$render` wrap the whole thing, `$$maybeRenderHead` emits `<head>` content lazily on first markup, a scoped `<style>` block gets a hash **derived from the file's path** (proven by renaming), every dynamic attribute becomes `$$addAttribute`, `set:html` becomes `$$unescapeHTML` (skips the automatic escaping a plain `{expression}` gets — a real XSS risk on untrusted input), and every hydration directive (`client:load`, `client:only`, ...) becomes metadata (`client:component-hydration`, `client:component-path`, `client:component-export`) passed alongside the component reference to `$$renderComponent` — except `client:only`, which passes `null` for that reference since nothing runs on the server. This is the same compiler `astro check`/`astro build` run against your code; the in-browser playground above uses a different (older, WASM) package for the same shape of output.
+</Callout>
+
+export const quizCompilerOutput = [
+  {
+    q: 'What does the real, installed compiler that `astro check`/`astro build` use turn a `.astro` file into?',
+    options: [
+      'Nothing — Astro interprets the file directly at request time',
+      'A plain JavaScript module that calls functions exported from astro/runtime/server (`$$createComponent`, `$$render`, ...) — proven directly with transform()',
+      'A WebAssembly binary that runs in the browser',
+      'A JSON description of the component, parsed again on every request',
+    ],
+    answer: 1,
+    explain: 'Proven throughout this lesson with real transform() output: the compiled result is ordinary JavaScript that calls into astro/runtime/server — there is no per-request re-interpretation.',
+  },
+  {
+    q: '```js\n.card:where(.astro-3dcq3mxs) { color: red; }\n```\nCompiling the identical source, byte for byte, but saved under a different filename, produces what?',
+    options: [
+      'The exact same hash — hashes are based only on content',
+      'A different hash — proven directly: renaming Card.astro to RenamedCard.astro changed astro-3dcq3mxs to a different value with identical source',
+      'A compiler error',
+      'No hash at all — the class is dropped',
+    ],
+    answer: 1,
+    explain: 'Proven with a real transform() test in this lesson: the scoped-style hash is derived from the file\'s path (filename option), not solely from its content.',
+  },
+  {
+    q: '```astro\n<p set:html={userComment} />\n```\nIf `userComment` is untrusted user input, what does the compiled output prove about this line?',
+    options: [
+      'It is identical in safety to `<p>{userComment}</p>` — both escape automatically',
+      'It compiles to `$$unescapeHTML(userComment)`, which skips the runtime\'s automatic escaping entirely — a real XSS risk',
+      'Astro rejects it at compile time',
+      'It only affects styling, not HTML content',
+    ],
+    answer: 1,
+    explain: 'Proven directly by transform() output and the SpotTheBug above: set:html compiles to a specific call, $$unescapeHTML, that skips the escaping a plain {expression} interpolation gets automatically.',
+  },
+  {
+    q: '```js\n$$renderComponent($$result, "Counter", null, { "client:only": "preact", ... })\n```\nWhat does the `null` third argument prove about `client:only`?',
+    options: [
+      'Counter failed to import',
+      'client:only skips server-side rendering of the component entirely — there is no component reference to render with on the server',
+      'null means the component renders with default props',
+      'This is a compiler bug',
+    ],
+    answer: 1,
+    explain: 'Proven directly above: client:load passes the real imported component as the third argument; client:only passes null instead, since the component never runs on the server at all.',
+  },
+  {
+    q: 'Which package does this course\'s in-browser `<AstroPlayground>` compile with, and why is it different from what `astro check`/`astro build` actually use?',
+    options: [
+      'The same @astrojs/compiler-rs, loaded via WebAssembly',
+      'The older @astrojs/compiler (classic WASM package) — because @astrojs/compiler-rs is a native Rust NAPI addon with no browser build',
+      'It sends the code to a server to compile',
+      'It uses the TypeScript compiler instead',
+    ],
+    answer: 1,
+    explain: 'Stated directly in this lesson and in astro-playground-runtime.ts\'s own doc comment: @astrojs/compiler-rs cannot run in a browser (proven to fail to even link when attempted), so the playground falls back to the classic, purpose-built-for-browsers @astrojs/compiler package instead.',
+  },
+];
+
+<Quiz client:visible id="astro-internals/compiler-output" questions={quizCompilerOutput} />
+
+<ProgressTracker client:visible id="astro-internals/compiler-output" />

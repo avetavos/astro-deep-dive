@@ -1,0 +1,362 @@
+---
+title: 'Request Pipeline'
+description: 'order จริงที่พิสูจน์ได้ของ on-demand request — adapter entry, middleware sequence(), route matching ตาม priority static/dynamic/rest, Astro.rewrite และ error handling — พิสูจน์ด้วย console.log จริงจาก build ที่รันอยู่ ไม่ใช่ diagram จากความจำ'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+[Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/) แสดง `sequence()` กับ `context.locals` ไปแล้ว บทเรียนนี้พิสูจน์ pipeline *ทั้งหมด* ตั้งแต่ต้นจนจบ ด้วย log จริงจาก build ที่รันอยู่จริง: middleware สองตัว, page หนึ่งตัว, endpoint หนึ่งตัว, route ที่ชนกันสามตัว, การเรียก `Astro.rewrite()` และ error ที่ throw ออกมา — log จากข้างในทั้งหมด curl จากข้างนอกทั้งหมด
+
+## setup
+
+```ts
+// src/middleware.ts
+import { defineMiddleware, sequence } from 'astro:middleware';
+
+const logStep = defineMiddleware(async (context, next) => {
+  console.log(`[pipeline] middleware A: before next() for ${context.url.pathname}`);
+  const response = await next();
+  console.log(`[pipeline] middleware A: after next() for ${context.url.pathname}, status=${response.status}`);
+  return response;
+});
+
+const logStep2 = defineMiddleware(async (context, next) => {
+  console.log(`[pipeline] middleware B: before next() for ${context.url.pathname}`);
+  const response = await next();
+  console.log(`[pipeline] middleware B: after next() for ${context.url.pathname}`);
+  return response;
+});
+
+export const onRequest = sequence(logStep, logStep2);
+```
+
+route สามตัวที่สร้างมาให้ชนกันโดยเฉพาะ แต่ละตัว log เมื่อตัวเองเป็นตัวที่ match:
+
+```astro
+---
+// src/pages/probe-req/collide/static.astro
+export const prerender = false;
+console.log('[pipeline] STATIC route matched: /probe-req/collide/static');
+---
+<p>static</p>
+```
+
+```astro
+---
+// src/pages/probe-req/collide/[id].astro
+export const prerender = false;
+console.log('[pipeline] DYNAMIC [id] route matched:', Astro.params.id);
+---
+<p>dynamic {Astro.params.id}</p>
+```
+
+```astro
+---
+// src/pages/probe-req/collide/[...rest].astro
+export const prerender = false;
+console.log('[pipeline] REST [...rest] route matched:', Astro.params.rest);
+---
+<p>rest {Astro.params.rest}</p>
+```
+
+build ด้วย `@astrojs/node` โหมด `standalone` แล้วรันจริง (`node dist/server/entry.mjs`) แล้วยิงด้วย `curl` จริง:
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/collide/static -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>static</p>
+HTTP 200
+
+$ curl -s http://127.0.0.1:5004/probe-req/collide/somethingelse -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>dynamic somethingelse</p>
+HTTP 200
+
+$ curl -s http://127.0.0.1:5004/probe-req/collide/a/b -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>rest a/b</p>
+HTTP 200
+```
+
+และ server log จริงของสาม request นั้น ตามลำดับ:
+
+```text
+[pipeline] middleware A: before next() for /probe-req/collide/static
+[pipeline] middleware B: before next() for /probe-req/collide/static
+[pipeline] STATIC route matched: /probe-req/collide/static
+[pipeline] middleware B: after next() for /probe-req/collide/static
+[pipeline] middleware A: after next() for /probe-req/collide/static, status=200
+[pipeline] middleware A: before next() for /probe-req/collide/somethingelse
+[pipeline] middleware B: before next() for /probe-req/collide/somethingelse
+[pipeline] DYNAMIC [id] route matched: somethingelse
+[pipeline] middleware B: after next() for /probe-req/collide/somethingelse
+[pipeline] middleware A: after next() for /probe-req/collide/somethingelse, status=200
+[pipeline] middleware A: before next() for /probe-req/collide/a/b
+[pipeline] middleware B: before next() for /probe-req/collide/a/b
+[pipeline] REST [...rest] route matched: a/b
+[pipeline] middleware B: after next() for /probe-req/collide/a/b
+[pipeline] middleware A: after next() for /probe-req/collide/a/b, status=200
+```
+
+(Real, captured from a single `node dist/server/entry.mjs` run with `@astrojs/node`'s `standalone` mode — the same run this lesson's `Astro.rewrite()` and error-handling logs below come from too, hit with six real `curl` requests in one sequence, in the order they appear across this lesson.)
+
+สองข้อเท็จจริง ที่พิสูจน์ตรง ๆ:
+
+- **`sequence(A, B)` ซ้อนกัน ไม่ได้ต่อกันแบบเรียง.** ทุก request log `A before` → `B before` → (route handler) → `B after` → `A after` — `A` ห่อ `B` ไว้ ตามลำดับเป๊ะ ๆ ที่ระบุใน `sequence(...)` middleware ที่อยู่ก่อนใน `sequence()` ได้รันโค้ดทั้งก่อนและหลังทุก middleware หลังจากมัน ไม่ใช่แค่ "ก่อน"
+- **route priority คือ static > dynamic > rest** พิสูจน์ด้วยการชนกันจริง: `/collide/static` match static file แม้ `[id].astro` จะ match ได้เหมือนกัน; `/collide/somethingelse` (segment เดียว ไม่มี static file สำหรับมัน) ตกไปที่ `[id].astro`; `/collide/a/b` (สอง segment — `[id]` match สอง segment ไม่ได้เลย) ตกไปถึง `[...rest].astro` นี่คือ ordering เป๊ะ ๆ ที่ [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/) ระบุไว้ — พิสูจน์ที่นี่ด้วยไฟล์สามตัวที่แข่งกัน request เดียวกันจริง
+
+<Mermaid title="request หนึ่งตัว จาก adapter ถึง response" code={pipelineDiagram} />
+
+export const pipelineDiagram = `sequenceDiagram
+  participant Client
+  participant Adapter as "@astrojs/node handler"
+  participant MW as middleware sequence(A, B)
+  participant Router as route matching
+  participant Handler as page / endpoint / action
+  Client->>Adapter: HTTP request
+  Adapter->>MW: build context, call onRequest
+  MW->>MW: A before -> B before
+  MW->>Router: next() reaches routing
+  Router->>Router: static > dynamic > rest priority
+  Router->>Handler: matched route's module
+  Handler-->>MW: render result / Response
+  MW->>MW: B after -> A after
+  MW-->>Adapter: final Response
+  Adapter-->>Client: HTTP response`;
+
+## `Astro.rewrite()`: ผ่าน pipeline ซ้อนกันเต็มรูปแบบ
+
+การเรียก `Astro.rewrite('/probe-req/reqpage/')` จากข้างใน frontmatter ของ page ไม่ได้แค่สลับ HTML — มันเข้า routing ใหม่และ **รัน middleware chain ทั้งหมดซ้ำ** แบบซ้อนกัน สำหรับ URL ใหม่ พิสูจน์ด้วย request จริงไปยัง page ที่ทำแบบนี้เป๊ะ:
+
+```astro
+---
+// src/pages/probe-req/rewrite-source.astro
+export const prerender = false;
+console.log('[pipeline] rewrite-source-req: about to call Astro.rewrite');
+return Astro.rewrite('/probe-req/reqpage/');
+---
+```
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/rewrite-source -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><html><body><h1>req page</h1></body></html>
+HTTP 200
+```
+
+server log จริงของ request นั้นตัวเดียว:
+
+```text
+[pipeline] middleware A: before next() for /probe-req/rewrite-source
+[pipeline] middleware B: before next() for /probe-req/rewrite-source
+[pipeline] rewrite-source-req: about to call Astro.rewrite
+[pipeline] middleware A: before next() for /probe-req/reqpage/
+[pipeline] middleware B: before next() for /probe-req/reqpage/
+[pipeline] page component: rendering /probe-req/reqpage/
+[pipeline] middleware B: after next() for /probe-req/reqpage/
+[pipeline] middleware A: after next() for /probe-req/reqpage/, status=200
+[pipeline] middleware B: after next() for /probe-req/rewrite-source
+[pipeline] middleware A: after next() for /probe-req/rewrite-source, status=200
+```
+
+อ่าน section กลางอีกที: `middleware A/B: before next()` สำหรับ `/probe-req/reqpage/` ปรากฏ **ซ้อนอยู่ข้างใน** call `A`/`B` ของ request เดิมที่ยังเปิดอยู่ — request เดิมไม่จบ `next()` ของตัวเองจนกว่า pipeline ที่รันซ้ำเต็มสำหรับ path ที่ rewrite ไปจะเสร็จ นี่มีผลจริงในทางปฏิบัติ: middleware ที่ทำ setup ต่อ request (เปิด database transaction, เริ่ม timer) รัน **สองครั้ง** สำหรับ request ที่ถูก rewrite หนึ่งครั้ง — พิสูจน์ตรง ๆ ข้างบน ไม่ใช่การเดา
+
+## Error handling: throw ก็ trigger การผ่านซ้อนกันเหมือนกัน
+
+page ที่ throw พฤติกรรมคล้าย rewrite — Astro ดักจับ error แล้วเข้า pipeline ใหม่ข้างในสำหรับหน้า `500` ของไซต์ แทนที่จะ return error response เปล่า ๆ:
+
+```astro
+---
+// src/pages/probe-req/boom.astro
+export const prerender = false;
+console.log('[pipeline] boom page: about to throw');
+throw new Error('deliberate boom for the request-pipeline lesson');
+---
+<p>never rendered</p>
+```
+
+```astro
+---
+// src/pages/500.astro
+export const prerender = false;
+console.log('[pipeline] 500.astro rendered, error:', Astro.props.error?.message);
+Astro.response.status = 500;
+---
+<p>server error</p>
+```
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/boom -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>server error</p>
+HTTP 500
+```
+
+server log จริง — สังเกต `middleware A: before next() for /probe-req/boom` ปรากฏ **สองครั้ง**:
+
+```text
+[pipeline] middleware A: before next() for /probe-req/boom
+[pipeline] middleware B: before next() for /probe-req/boom
+[pipeline] boom page: about to throw
+10:28:42 [ERROR] Error: deliberate boom for the request-pipeline lesson
+    at ... (real stack trace, pointing at the exact throw line)
+[pipeline] middleware A: before next() for /probe-req/boom
+[pipeline] middleware B: before next() for /probe-req/boom
+[pipeline] 500.astro rendered, error: deliberate boom for the request-pipeline lesson
+[pipeline] middleware B: after next() for /probe-req/boom
+[pipeline] middleware A: after next() for /probe-req/boom, status=500
+```
+
+`Astro.props.error?.message` ข้างใน `500.astro` ได้รับ message จริงของ `Error` ที่ throw ออกมาเป๊ะ — พิสูจน์ข้างบน ไม่ใช่ placeholder และ request ไปยัง route ที่ไม่มีอยู่จริง (ไม่มีการ throw เลย) ยัง resolve ผ่าน middleware wrapping แบบเดียวกันเป๊ะ ครั้งเดียว ลงเอยที่ `404.astro`:
+
+```text
+$ curl -s http://127.0.0.1:5004/probe-req/does-not-exist -w "\nHTTP %{http_code}\n"
+<!DOCTYPE html><p>not found: /probe-req/does-not-exist</p>
+HTTP 404
+```
+
+```text
+[pipeline] middleware A: before next() for /probe-req/does-not-exist
+[pipeline] middleware B: before next() for /probe-req/does-not-exist
+[pipeline] 404.astro rendered for /probe-req/does-not-exist
+[pipeline] middleware B: after next() for /probe-req/does-not-exist
+[pipeline] middleware A: after next() for /probe-req/does-not-exist, status=404
+```
+
+ความต่างระหว่างสองแบบนี้: 404 จริง (ไม่มี route match เลย) resolve ไปที่ `404.astro` ใน pass **เดียว** — ไม่มี handler "เดิม" ที่รันแล้ว fail ดังนั้นไม่มีอะไรให้ซ้อน error ที่ถูก **throw** ต่างหากคือตัวที่ trigger การเข้า pipeline ใหม่ข้างในโดยเฉพาะ (พิสูจน์ข้างบนด้วย middleware log ที่ซ้ำ) เพราะ Astro ต้องละทิ้ง request ที่กำลังทำอยู่แล้วส่งการควบคุมไปที่หน้า 500 แทน
+
+## กฎ private-file ของ route ที่เจอระหว่างทาง
+
+การ build route ของบทเรียนนี้ไว้ใต้ directory ที่ชื่อตรงกับ convention `src/pages/__lessons/<module>__<lesson>/` ของ harness คอร์สนี้เอง ทำให้ทุก route ข้างในนั้น 404 สม่ำเสมอ — รวมถึงตัวที่ไม่มี typo เลยด้วยซ้ำ สาเหตุจริงพบตรง ๆ ใน source ที่ติดตั้งไว้ (`isPublicRoute` ของ `astro/dist/core/util.js`):
+
+```js
+// astro/dist/core/util.js — isPublicRoute (trimmed)
+function isPublicRoute(file, config) {
+  const parts = normalizedDir.split("/").slice(1);
+  for (const part of parts) {
+    if (part.startsWith("_")) return false;
+  }
+  return true;
+}
+```
+
+path segment **ไหนก็ตาม** ใต้ `src/pages/` ที่ขึ้นต้นด้วย `_` — ไฟล์ *หรือ directory ที่บรรจุมัน* — ทำให้ `isPage()`/`isEndpoint()` return `false` ให้มัน ดังนั้นมันไม่ถูก route เลย (ไม่ใช่แค่ 404 — router ไม่นับว่ามันเป็น page เลยด้วยซ้ำ) นี่คือข้อมูลจริงที่มีประโยชน์เวลาอ่าน route tree: folder ที่ขึ้นต้นด้วย underscore ใต้ `src/pages/` (convention ทั่วไปสำหรับ "helper component ที่อยู่ใกล้ route ของมันแต่ไม่ใช่ route เอง") มองไม่เห็นจาก routing เลย ไม่ว่าจะลึกแค่ไหน
+
+## อ่านโค้ดที่ AI เขียน
+
+- comment อธิบาย `sequence(a, b, c)` ว่า "รันตามลำดับ ทีละตัว" ไหม? พิสูจน์ข้างบน: มัน *ซ้อนกัน* — `a` ห่อ `b` ห่อ `c` ดังนั้น code ของ `a` หลัง `next()` ของตัวเองรัน**สุดท้าย** หลังทุกอย่างที่ซ้อนข้างในเสร็จหมดแล้ว ไม่ใช่ "ตัวถัดไปในคิว"
+- code สมมติว่า setup code ต่อ request ของ middleware รันแค่ครั้งเดียวไหม? พิสูจน์ข้างบนด้วย `Astro.rewrite()`: request ที่ถูก rewrite (หรือ throw แล้วไปหน้า error) เข้า middleware chain เต็มซ้ำเป็นครั้งที่สอง สำหรับ request เดิมตัวเดียวกัน
+- การ "แก้" route ที่ชนกันแค่เปลี่ยนชื่อหรือย้ายไฟล์ โดยไม่เช็คว่า priority จริง (static > dynamic > rest พิสูจน์ข้างบน) แก้ให้ถูกอยู่แล้วหรือเปล่าไหม? บางครั้งสิ่งที่ต้องแก้คือความเข้าใจว่าไฟล์ไหน *ควร* ชนะ ไม่ใช่ทำให้ตัวใดตัวหนึ่งหายไป
+- page หรือ component ถูกวางไว้ใต้ directory ที่ชื่อขึ้นต้นด้วย `_` ข้างใน `src/pages/` โดยคาดว่ายังเข้าถึงเป็น route ได้ไหม? พิสูจน์ข้างบน: segment ที่ขึ้นต้นด้วย underscore ตรงไหนก็ตามใน path ทำให้มันหลุดจาก routing ทั้งหมด
+
+<SpotTheBug code={`// src/middleware.ts
+import { defineMiddleware, sequence } from 'astro:middleware';
+
+const timing = defineMiddleware(async (context, next) => {
+  const start = Date.now();
+  const response = await next();
+  // "logs how long the whole request took, including anything downstream"
+  console.log(\`\${context.url.pathname} took \${Date.now() - start}ms\`);
+  return response;
+});
+
+const auth = defineMiddleware(async (context, next) => {
+  context.locals.user = await getUser(context);
+  return next();
+});
+
+export const onRequest = sequence(timing, auth);
+`}>
+claim ของ comment เกี่ยวกับ `timing` ถูกต้องในตัวเอง — แต่ *ลำดับ* ใน `sequence(timing, auth)` แปลว่า `timing` ห่อ `auth` และถ้า request เดียวกันนี้ถูก rewrite (`Astro.rewrite(...)`) หรือลงเอยที่ error-page path pipeline ที่ซ้อนกัน**ทั้งหมด** — รวมถึงงานจริงของ `auth` ที่ derive `context.locals.user` ใหม่ — รันเป็นครั้งที่สองข้างใน `next()` call ตัวเดียวนั้น และการวัดครั้งเดียวของ `timing` รวมทั้งสอง pass เข้าด้วยกันเงียบ ๆ ไม่ใช่แบบที่ log message บอกเป็นนัย ยังมี ordering bug ที่ลึกกว่านั้น: `auth` รัน*หลัง* `timing` เริ่ม clock แต่*ก่อน* page จริง — โอเคในที่นี้ แต่ถ้า middleware ทีหลังต้องใช้ `context.locals.user` เพื่อตัดสินว่าจะ rewrite หรือไม่ `auth` ต้องมาก่อนใน list ของ `sequence(...)` เพราะ middleware เห็นแค่ค่า `context.locals` ที่ middleware ที่รันก่อนมันใน pass เดียวกันตั้งไว้เท่านั้น
+</SpotTheBug>
+
+## Mental Model
+
+request ไม่ใช่ "middleware แล้วค่อย page" — มันคือ call stack ที่ซ้อนกัน ตรงตามชื่อ `sequence()` เป๊ะ ๆ: middleware แต่ละตัวห่อทุกอย่างหลังจากมัน และอะไรก็ตามที่ทำให้ Astro route ใหม่ข้างใน (error ที่ throw, `Astro.rewrite()`) ไม่ข้าม stack นั้น มันเข้าไปใหม่ ซ้อนลึกอีกชั้น สำหรับ target ใหม่ การอ่าน pipeline code ให้ดีคือถามว่า สำหรับ request นี้ "จริง ๆ มันรันมากกว่าหนึ่งครั้งข้างใน request เดิมได้ไหม" — แล้วพิสูจน์มัน แบบที่บทเรียนนี้เพิ่งทำ ไม่ใช่สมมติว่า `console.log` fire แค่ครั้งเดียวเสมอ
+
+## ข้อแลกเปลี่ยน
+
+| | Static route | Dynamic (`[id]`) | Rest (`[...rest]`) |
+|---|---|---|---|
+| **match อะไร** | literal path เดียวเป๊ะ | segment เดียวของ path เป๊ะ | segment ที่เหลือกี่ตัวก็ได้ |
+| **Priority** | สูงสุด — ชนะทุกการชน | กลาง | ต่ำสุด — ชนะแค่เมื่อไม่มีอะไรเจาะจงกว่า match |
+| **เหมาะกับ** | route ที่ห้าม match ผิดโดยเด็ดขาด (health check, webhook) | resource เดียวด้วย id/slug | catch-all (CMS-driven page tree, proxy) |
+
+| | Error ที่ throw → `500.astro` | 404 จริง → `404.astro` |
+|---|---|---|
+| **middleware pass** | สองครั้ง — pass เดิม (ที่ถูกยกเลิก) บวก re-entry เต็มสำหรับ error page (พิสูจน์ข้างบน) | ครั้งเดียว — ไม่เคยมี handler แรกให้ยกเลิก |
+| **`Astro.props.error`** | `Error` ที่ throw จริง | ไม่เกี่ยวข้อง |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`sequence(a, b)` แปลว่า a รันแล้ว b รัน เหมือนสองขั้นตอนอิสระต่อกัน"** พิสูจน์ว่าผิดข้างบน: มันซ้อนกัน code ของ `a` หลัง `await next()` รันหลังจาก `b` (และ route) เสร็จสมบูรณ์แล้ว — ใกล้เคียงกับการเรียก function ที่ห่อกันมากกว่า list เรียง
+- **"setup code ของ middleware รันครั้งเดียวเป๊ะต่อ request"** พิสูจน์ว่าผิดข้างบน: `Astro.rewrite()` และ error ที่ throw ทำให้เกิด pass ที่สองผ่าน middleware chain ทั้งหมดจริงและพิสูจน์ได้ สำหรับ request เดิมตัวเดียวกัน
+- **"route ที่ชนกันแก้ด้วยไฟล์ไหนถูกสร้างก่อน หรือเรียงตัวอักษร"** พิสูจน์ข้างบนด้วยไฟล์สามตัวที่สร้างมาให้ชนกันโดยเฉพาะ: priority เป็นกฎตายตัว — static แล้ว dynamic แล้ว rest — ไม่ว่าไฟล์ไหนถูกสร้างก่อนหรือชื่ออะไร
+- **"folder ที่ขึ้นต้นด้วย underscore ใต้ `src/pages/` แค่ทำให้ route ของมัน 'ซ่อน' จาก sitemap แต่ยังใช้งานได้ถ้ารู้ URL"** พิสูจน์ว่าผิดข้างบน ตรง ๆ จาก source จริงของ `isPublicRoute`: มันทำให้ router ไม่ลงทะเบียนเป็น page/endpoint เลย — URL 404 จริง ไม่ใช่แค่ไม่ถูกลิสต์
+
+<Callout title="สรุปหนึ่งบรรทัด">
+request วิ่งผ่าน pipeline ที่ซ้อนกันจริง: adapter ส่งต่อให้ `middleware sequence(A, B, ...)` (พิสูจน์ข้างบนว่าซ้อนกัน ไม่ใช่ต่อกัน — `A` ห่อ `B`) ซึ่งเรียก `next()` เข้า route matching (static ชนะ dynamic ชนะ rest — พิสูจน์ด้วยไฟล์สามตัวที่ชนกันจริง) ซึ่งไปถึง page/endpoint/action ของคุณแล้ว return `Response` กลับขึ้นผ่าน middleware ที่ซ้อนกันเดิม `Astro.rewrite()` และ error ที่ throw (→ `500.astro`) ทั้งคู่ทำให้เกิด **การเข้าใหม่เต็มรูปแบบเป็นครั้งที่สอง** ใน middleware chain เดิม ซ้อนอยู่ข้างใน `next()` call ที่ยังเปิดอยู่ของ request เดิม — พิสูจน์ข้างบนด้วย middleware log ที่ซ้ำทั้งคู่ และ path segment ไหนก็ตามที่ขึ้นต้นด้วย `_` ใต้ `src/pages/` — ไฟล์หรือ folder ที่บรรจุมัน — มองไม่เห็นจาก routing เลย พิสูจน์ตรง ๆ จาก source จริงของ `isPublicRoute`
+</Callout>
+
+export const quizRequestPipeline = [
+  {
+    q: '```ts\nexport const onRequest = sequence(A, B);\n```\nจาก output จริงที่ log `A before -> B before -> (route) -> B after -> A after` นี่พิสูจน์อะไรเกี่ยวกับวิธีที่ sequence() รวม middleware?',
+    options: [
+      'A และ B รันเป็นสองขั้นตอนอิสระ ไม่เกี่ยวกัน ทีละตัว',
+      'มันซ้อนกัน — A ห่อ B ดังนั้น code ของ A หลัง next() ของตัวเองรันสุดท้าย หลังจาก B และ route เสร็จสมบูรณ์แล้ว',
+      'B รันก่อน A เสมอ ไม่ว่าจะเรียง argument ยังไง',
+      'มีแค่ middleware ตัวแรกใน list เท่านั้นที่รันจริง',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ ด้วย server log จริงในบทเรียนนี้: ทุก request log A-before, B-before, handler, B-after, A-after ตามลำดับซ้อนกันเป๊ะ ๆ ไม่เคยเป็น A-แล้ว-B แบบแบน',
+  },
+  {
+    q: '```text\n/probe-req/collide/static  -> matched by static.astro\n/probe-req/collide/somethingelse -> matched by [id].astro\n/probe-req/collide/a/b -> matched by [...rest].astro\n```\nด้วยไฟล์ทั้งสามที่ชนกันจริง output ที่ curl มาจริงนี้พิสูจน์อะไรเกี่ยวกับ route priority?',
+    options: [
+      'ไฟล์ที่สร้างล่าสุดชนะ',
+      'static route ชนะ dynamic route ซึ่งชนะ rest (catch-all) route — พิสูจน์ด้วยไฟล์สามตัวที่สร้างมาแข่งกัน request เดียวกันโดยเฉพาะ',
+      'ลำดับตัวอักษรของชื่อไฟล์ตัดสินเมื่อเสมอกัน',
+      'rest route ชนะเสมอเมื่อมีอยู่',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ด้วย curl request จริงกับไฟล์ที่ชนกันทั้งสามในบทเรียนนี้: match ที่เจาะจงที่สุด (static แล้ว dynamic segment เดียว แล้ว rest หลาย segment) ชนะเสมอ',
+  },
+  {
+    q: 'page เรียก `Astro.rewrite(\'/other-page/\')` server log จริงในบทเรียนนี้พิสูจน์อะไรว่าเกิดกับ middleware chain?',
+    options: [
+      'ไม่มีอะไร — middleware รันแค่ครั้งเดียวสำหรับ request เดิม',
+      'middleware chain เต็มรันซ้ำ ซ้อนอยู่ข้างใน next() call ที่ยังเปิดอยู่ของ request เดิม สำหรับ URL ที่ rewrite ไป — พิสูจน์ด้วยบรรทัด log "before next()" ที่ซ้ำ',
+      'middleware ถูกข้ามทั้งหมดสำหรับ request ที่ rewrite',
+      'มีแค่ middleware ตัวที่สองใน sequence() ที่รันซ้ำ ไม่ใช่ตัวแรก',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ ข้างบน: หลัง Astro.rewrite() ถูกเรียก ทั้ง middleware A และ B log "before next()" อีกครั้งสำหรับ URL ใหม่ ซ้อนอยู่ข้างใน call ที่ยังเปิดอยู่ของ request เดิม — การเข้าใหม่เต็มรูปแบบจริง',
+  },
+  {
+    q: 'page throw Error middleware log จริงที่ซ้ำในบทเรียนนี้พิสูจน์อะไรเกี่ยวกับวิธีที่ Astro จัดการมัน?',
+    options: [
+      'Astro return 500 เปล่า ๆ ทันที ไม่มี middleware หรือ render page เพิ่มเติมเลย',
+      'Astro เข้า pipeline เต็มข้างในเป็นครั้งที่สองเพื่อ render 500.astro โดยส่ง Error ที่ throw จริงไปเป็น Astro.props.error — พิสูจน์ด้วย middleware log ที่ปรากฏสองครั้งและ message error จริงที่โผล่ใน log line ของ 500.astro เอง',
+      'error ที่ throw ถูกกลืนเงียบ ๆ แล้ว page เดิมก็ render ต่อไปอยู่ดี',
+      'มันทำงานเหมือน 404 จริงเป๊ะ — middleware pass เดียว',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบน: "middleware A: before next()" สำหรับ path เดียวกันปรากฏสองครั้งใน log จริง — ครั้งแรกสำหรับ request เดิมที่ถูกยกเลิก ครั้งที่สองสำหรับการเข้าใหม่ข้างในที่ render 500.astro พร้อม message error จริง',
+  },
+  {
+    q: 'route file อยู่ที่ `src/pages/_internal/report.astro` source จริงที่ติดตั้งไว้ของ isPublicRoute พิสูจน์อะไรว่าจะเกิดอะไรเมื่อ request URL นั้น?',
+    options: [
+      'มันทำงานปกติ — underscore แค่ซ่อนมันจาก sitemap ที่ generate',
+      'มัน 404 จริง — path segment ไหนก็ตาม (ไฟล์หรือ folder ที่บรรจุ) ที่ขึ้นต้นด้วย `_` ใต้ src/pages/ ทำให้ isPage()/isEndpoint() return false ดังนั้นมันไม่ถูกลงทะเบียนเป็น route เลย',
+      'ต้องมี config flag ชัดเจนเพื่อเปิดใช้งาน',
+      'มัน 404 แค่ตอน production ไม่ใช่ตอน dev',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ตรง ๆ จาก function isPublicRoute จริงของ astro/dist/core/util.js: มันเช็คทุก path segment และตัวไหนขึ้นต้นด้วย "_" ทำให้ path ทั้งหมด route ไม่ได้ — ไม่ใช่แค่ซ่อนจาก listing',
+  },
+];
+
+<Quiz client:visible id="astro-internals/request-pipeline" questions={quizRequestPipeline} />
+
+<ProgressTracker client:visible id="astro-internals/request-pipeline" />
