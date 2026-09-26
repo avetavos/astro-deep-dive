@@ -459,6 +459,8 @@ function ensureProbe(refresh) {
         'preact',
         'nanostores',
         '@nanostores/preact',
+        '@astrojs/markdown-remark',
+        'remark-toc',
       ],
       { cwd: PROBE_DIR, stdio: 'inherit' },
     );
