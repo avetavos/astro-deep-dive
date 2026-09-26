@@ -48,6 +48,22 @@ test('formatDate renders a friendly date', () => {
 
 To test that a `.astro` component renders the right HTML, use the **Astro Container API** — it renders a component to a string in isolation, no browser needed. It's currently exposed as `experimental_AstroContainer` — still experimental, exactly as the name says, even though it's stable enough to be Astro's own recommended way to component-test:
 
+The component under test:
+
+```astro
+---
+// src/components/Card.astro
+interface Props {
+  title: string;
+  href: string;
+}
+const { title, href } = Astro.props;
+---
+<a class="card" href={href}>
+  <h3>{title}</h3>
+</a>
+```
+
 ```ts
 // src/__tests__/card-render.test.ts
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
@@ -70,6 +86,18 @@ You get the rendered HTML as a string and assert against it — fast, and it exe
 ### Container-testing a framework island
 
 `renderToString`'s real type signature only accepts an `AstroComponentFactory` — a plain `.astro` component — not a raw framework function component (verified directly: passing `Counter.tsx` straight to `renderToString` is a real `astro check` error, `ts(2345): Argument of type '() => Element' is not assignable to parameter of type 'AstroComponentFactory'`). The documented, type-safe pattern (straight from Astro's own Container API reference) is to wrap the island in a thin `.astro` component and test *that*:
+
+The island under test — a plain Preact counter with no required props:
+
+```tsx
+// src/components/Counter.tsx
+import { useState } from 'preact/hooks';
+
+export default function Counter() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
+}
+```
 
 ```astro
 ---

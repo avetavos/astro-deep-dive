@@ -48,6 +48,22 @@ test('formatDate renders a friendly date', () => {
 
 เพื่อ test ว่า component `.astro` render HTML ถูกต้อง ใช้ **Astro Container API** — API นี้ render component เป็น string แบบแยกเดี่ยว ไม่ต้องมี browser ตอนนี้เปิดให้ใช้ในชื่อ `experimental_AstroContainer` — ยัง experimental จริง ๆ ตามชื่อเป๊ะ ถึงแม้จะเสถียรพอที่ Astro เองแนะนำให้ใช้เป็นวิธี component-test หลัก:
 
+component ที่จะทดสอบ:
+
+```astro
+---
+// src/components/Card.astro
+interface Props {
+  title: string;
+  href: string;
+}
+const { title, href } = Astro.props;
+---
+<a class="card" href={href}>
+  <h3>{title}</h3>
+</a>
+```
+
 ```ts
 // src/__tests__/card-render.test.ts
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
@@ -70,6 +86,18 @@ test('Card renders its title and href', async () => {
 ### Container-test island ที่เป็น framework component
 
 type จริงของ `renderToString` รับแค่ `AstroComponentFactory` — component `.astro` ธรรมดา — ไม่ใช่ framework function component ดิบ ๆ (verify ตรง ๆ: ส่ง `Counter.tsx` ตรง ๆ ให้ `renderToString` เป็น `astro check` error จริง `ts(2345): Argument of type '() => Element' is not assignable to parameter of type 'AstroComponentFactory'`) pattern ที่ type-safe และมี doc รองรับ (ตรงจาก Container API reference ของ Astro เอง) คือห่อ island ด้วย component `.astro` บาง ๆ แล้ว test *อันนั้น* แทน:
+
+island ที่จะทดสอบ — Preact counter ธรรมดาที่ไม่มี prop บังคับ:
+
+```tsx
+// src/components/Counter.tsx
+import { useState } from 'preact/hooks';
+
+export default function Counter() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
+}
+```
 
 ```astro
 ---
