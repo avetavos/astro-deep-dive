@@ -1,0 +1,136 @@
+---
+title: Glossary
+description: 'Every term this course uses, in one place — islands and client directives, server islands, the content layer with loaders and Zod schemas, Actions, ClientRouter view transitions, and the Astro 7 toolchain (Rust compiler, Rolldown, Sätteri).'
+sidebar:
+  order: 99
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+Astro's vocabulary is island-first — a page renders to static HTML by default, and only the pieces you mark with a client directive (or opt into a server island) ship or run any JavaScript. On top of that sits the content layer (collections built from a loader and validated against a Zod schema), Actions for type-safe server calls, and `<ClientRouter />` for animated same-origin navigations. When a lesson uses a term you're unsure about, or unsure whether it's still current for Astro 7.3.5, look it up here.
+
+## A
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| action / `defineAction()` | Astro's type-safe server function: defined with `defineAction({ input, handler })` in `src/actions/`, called from the client through the generated `actions` object with automatic Zod validation and a typed result — no hand-written `fetch()`/URL/JSON round-trip. | [Actions](/astro/en/server-side/actions/) |
+| `ActionError` | The error class an action handler throws to signal a specific failure (`throw new ActionError({ code: 'UNAUTHORIZED', message: '...' })`); callers narrow the caught `error` with `error instanceof ActionError` and read `error.code`. | [Actions](/astro/en/server-side/actions/) |
+| adapter | An integration package (`@astrojs/node`, `-vercel`, `-cloudflare`, `-netlify`, …) that lets `output: 'server'` — or any `prerender = false` route — actually run on a target deploy platform; required the moment any route renders on-demand. | [SSR & Adapters](/astro/en/server-side/ssr-and-adapters/) |
+| `astro add` | The CLI command (`npx astro add <integration>`) that installs an integration's package and wires it into `astro.config.mjs`'s `integrations` array automatically, instead of editing the config by hand. | [Config & Integrations](/astro/en/tooling-and-production/config-and-integrations/) |
+| `astro check` | The CLI command (backed by `@astrojs/check` + TypeScript) that type-checks `.astro` files end to end, including expressions inside templates — catching a prop-type mismatch a plain `tsc` run over frontmatter alone would miss. | [Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/) |
+| `astro sync` | Generates (or regenerates) the TypeScript types for content collections and other `astro:` virtual modules into `.astro/`; types also regenerate on `astro dev`/`astro build`, but `sync` alone is the fast path right after editing a schema. | [TypeScript & Content Types](/astro/en/tooling-and-production/typescript-and-content-types/) |
+| `astro-island` | The custom element Astro's client runtime wraps around a hydrated component in the rendered HTML, carrying the component's hydration directive, serialized props, and renderer info needed to hydrate it in the browser. | [Client Directives](/astro/en/islands/client-directives/) |
+| `astro:env` | A typed environment-variable module: variables are declared once in `astro.config.mjs`'s `env.schema`, then imported from `astro:env/client` or `astro:env/server` with real types instead of `process.env`'s untyped strings. | [Config & Integrations](/astro/en/tooling-and-production/config-and-integrations/) |
+| `Astro.glob()` (removed) | The old way to eagerly import a set of local files from frontmatter (`await Astro.glob('./posts/*.md')`); removed in Astro v5 and replaced by Vite's own `import.meta.glob(pattern, { eager: true })`, which returns no `Promise` and needs no `await`. | [Data Fetching](/astro/en/content-and-data/data-fetching/) |
+| `@astrojs/db` (removed) | Astro's built-in Drizzle-based database integration, fully removed in Astro 7.0 with no replacement package maintained by the core team — migrate to Node's built-in `node:sqlite`, Drizzle ORM directly, or another database library. | [Deployment & Ecosystem](/astro/en/tooling-and-production/deployment-and-ecosystem/) |
+
+## C
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| `class:list` | An attribute directive accepting an array of strings, objects, and nested arrays (`class:list={['box', { red: isRed }]}`), merged into one `class` string — Astro's built-in equivalent of the popular `clsx` helper. | [Styles & Scripts](/astro/en/components/styles-and-scripts/) |
+| client directive | The `client:*` family of attributes (`client:load`, `client:idle`, `client:visible`, `client:media`, `client:only`) that opts a framework component into shipping JavaScript and hydrating in the browser — without one, the component renders to static HTML only. | [Client Directives](/astro/en/islands/client-directives/) |
+| `client:load` | Hydrates the component's JavaScript immediately once the page loads — the directive for something that must be interactive right away (a nav menu, a modal trigger). | [Client Directives](/astro/en/islands/client-directives/) |
+| `client:idle` | Hydrates once the page has finished its initial load and the browser's `requestIdleCallback` has fired, falling back to the `load` event where `requestIdleCallback` isn't available — for something interactive but not urgent. | [Client Directives](/astro/en/islands/client-directives/) |
+| `client:visible` | Hydrates the moment the component scrolls into the viewport (via `IntersectionObserver`) — the default choice for anything below the fold that doesn't need to be interactive before a visitor sees it. | [Client Directives](/astro/en/islands/client-directives/) |
+| `client:media` | Hydrates only once a given CSS media query matches (`client:media="(max-width: 640px)"`) — for a component that's only interactive, or only present, on certain viewport sizes. | [Client Directives](/astro/en/islands/client-directives/) |
+| `client:only` | Skips server rendering entirely and renders only in the browser; requires naming the framework as a string (`client:only="svelte"`) since Astro has no server-rendered markup to know which renderer to hydrate. | [Client Directives](/astro/en/islands/client-directives/) |
+| `ClientRouter` | The `astro:transitions` component (`<ClientRouter />`, placed in `<head>`) that intercepts same-origin navigations, swaps the DOM, and drives the transition animations — the current export name for Astro's view-transitions router. | [View Transitions](/astro/en/rendering-and-performance/view-transitions/) |
+| component | An `.astro` file: a component script (the frontmatter fence) followed by a template — Astro's basic building block, usable standalone or composed into pages. | [The Component Model](/astro/en/foundations/the-component-model/) |
+| content collection | A type-safe set of content entries configured in `src/content.config.ts` with a loader and an optional schema, queried through `astro:content`'s `getCollection()`/`getEntry()` with fully typed results. | [Content Collections](/astro/en/content-and-data/content-collections/) |
+| content layer | The architecture behind content collections since Astro v5: a collection is defined by a *loader* rather than a fixed `src/content/<name>/` directory, unifying local Markdown/MDX/JSON with remote or live data under the same `getCollection()` API. | [Content Collections](/astro/en/content-and-data/content-collections/) |
+| Container API | `experimental_AstroContainer` (from `astro/container`) — renders a single Astro or framework component to an HTML string outside a full page build, the tool this course's own test fences use to assert on rendered markup. | [Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/) |
+| `context.locals` | The per-request object middleware populates (`context.locals.user = ...`) for `load`-equivalent code, actions, and endpoints downstream to read; since Astro v5, adding to it requires `Object.assign(context.locals, {...})` rather than overwriting the whole object. | [Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/) |
+
+## D–E
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| `define:vars` | Passes JSON-serializable frontmatter variables into a `<style>` or `<script>` tag (`<style define:vars={{ color }}>`, read as `var(--color)`); on a `<script>` tag, using `define:vars` implies `is:inline` automatically. | [Styles & Scripts](/astro/en/components/styles-and-scripts/) |
+| `defineCollection()` | The `astro:content` function that pairs a loader with an optional schema in `src/content.config.ts`, registering one build-time collection to be exported from that file's `collections` object. | [Content Collections](/astro/en/content-and-data/content-collections/) |
+| `defineLiveCollection()` | The `src/live.config.ts` equivalent of `defineCollection()` for live collections: pairs a `LiveLoader` with an optional schema for runtime queries via `getLiveCollection()`, introduced in Astro 7.0. | [Data Fetching](/astro/en/content-and-data/data-fetching/) |
+| dynamic route | A page file with a bracketed segment, like `[slug].astro`, whose parameter is filled in either per-path at build time (via `getStaticPaths()`) or per-request at runtime under on-demand rendering. | [Dynamic Routes](/astro/en/content-and-data/dynamic-routes/) |
+| endpoint / API route | A `src/pages/*.ts` file exporting HTTP-method functions (`GET`, `POST`, …) that return a `Response` directly — a lower-level, framework-agnostic alternative to Actions for building an API a non-Astro client can also call. | [Endpoints & API Routes](/astro/en/server-side/endpoints-and-api-routes/) |
+| `envField()` | The helper, imported from `astro/config`, used inside `env.schema` to declare one environment variable's type, context (`'client'`/`'server'`), and access level (`'public'`/`'secret'`) — e.g. `envField.string({ context: 'server', access: 'secret' })`. | [Config & Integrations](/astro/en/tooling-and-production/config-and-integrations/) |
+
+## F–H
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| frontmatter | The fenced `---`…`---` block at the top of an `.astro` file: plain JavaScript/TypeScript that runs at build- or request-time on the server only, and is never sent to the client. | [The Component Model](/astro/en/foundations/the-component-model/) |
+| `getStaticPaths()` | Exported from a dynamic route in prerendered output; returns the list of `{ params, props }` entries Astro must pre-render — required for every static (non-on-demand) dynamic route, since Astro can't otherwise know which paths to build. | [Dynamic Routes](/astro/en/content-and-data/dynamic-routes/) |
+| hybrid (legacy) | The pre-v5 output mode that let individual pages opt into SSR while the rest of the site stayed static. Removed as a distinct setting in Astro v5 — its behavior was merged into `output: 'static'` by default, so `output: 'hybrid'` today is a deprecated, no-longer-recognized value. | [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) |
+| hydration | The client attaching event handlers and interactivity to already-rendered, server-produced HTML for one island, instead of re-rendering it from scratch — everything outside a hydrated island stays plain static markup. | [Client Directives](/astro/en/islands/client-directives/) |
+
+## I
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| `<Image>` | The `astro:assets` component that outputs an optimized `<img>` with real `width`/`height`, format conversion, and (given `widths`/`layout`) a generated responsive `srcset` — for a local file or a configured remote source. | [Images & Assets](/astro/en/rendering-and-performance/images-and-assets/) |
+| `image()` (schema helper) | The function a content collection schema callback receives (`schema: ({ image }) => z.object({ cover: image() })`) to validate a frontmatter field as an actual processable image reference, replacing the `image` export `astro:content` removed in Astro 3.0. | [Schemas & References](/astro/en/content-and-data/schemas-and-references/) |
+| integration | A plugin, listed in `astro.config.mjs`'s `integrations: [...]`, that hooks into Astro's build/dev lifecycle to add a UI framework (`@astrojs/preact`), a feature (`@astrojs/sitemap`), or other build-time behavior. | [Config & Integrations](/astro/en/tooling-and-production/config-and-integrations/) |
+| `is:global` | Opts a `<style>` block out of Astro's automatic scoping, applying its rules globally to the whole page instead of only to that component's own markup. | [Styles & Scripts](/astro/en/components/styles-and-scripts/) |
+| `is:inline` | Tells Astro to skip processing and bundling a `<script>` or `<style>` tag entirely, outputting it byte-for-byte inline in the HTML — no import resolution, no TypeScript transform, no deduplication. | [Styles & Scripts](/astro/en/components/styles-and-scripts/) |
+| island | A single interactive component embedded in an otherwise static page — the unit of Astro's islands architecture, where JavaScript ships and hydrates only for the components explicitly marked interactive, not for the page as a whole. | [Why Astro & Islands](/astro/en/foundations/why-astro-and-islands/) |
+
+## L–M
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| `layout` prop | An `<Image>`/`<Picture>` prop (`constrained`, `fixed`, `full-width`, …) that auto-generates the `widths`, `sizes`, and `srcset` a given responsive behavior needs, instead of specifying them by hand. | [Images & Assets](/astro/en/rendering-and-performance/images-and-assets/) |
+| loader (glob) | The built-in `glob()` loader (from `astro/loaders`) that matches a file pattern under a base directory (`glob({ pattern: '**/*.md', base: './src/data/blog' })`) — the usual choice for a Markdown/MDX collection. | [Content Collections](/astro/en/content-and-data/content-collections/) |
+| loader (file) | The built-in `file()` loader that loads one entire local file — typically a single JSON or YAML file containing an array of entries — as a whole collection in one pass. | [Content Collections](/astro/en/content-and-data/content-collections/) |
+| loader (live) | A `LiveLoader` used with `defineLiveCollection()` to query fresh data from a remote source at *runtime*, rather than baking entries in at build time the way `glob()`/`file()` do. | [Data Fetching](/astro/en/content-and-data/data-fetching/) |
+| middleware | Code exported as `onRequest` from `src/middleware.ts`, run on every matching request before the route handler; can read/modify `context.locals` and the response, and multiple middleware functions are composed with `sequence()`. | [Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/) |
+
+## O–P
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| on-demand rendering | Rendering a route per-request at runtime instead of at build time — the default for every route under `output: 'server'`, and opt-in per route under `output: 'static'` via `export const prerender = false` (which then requires an adapter). | [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) |
+| output: static | The default output mode: every route without `prerender = false` is built to static HTML files at build time, deployable to any static host with no server runtime needed. | [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) |
+| output: server | Every route renders on-demand at request time by default (any route can still opt back into `prerender = true`); requires an adapter for whichever platform the server actually runs on. | [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) |
+| `paginate()` | A helper passed into `getStaticPaths()`'s context that splits an array of data across pages, returning a `{ params, props: { page } }` entry per page — `page.data`, `page.currentPage`, `page.url.next`, and similar are read from the resulting `page` prop. | [Dynamic Routes](/astro/en/content-and-data/dynamic-routes/) |
+| `<Picture>` | The `astro:assets` component that outputs a `<picture>` element with multiple `<source>` formats and sizes, for art-direction or format-fallback needs beyond what a single `<Image>` covers. | [Images & Assets](/astro/en/rendering-and-performance/images-and-assets/) |
+| prefetch | Astro's built-in link-prefetching (configured via the top-level `prefetch` config key, default strategy `hover`) that fetches a linked page's HTML ahead of a real navigation to make it feel instant. | [View Transitions](/astro/en/rendering-and-performance/view-transitions/) |
+| prerender | `export const prerender = true` (in `output: 'server'`) or `= false` (in `output: 'static'`) flips one route's rendering mode against its output-level default — the per-route override for when most of a site should be static (or on-demand) but one route needs the opposite. | [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) |
+
+## R
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| `reference()` | A schema helper that declares a field points to an entry in another collection (stored as an id/collection pointer rather than inline data), resolved later with `getEntry()` on the reference. | [Schemas & References](/astro/en/content-and-data/schemas-and-references/) |
+| `render()` | The `astro:content` function that renders a collection entry's Markdown/MDX body to a `<Content />` component plus a `headings` array and any remark plugin frontmatter, for actually displaying an entry's body in a page. | [Schemas & References](/astro/en/content-and-data/schemas-and-references/) |
+| rest param (`[...slug]`) | A route segment that matches a variable number of path segments, including zero — `src/pages/[...slug].astro` matches `/a`, `/a/b`, and even `/` itself, with `params.slug` coming back as `undefined` for that empty case in `getStaticPaths()`. | [Dynamic Routes](/astro/en/content-and-data/dynamic-routes/) |
+| Rolldown | The Rust-based bundler Astro 7's Vite (Vite 8) uses for production bundling in place of esbuild/Rollup — part of the wider Vite/Rolldown migration, aimed at faster builds. | [Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/) |
+| `routeRules` / `cache` | Top-level `astro.config.mjs` keys, promoted from `experimental` to stable in Astro 7.0, that configure a response cache provider (`cache.provider`) and per-route caching rules (`routeRules`, e.g. `maxAge`/`swr`) for on-demand rendered routes. | [Caching & Edge](/astro/en/rendering-and-performance/caching-and-edge/) |
+| Rust compiler | Astro 7.0 replaced the previous Go-based `.astro` compiler with a new Rust-based one: faster, but stricter — unclosed tags are now real compile errors, and invalid HTML is no longer silently auto-corrected the way the old compiler did. | [Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/) |
+
+## S
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| schema / Zod | A content collection's data shape, declared with a Zod object (`z.object({...})`, from `astro/zod`) passed to `defineCollection()` — entries that don't match it fail with a typed validation error at build or dev time, before ever reaching a page. | [Schemas & References](/astro/en/content-and-data/schemas-and-references/) |
+| scoped styles | A `<style>` block inside an `.astro` file is scoped to that component by default (an attribute-based hash, applied automatically) unless it's marked `is:global`. | [Styles & Scripts](/astro/en/components/styles-and-scripts/) |
+| `security.csp` | The top-level `security.csp` config option that auto-generates a Content-Security-Policy with real per-request nonces for Astro's own inline scripts/styles, stable since Astro 6.0. | [SSR & Adapters](/astro/en/server-side/ssr-and-adapters/) |
+| `sequence()` | The `astro:middleware` helper that composes several `onRequest` middleware functions into one, running each in the order given and requiring every one of them to call `next()` to hand off to the next. | [Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/) |
+| server island | A single component opted into on-demand server rendering (via `server:defer`) while the rest of the page around it stays static and cacheable — the mechanism for personalized or server-only content inside an otherwise prerendered page. | [Server Islands](/astro/en/islands/server-islands/) |
+| `server:defer` | The directive that turns a component into a server island: instead of rendering inline with the rest of the page, it's streamed in on demand, after the surrounding static HTML has already been sent. | [Server Islands](/astro/en/islands/server-islands/) |
+| sessions | `astro:session` — server-side session storage, backed by a cookie plus a session driver, read and written through `context.session` in pages, endpoints, actions, and middleware; stable since Astro 5.7. | [Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/) |
+| `set:html` | A directive that injects a raw HTML string into an element without escaping it (`<div set:html={rawHtml} />`) — the same XSS risk as `innerHTML` if the string isn't trusted or sanitized first. | [Astro Syntax Deep Dive](/astro/en/components/astro-syntax-deep/) |
+| slot | Astro's content-projection mechanism: a default `<slot />` renders whatever markup a parent nests directly inside a component's tags, `<slot name="x">` renders content explicitly tagged `slot="x"`, and markup placed inside `<slot>…</slot>` is fallback content shown only when the parent supplies nothing for that slot. | [Slots & Composition](/astro/en/components/slots-and-composition/) |
+| `src/fetch.ts` | A reserved file path Astro will use in a future version for a custom global-`fetch` override — a name to avoid giving to some other module today. | [Config & Integrations](/astro/en/tooling-and-production/config-and-integrations/) |
+| Starlight | The official Astro documentation-site framework (`@astrojs/starlight`) — this course's own site is built with it, providing the sidebar, i18n locales, and search out of the box. | [Deployment & Ecosystem](/astro/en/tooling-and-production/deployment-and-ecosystem/) |
+| Sätteri | Astro 7's native Markdown-processing pipeline, the default renderer for `.md`/`.mdx` files, replacing the previous remark/rehype pipeline — `@astrojs/markdown-remark` is no longer installed by default. | [Markdown & MDX](/astro/en/components/markdown-and-mdx/) |
+
+## T–V
+
+| Term | Meaning | Lesson |
+|------|---------|--------|
+| template | Everything below an `.astro` file's frontmatter fence — the HTML-like markup, with embedded expressions, that Astro's compiler turns into the component's rendered output. | [The Component Model](/astro/en/foundations/the-component-model/) |
+| `transition:persist` | A directive placed on an element or island that keeps its live DOM node — and, on a framework island, its internal state — across a `<ClientRouter />` navigation, instead of unmounting and remounting a fresh instance. | [View Transitions](/astro/en/rendering-and-performance/view-transitions/) |
+| view transitions | The feature that animates between full-page navigations in an otherwise multi-page app, built on the browser's View Transitions API where supported (and degrading gracefully where not), orchestrated by `<ClientRouter />`. | [View Transitions](/astro/en/rendering-and-performance/view-transitions/) |
+| `ViewTransitions` (renamed) | The earlier name for the same component now exported as `ClientRouter` from `astro:transitions` — renamed in Astro v5; code or tutorials still importing `ViewTransitions` are referencing the pre-rename API. | [View Transitions](/astro/en/rendering-and-performance/view-transitions/) |
+| Vite | The dev server and bundler Astro is built on top of — Astro's own dev server, hot module replacement, and production build all delegate to Vite underneath. | [Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/) |
+
+<ProgressTracker client:visible id="glossary" />

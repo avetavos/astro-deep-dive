@@ -40,6 +40,7 @@ export default defineConfig({
         { label: 'Server-Side Astro', items: [{ autogenerate: { directory: 'server-side' } }] },
         { label: 'Rendering, Performance & UX', items: [{ autogenerate: { directory: 'rendering-and-performance' } }] },
         { label: 'Tooling, Integrations & Production', items: [{ autogenerate: { directory: 'tooling-and-production' } }] },
+        { label: 'Glossary', translations: { th: 'อภิธานศัพท์' }, link: 'glossary' },
       ],
       }), preact()],
 });

@@ -1,0 +1,136 @@
+---
+title: อภิธานศัพท์
+description: 'ศัพท์ทุกคำที่คอร์สนี้ใช้ รวมไว้ที่เดียว — island กับ client directive, server island, content layer ที่มี loader และ schema แบบ Zod, Actions, ClientRouter สำหรับ view transition ไปจนถึง toolchain ของ Astro 7 (Rust compiler, Rolldown, Sätteri)'
+sidebar:
+  order: 99
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+ศัพท์ของ Astro เน้นที่ island เป็นหลัก — หน้าเว็บ render ออกมาเป็น static HTML เป็นค่า default และมีแค่ส่วนที่เราติด client directive ไว้ (หรือเลือกให้เป็น server island) เท่านั้นที่จะส่ง หรือรัน JavaScript จริง ๆ ทับซ้อนกันอยู่บนนี้ก็คือ content layer (collection ที่สร้างจาก loader แล้ว validate ด้วย schema แบบ Zod), Actions สำหรับเรียก server แบบ type-safe และ `<ClientRouter />` สำหรับ navigate แบบมี animation ระหว่างหน้าเดิม เวลาอ่านบทเรียนแล้วเจอคำที่ไม่คุ้น หรือไม่แน่ใจว่ายังใช้ได้อยู่กับ Astro 7.3.5 ไหม ให้กลับมาดูที่นี่
+
+## A
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| action / `defineAction()` | function ฝั่ง server แบบ type-safe ของ Astro: ประกาศด้วย `defineAction({ input, handler })` ใน `src/actions/` แล้วเรียกจาก client ผ่าน object `actions` ที่ generate ให้ พร้อม validate ด้วย Zod อัตโนมัติและได้ผลลัพธ์ที่มี type — ไม่ต้องเขียน `fetch()`/URL/JSON เองด้วยมือ | [Actions](/astro/th/server-side/actions/) |
+| `ActionError` | คลาส error ที่ handler ของ action throw ออกมาเพื่อบอกความล้มเหลวที่เจาะจง (`throw new ActionError({ code: 'UNAUTHORIZED', message: '...' })`) ฝั่งที่เรียกจะแยกแยะ `error` ที่ catch ได้ด้วย `error instanceof ActionError` แล้วอ่าน `error.code` | [Actions](/astro/th/server-side/actions/) |
+| adapter | plugin (`@astrojs/node`, `-vercel`, `-cloudflare`, `-netlify`, …) ที่ทำให้ `output: 'server'` — หรือ route ไหนก็ตามที่ `prerender = false` — รันบน deploy target จริง ๆ ได้ ต้องมีทันทีที่มี route ที่ render แบบ on-demand | [SSR & Adapters](/astro/th/server-side/ssr-and-adapters/) |
+| `astro add` | คำสั่ง CLI (`npx astro add <integration>`) ที่ลง package ของ integration แล้วต่อสายเข้า array `integrations` ใน `astro.config.mjs` ให้อัตโนมัติ แทนที่จะต้องแก้ config เอง | [Config & Integrations](/astro/th/tooling-and-production/config-and-integrations/) |
+| `astro check` | คำสั่ง CLI (ใช้ `@astrojs/check` + TypeScript ข้างใน) ที่ type-check ไฟล์ `.astro` แบบครบวงจร รวมถึง expression ข้างใน template ด้วย จับ prop type ที่ผิดที่ `tsc` ธรรมดารันแค่ frontmatter อย่างเดียวจะพลาดไปได้ | [Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/) |
+| `astro sync` | สร้าง (หรือสร้างใหม่) type ของ TypeScript สำหรับ content collection และ virtual module `astro:` อื่น ๆ ลงใน `.astro/` type พวกนี้ regenerate ตอน `astro dev`/`astro build` อยู่แล้ว แต่ `sync` เฉย ๆ คือทางลัดที่เร็วกว่าทันทีหลังแก้ schema | [TypeScript & Content Types](/astro/th/tooling-and-production/typescript-and-content-types/) |
+| `astro-island` | custom element ที่ client runtime ของ Astro ห่อรอบ component ที่ hydrate แล้วใน HTML ที่ render ออกมา พกพา client directive, prop ที่ serialize แล้ว และข้อมูล renderer ที่ต้องใช้ hydrate มันในเบราว์เซอร์ | [Client Directives](/astro/th/islands/client-directives/) |
+| `astro:env` | module สำหรับ environment variable แบบมี type: ประกาศตัวแปรครั้งเดียวใน `env.schema` ของ `astro.config.mjs` แล้ว import จาก `astro:env/client` หรือ `astro:env/server` ได้ type จริง ๆ แทนที่จะเป็น string ไม่มี type แบบ `process.env` | [Config & Integrations](/astro/th/tooling-and-production/config-and-integrations/) |
+| `Astro.glob()` (removed) | วิธีเดิมในการ import ไฟล์ในเครื่องหลายไฟล์แบบ eager จาก frontmatter (`await Astro.glob('./posts/*.md')`) เอาออกไปใน Astro v5 แทนที่ด้วย `import.meta.glob(pattern, { eager: true })` ของ Vite เอง ซึ่งไม่คืน `Promise` และไม่ต้องใช้ `await` | [Data Fetching](/astro/th/content-and-data/data-fetching/) |
+| `@astrojs/db` (removed) | integration ฐานข้อมูลแบบ built-in ของ Astro ที่ใช้ Drizzle เบื้องหลัง ถูกเอาออกทั้งหมดใน Astro 7.0 โดยไม่มี package ทดแทนที่ทีมหลักดูแลต่อ — ให้ย้ายไปใช้ `node:sqlite` ของ Node ที่ built-in, Drizzle ORM ตรง ๆ หรือ library ฐานข้อมูลอื่น | [Deployment & Ecosystem](/astro/th/tooling-and-production/deployment-and-ecosystem/) |
+
+## C
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| `class:list` | attribute directive ที่รับ array ของ string, object และ array ซ้อนกันได้ (`class:list={['box', { red: isRed }]}`) แล้ว merge ออกมาเป็น string `class` เดียว — เป็น helper แบบ built-in ของ Astro ที่เทียบเท่า `clsx` ยอดนิยม | [Styles & Scripts](/astro/th/components/styles-and-scripts/) |
+| client directive | กลุ่ม attribute `client:*` (`client:load`, `client:idle`, `client:visible`, `client:media`, `client:only`) ที่เลือกให้ component ของ framework ส่ง JavaScript และ hydrate ในเบราว์เซอร์ — ถ้าไม่ใส่ component นั้นจะ render เป็น static HTML เฉย ๆ | [Client Directives](/astro/th/islands/client-directives/) |
+| `client:load` | hydrate JavaScript ของ component ทันทีที่หน้าโหลดเสร็จ — directive สำหรับสิ่งที่ต้อง interactive ทันที (nav menu, ปุ่มเปิด modal) | [Client Directives](/astro/th/islands/client-directives/) |
+| `client:idle` | hydrate หลังจากหน้าโหลดครั้งแรกเสร็จและ `requestIdleCallback` ของเบราว์เซอร์ทำงานแล้ว ถ้าเบราว์เซอร์ไม่มี `requestIdleCallback` ก็จะ fallback ไปใช้ event `load` แทน — เหมาะกับสิ่งที่ interactive ได้แต่ไม่เร่งด่วน | [Client Directives](/astro/th/islands/client-directives/) |
+| `client:visible` | hydrate ทันทีที่ component เลื่อนเข้ามาอยู่ใน viewport (ผ่าน `IntersectionObserver`) — ตัวเลือก default สำหรับอะไรก็ตามที่อยู่ใต้ fold ที่ไม่จำเป็นต้อง interactive ก่อนที่ผู้ชมจะเห็นมัน | [Client Directives](/astro/th/islands/client-directives/) |
+| `client:media` | hydrate ก็ต่อเมื่อ CSS media query ที่กำหนดตรงกัน (`client:media="(max-width: 640px)"`) — สำหรับ component ที่ interactive หรือมีอยู่จริง เฉพาะบางขนาด viewport เท่านั้น | [Client Directives](/astro/th/islands/client-directives/) |
+| `client:only` | ข้าม server render ไปเลย แล้ว render เฉพาะฝั่งเบราว์เซอร์เท่านั้น ต้องระบุชื่อ framework เป็น string ด้วย (`client:only="svelte"`) เพราะ Astro ไม่มี markup ที่ render จาก server ให้รู้ว่าต้อง hydrate ด้วย renderer ตัวไหน | [Client Directives](/astro/th/islands/client-directives/) |
+| `ClientRouter` | component จาก `astro:transitions` (`<ClientRouter />` วางใน `<head>`) ที่ดักการ navigate ไปหน้าเดิม (same-origin) สลับ DOM ให้ แล้วขับเคลื่อน animation ของ transition — เป็นชื่อ export ปัจจุบันของ router สำหรับ view transitions ของ Astro | [View Transitions](/astro/th/rendering-and-performance/view-transitions/) |
+| component | ไฟล์ `.astro`: component script (ส่วน frontmatter ที่ล้อมด้วย fence) ตามด้วย template — หน่วยพื้นฐานของ Astro ใช้เดี่ยว ๆ ได้หรือประกอบเป็นหน้าก็ได้ | [The Component Model](/astro/th/foundations/the-component-model/) |
+| content collection | ชุดข้อมูล content แบบ type-safe ที่ config ไว้ใน `src/content.config.ts` ด้วย loader และ schema ทางเลือก แล้ว query ผ่าน `getCollection()`/`getEntry()` ของ `astro:content` ได้ผลลัพธ์มี type ครบ | [Content Collections](/astro/th/content-and-data/content-collections/) |
+| content layer | สถาปัตยกรรมเบื้องหลัง content collection ตั้งแต่ Astro v5: collection ถูกกำหนดด้วย *loader* แทนที่จะเป็น directory ตายตัวอย่าง `src/content/<name>/` รวม Markdown/MDX/JSON ในเครื่องกับข้อมูลจากระยะไกลหรือแบบ live ให้อยู่ใต้ API `getCollection()` เดียวกัน | [Content Collections](/astro/th/content-and-data/content-collections/) |
+| Container API | `experimental_AstroContainer` (จาก `astro/container`) — render component ของ Astro หรือ framework ตัวเดียวออกมาเป็น string HTML นอกกระบวนการ build หน้าทั้งหน้า เป็นเครื่องมือที่ test fence ของคอร์สนี้เองใช้ตรวจสอบ markup ที่ render ออกมา | [Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/) |
+| `context.locals` | object ต่อ request ที่ middleware เติมค่าให้ (`context.locals.user = ...`) ให้โค้ดที่เทียบเท่า `load`, action และ endpoint ที่อยู่ถัดไปอ่านได้ ตั้งแต่ Astro v5 การเพิ่มค่าเข้าไปต้องใช้ `Object.assign(context.locals, {...})` แทนที่จะเขียนทับทั้ง object | [Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/) |
+
+## D–E
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| `define:vars` | ส่งตัวแปรจาก frontmatter ที่ serialize เป็น JSON ได้เข้าไปในแท็ก `<style>` หรือ `<script>` (`<style define:vars={{ color }}>` อ่านค่าด้วย `var(--color)`) บนแท็ก `<script>` การใช้ `define:vars` จะบังคับให้เป็น `is:inline` อัตโนมัติ | [Styles & Scripts](/astro/th/components/styles-and-scripts/) |
+| `defineCollection()` | function ของ `astro:content` ที่จับคู่ loader กับ schema ทางเลือกใน `src/content.config.ts` เพื่อลงทะเบียน collection แบบ build-time หนึ่งตัว export ออกมาผ่าน object `collections` ของไฟล์นั้น | [Content Collections](/astro/th/content-and-data/content-collections/) |
+| `defineLiveCollection()` | เทียบเท่า `defineCollection()` สำหรับไฟล์ `src/live.config.ts` ของ live collection: จับคู่ `LiveLoader` กับ schema ทางเลือกสำหรับ query แบบ runtime ผ่าน `getLiveCollection()` เปิดตัวใน Astro 7.0 | [Data Fetching](/astro/th/content-and-data/data-fetching/) |
+| dynamic route | route ที่ชื่อไฟล์มี segment ในวงเล็บเหลี่ยม อย่าง `[slug].astro` โดย parameter จะถูกเติมเข้าไป ไม่ว่าจะเป็นแบบต่อ path ตอน build time (ผ่าน `getStaticPaths()`) หรือแบบต่อ request ตอน runtime ภายใต้ on-demand rendering | [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/) |
+| endpoint / API route | ไฟล์ `src/pages/*.ts` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แล้วคืน `Response` ตรง ๆ — เป็นทางเลือกระดับล่างกว่าที่ไม่ผูกกับ framework ใดโดยเฉพาะ สำหรับสร้าง API ที่ client ที่ไม่ใช่ Astro ก็เรียกได้ แทนที่จะใช้ Actions | [Endpoints & API Routes](/astro/th/server-side/endpoints-and-api-routes/) |
+| `envField()` | helper ที่ import จาก `astro/config` ใช้ข้างใน `env.schema` เพื่อประกาศ type, context (`'client'`/`'server'`) และระดับการเข้าถึง (`'public'`/`'secret'`) ของตัวแปร environment แต่ละตัว เช่น `envField.string({ context: 'server', access: 'secret' })` | [Config & Integrations](/astro/th/tooling-and-production/config-and-integrations/) |
+
+## F–H
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| frontmatter | block ที่ล้อมด้วย `---`…`---` อยู่บนสุดของไฟล์ `.astro`: เป็น JavaScript/TypeScript ธรรมดาที่รันตอน build หรือ request บนฝั่ง server เท่านั้น ไม่ถูกส่งไปให้ client เลย | [The Component Model](/astro/th/foundations/the-component-model/) |
+| `getStaticPaths()` | export ออกมาจาก dynamic route ใน output ที่ prerender ไว้ คืน list ของ `{ params, props }` ที่ Astro ต้อง pre-render — จำเป็นสำหรับ dynamic route แบบ static (ไม่ใช่ on-demand) ทุกตัว เพราะไม่งั้น Astro จะไม่รู้ว่าต้อง build path ไหนบ้าง | [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/) |
+| hybrid (legacy) | output mode ก่อน v5 ที่ให้แต่ละหน้าเลือก SSR ได้เองในขณะที่ที่เหลือของเว็บยังเป็น static ถูกเอาออกในฐานะ setting แยกใน Astro v5 — พฤติกรรมของมันถูกรวมเข้ากับ `output: 'static'` เป็นค่า default แล้ว ดังนั้น `output: 'hybrid'` วันนี้เป็นค่าที่ deprecate และไม่ถูกรู้จักอีกต่อไป | [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/) |
+| hydration | ขั้นตอนที่ client ผูก event handler และความ interactive เข้ากับ HTML ที่ server render มาแล้วสำหรับ island หนึ่งตัว แทนที่จะ render มันใหม่ตั้งแต่ต้น — ทุกอย่างนอก island ที่ hydrate แล้วยังคงเป็น static markup ธรรมดา | [Client Directives](/astro/th/islands/client-directives/) |
+
+## I
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| `<Image>` | component ของ `astro:assets` ที่ output `<img>` ที่ optimize แล้ว มี `width`/`height` จริง แปลง format ได้ และ (ถ้าใส่ `widths`/`layout`) สร้าง `srcset` แบบ responsive ให้ — ใช้ได้ทั้งไฟล์ในเครื่องหรือแหล่งข้อมูล remote ที่ config ไว้ | [Images & Assets](/astro/th/rendering-and-performance/images-and-assets/) |
+| `image()` (schema helper) | function ที่ schema callback ของ content collection ได้รับ (`schema: ({ image }) => z.object({ cover: image() })`) เพื่อ validate field ใน frontmatter ว่าเป็น image reference ที่ประมวลผลได้จริง มาแทนที่ export `image` ของ `astro:content` ที่ถูกเอาออกใน Astro 3.0 | [Schemas & References](/astro/th/content-and-data/schemas-and-references/) |
+| integration | plugin ที่ใส่ไว้ใน `integrations: [...]` ของ `astro.config.mjs` เกี่ยวเข้ากับ lifecycle ตอน build/dev ของ Astro เพื่อเพิ่ม UI framework (`@astrojs/preact`), feature (`@astrojs/sitemap`) หรือพฤติกรรมตอน build อื่น ๆ | [Config & Integrations](/astro/th/tooling-and-production/config-and-integrations/) |
+| `is:global` | ทำให้ block `<style>` หลุดออกจากการ scope อัตโนมัติของ Astro แล้ว apply กฎ CSS ของมันแบบ global ให้ทั้งหน้าแทนที่จะจำกัดแค่ markup ของ component นั้น | [Styles & Scripts](/astro/th/components/styles-and-scripts/) |
+| `is:inline` | บอกให้ Astro ข้ามการประมวลผลและ bundle แท็ก `<script>` หรือ `<style>` นั้นไปเลย output ออกมาแบบ inline ตรง ๆ ใน HTML ทีละ byte — ไม่มีการ resolve import, ไม่แปลง TypeScript, ไม่ deduplicate | [Styles & Scripts](/astro/th/components/styles-and-scripts/) |
+| island | component ที่ interactive ตัวเดียวฝังอยู่ในหน้าที่ส่วนใหญ่เป็น static — หน่วยของ islands architecture ของ Astro ที่ JavaScript จะถูกส่งและ hydrate เฉพาะ component ที่ระบุไว้ว่า interactive เท่านั้น ไม่ใช่ทั้งหน้า | [Why Astro & Islands](/astro/th/foundations/why-astro-and-islands/) |
+
+## L–M
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| `layout` prop | prop ของ `<Image>`/`<Picture>` (`constrained`, `fixed`, `full-width`, …) ที่สร้าง `widths`, `sizes` และ `srcset` ที่พฤติกรรม responsive นั้นต้องการให้อัตโนมัติ แทนที่จะกำหนดเองทีละตัว | [Images & Assets](/astro/th/rendering-and-performance/images-and-assets/) |
+| loader (glob) | loader แบบ built-in ชื่อ `glob()` (จาก `astro/loaders`) ที่ match pattern ของไฟล์ใต้ base directory ที่กำหนด (`glob({ pattern: '**/*.md', base: './src/data/blog' })`) — ตัวเลือกปกติสำหรับ collection แบบ Markdown/MDX | [Content Collections](/astro/th/content-and-data/content-collections/) |
+| loader (file) | loader แบบ built-in ชื่อ `file()` ที่โหลดไฟล์ในเครื่องทั้งไฟล์ — ปกติเป็นไฟล์ JSON หรือ YAML ไฟล์เดียวที่มี array ของ entry อยู่ข้างใน — ให้กลายเป็น collection ทั้งก้อนในครั้งเดียว | [Content Collections](/astro/th/content-and-data/content-collections/) |
+| loader (live) | `LiveLoader` ที่ใช้คู่กับ `defineLiveCollection()` เพื่อ query ข้อมูลสด ๆ จากแหล่งข้อมูล remote ตอน *runtime* แทนที่จะอบข้อมูลเข้าไปตอน build time แบบที่ `glob()`/`file()` ทำ | [Data Fetching](/astro/th/content-and-data/data-fetching/) |
+| middleware | โค้ดที่ export เป็น `onRequest` จาก `src/middleware.ts` รันทุก request ที่ match ก่อนถึง route handler อ่าน/แก้ `context.locals` และ response ได้ และ middleware หลายตัวจะประกอบเข้าด้วยกันผ่าน `sequence()` | [Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/) |
+
+## O–P
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| on-demand rendering | การ render route ต่อ request ตอน runtime แทนที่จะ render ตอน build time — เป็นค่า default ของทุก route ภายใต้ `output: 'server'` และเลือกใช้เฉพาะ route ได้ภายใต้ `output: 'static'` ผ่าน `export const prerender = false` (ซึ่งต้องมี adapter ตามมาด้วย) | [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/) |
+| output: static | output mode แบบ default: ทุก route ที่ไม่ได้ตั้ง `prerender = false` จะถูก build เป็นไฟล์ static HTML ตอน build time deploy ไปที่ static host ไหนก็ได้โดยไม่ต้องมี server runtime | [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/) |
+| output: server | ทุก route render แบบ on-demand ตอน request เป็นค่า default (แต่ละ route ก็ยังเลือกกลับไปเป็น `prerender = true` ได้) ต้องมี adapter ของ platform ที่ server จะรันจริง ๆ | [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/) |
+| `paginate()` | helper ที่ส่งเข้าไปใน context ของ `getStaticPaths()` แบ่งข้อมูลใน array ออกเป็นหน้า ๆ คืน entry แบบ `{ params, props: { page } }` ต่อหนึ่งหน้า — `page.data`, `page.currentPage`, `page.url.next` และค่าคล้ายกันอ่านได้จาก prop `page` ที่ได้กลับมา | [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/) |
+| `<Picture>` | component ของ `astro:assets` ที่ output element `<picture>` พร้อม `<source>` หลายแบบทั้ง format และขนาด สำหรับความต้องการแบบ art-direction หรือ format-fallback ที่มากกว่าที่ `<Image>` เดี่ยว ๆ ครอบคลุมได้ | [Images & Assets](/astro/th/rendering-and-performance/images-and-assets/) |
+| prefetch | การ prefetch link แบบ built-in ของ Astro (config ผ่าน key `prefetch` ระดับบนสุด กลยุทธ์ default คือ `hover`) ที่ดึง HTML ของหน้าที่ link ไว้มาล่วงหน้าก่อนจะ navigate จริง ให้รู้สึกเหมือนโหลดทันที | [View Transitions](/astro/th/rendering-and-performance/view-transitions/) |
+| prerender | `export const prerender = true` (ใน `output: 'server'`) หรือ `= false` (ใน `output: 'static'`) พลิกโหมด render ของ route นั้นให้ตรงข้ามกับค่า default ระดับ output — เป็น override รายตัวสำหรับตอนที่เว็บส่วนใหญ่เป็น static (หรือ on-demand) แต่มี route เดียวที่ต้องการตรงข้าม | [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/) |
+
+## R
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| `reference()` | schema helper ที่ประกาศว่า field หนึ่งชี้ไปยัง entry ใน collection อื่น (เก็บเป็น pointer แบบ id/collection แทนที่จะเป็นข้อมูล inline) resolve ทีหลังด้วย `getEntry()` บน reference นั้น | [Schemas & References](/astro/th/content-and-data/schemas-and-references/) |
+| `render()` | function ของ `astro:content` ที่ render เนื้อหา Markdown/MDX ของ entry ใน collection ออกมาเป็น component `<Content />` พร้อม array `headings` และ frontmatter จาก remark plugin ใด ๆ สำหรับเอาไปแสดงเนื้อหาของ entry ในหน้าจริง ๆ | [Schemas & References](/astro/th/content-and-data/schemas-and-references/) |
+| rest param (`[...slug]`) | segment ของ route ที่ match จำนวน segment ของ path ได้หลายแบบ รวมถึงศูนย์ตัวด้วย — `src/pages/[...slug].astro` match ได้ทั้ง `/a`, `/a/b` ไปจนถึง `/` เอง โดย `params.slug` จะได้ค่า `undefined` กลับมาสำหรับกรณีว่างนั้นใน `getStaticPaths()` | [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/) |
+| Rolldown | bundler ที่เขียนด้วย Rust ที่ Vite ของ Astro 7 (Vite 8) ใช้สำหรับ bundle ตอน production แทน esbuild/Rollup — เป็นส่วนหนึ่งของการย้ายไป Vite/Rolldown ครั้งใหญ่ เพื่อให้ build เร็วขึ้น | [Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/) |
+| `routeRules` / `cache` | key ระดับบนสุดใน `astro.config.mjs` ที่ถูกเลื่อนสถานะจาก `experimental` มาเป็น stable ใน Astro 7.0 ใช้ config cache provider สำหรับ response (`cache.provider`) และกฎ cache รายเส้นทาง (`routeRules` เช่น `maxAge`/`swr`) สำหรับ route ที่ render แบบ on-demand | [Caching & Edge](/astro/th/rendering-and-performance/caching-and-edge/) |
+| Rust compiler | Astro 7.0 เปลี่ยน compiler ของ `.astro` จากที่เขียนด้วย Go ตัวเดิม มาเป็นตัวใหม่ที่เขียนด้วย Rust: เร็วขึ้น แต่ก็เข้มงวดขึ้นด้วย — แท็กที่ไม่ปิดกลายเป็น compile error จริง ๆ แล้ว และ HTML ที่ผิดจะไม่ถูกแก้ให้เงียบ ๆ แบบที่ compiler ตัวเก่าเคยทำ | [Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/) |
+
+## S
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| schema / Zod | รูปร่างข้อมูลของ content collection ประกาศด้วย object ของ Zod (`z.object({...})` จาก `astro/zod`) ส่งเข้า `defineCollection()` — entry ที่ไม่ตรงกับมันจะพัง validate แบบมี type error ตอน build หรือ dev ก่อนที่จะไปถึงหน้าเว็บเสียอีก | [Schemas & References](/astro/th/content-and-data/schemas-and-references/) |
+| scoped styles | block `<style>` ข้างในไฟล์ `.astro` ถูก scope ให้ component นั้นเป็น default (ใส่ hash แบบ attribute ให้อัตโนมัติ) เว้นแต่จะติด `is:global` ไว้ | [Styles & Scripts](/astro/th/components/styles-and-scripts/) |
+| `security.csp` | config option ระดับบนสุดชื่อ `security.csp` ที่สร้าง Content-Security-Policy พร้อม nonce จริง ๆ ต่อ request ให้ inline script/style ของ Astro เองอัตโนมัติ stable ตั้งแต่ Astro 6.0 | [SSR & Adapters](/astro/th/server-side/ssr-and-adapters/) |
+| `sequence()` | helper ของ `astro:middleware` ที่ประกอบ middleware แบบ `onRequest` หลายตัวเข้าด้วยกัน รันตามลำดับที่ให้มา และแต่ละตัวต้องเรียก `next()` เพื่อส่งต่อให้ตัวถัดไป | [Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/) |
+| server island | component ตัวเดียวที่ถูกเลือกให้ render บน server แบบ on-demand (ผ่าน `server:defer`) ในขณะที่ส่วนที่เหลือของหน้ารอบ ๆ มันยังเป็น static และ cache ได้ — เป็นกลไกสำหรับเนื้อหาที่ personalize หรือต้องมาจาก server เท่านั้น ในหน้าที่ prerender ไว้ส่วนใหญ่ | [Server Islands](/astro/th/islands/server-islands/) |
+| `server:defer` | directive ที่เปลี่ยน component ให้กลายเป็น server island: แทนที่จะ render รวมไปกับส่วนอื่นของหน้า มันจะถูก stream เข้ามาแบบ on-demand หลังจาก static HTML รอบ ๆ ถูกส่งออกไปแล้ว | [Server Islands](/astro/th/islands/server-islands/) |
+| sessions | `astro:session` — ที่เก็บ session ฝั่ง server หนุนหลังด้วย cookie บวก session driver อ่านและเขียนผ่าน `context.session` ใน page, endpoint, action และ middleware stable ตั้งแต่ Astro 5.7 | [Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/) |
+| `set:html` | directive ที่ฉีด string HTML ดิบเข้าไปใน element โดยไม่ escape (`<div set:html={rawHtml} />`) — เสี่ยง XSS เหมือน `innerHTML` ทุกประการ ถ้า string นั้นไม่ได้ผ่านการเชื่อถือหรือ sanitize มาก่อน | [Astro Syntax Deep Dive](/astro/th/components/astro-syntax-deep/) |
+| slot | กลไกส่ง markup เข้า component ของ Astro: `<slot />` เฉย ๆ render markup อะไรก็ตามที่ parent วางซ้อนไว้ข้างในแท็กของ component ตรง ๆ, `<slot name="x">` render เนื้อหาที่ติด `slot="x"` ไว้ชัดเจน ส่วน markup ที่วางไว้ข้างใน `<slot>…</slot>` คือ fallback ที่โชว์เฉพาะตอนที่ parent ไม่ได้ส่งอะไรมาให้ slot นั้นเลย | [Slots & Composition](/astro/th/components/slots-and-composition/) |
+| `src/fetch.ts` | path ของไฟล์ที่ Astro กันไว้ใช้ในเวอร์ชันอนาคตสำหรับ override `fetch` แบบ global เอง — เป็นชื่อที่ควรเลี่ยงไม่ให้ module อื่นใช้วันนี้ | [Config & Integrations](/astro/th/tooling-and-production/config-and-integrations/) |
+| Starlight | framework สำหรับทำเว็บเอกสารอย่างเป็นทางการของ Astro (`@astrojs/starlight`) — เว็บของคอร์สนี้เองก็ build ด้วยตัวนี้ ให้ sidebar, locale หลายภาษา และ search มาให้พร้อมใช้ | [Deployment & Ecosystem](/astro/th/tooling-and-production/deployment-and-ecosystem/) |
+| Sätteri | pipeline ประมวลผล Markdown แบบ native ของ Astro 7 เป็น renderer default สำหรับไฟล์ `.md`/`.mdx` มาแทน pipeline remark/rehype เดิม — `@astrojs/markdown-remark` ไม่ได้ถูกลงมาให้เป็น default อีกต่อไป | [Markdown & MDX](/astro/th/components/markdown-and-mdx/) |
+
+## T–V
+
+| Term | ความหมาย | บทเรียน |
+|------|---------|--------|
+| template | ทุกอย่างที่อยู่ใต้ fence ของ frontmatter ในไฟล์ `.astro`: markup แบบ HTML ที่มี expression ฝังอยู่ ซึ่ง compiler ของ Astro แปลงให้กลายเป็นผลลัพธ์ที่ render ออกมาของ component | [The Component Model](/astro/th/foundations/the-component-model/) |
+| `transition:persist` | directive ที่ใส่บน element หรือ island เพื่อรักษา DOM node ตัวจริงของมัน — และถ้าเป็น island ของ framework ก็รวมถึง state ข้างในด้วย — ให้อยู่รอดข้าม navigate ของ `<ClientRouter />` แทนที่จะ unmount แล้วสร้าง instance ใหม่ | [View Transitions](/astro/th/rendering-and-performance/view-transitions/) |
+| view transitions | feature ที่ทำ animation ระหว่างการ navigate เต็มหน้าในแอปที่โดยพื้นฐานเป็นแบบหลายหน้า (multi-page) build อยู่บน View Transitions API ของเบราว์เซอร์เมื่อรองรับ (และ degrade แบบสง่างามเมื่อไม่รองรับ) ควบคุมโดย `<ClientRouter />` | [View Transitions](/astro/th/rendering-and-performance/view-transitions/) |
+| `ViewTransitions` (renamed) | ชื่อเดิมของ component ตัวเดียวกับที่ตอนนี้ export เป็น `ClientRouter` จาก `astro:transitions` — เปลี่ยนชื่อใน Astro v5 — โค้ดหรือ tutorial ที่ยัง import `ViewTransitions` อยู่ กำลังอ้างถึง API ชื่อเก่าก่อนเปลี่ยนชื่อ | [View Transitions](/astro/th/rendering-and-performance/view-transitions/) |
+| Vite | dev server และ bundler ที่ Astro สร้างอยู่บนนั้น — dev server ของ Astro เอง, hot module replacement และการ build production ทั้งหมดส่งต่อให้ Vite ทำงานเบื้องหลัง | [Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/) |
+
+<ProgressTracker client:visible id="glossary" />
