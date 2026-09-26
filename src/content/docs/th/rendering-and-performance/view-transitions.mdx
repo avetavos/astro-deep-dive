@@ -1,6 +1,6 @@
 ---
 title: 'View Transitions'
-description: 'เพิ่ม navigation แบบ client-side ที่มี animation คล้าย SPA ให้เว็บ multi-page ด้วย ClientRouter, transition directives, การ persist element และ lifecycle events'
+description: 'ClientRouter (astro:transitions) เทียบกับ native cross-document view transitions, markup data-astro-transition-* จริงของ transition:name/animate/persist, lifecycle event ที่เป็น string พิสูจน์ด้วย MISSING_EXPORT error จริงบน constant เก่า, navigate() จาก astro:transitions/client และ island + persist'
 sidebar:
   order: 2
 ---
@@ -9,12 +9,13 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## ได้ข้อดีของทั้งสองแบบ
+## ดีที่สุดของทั้งสองโลก
 
-เว็บ multi-page แบบดั้งเดิมจะ reload ทั้ง browser ทุกครั้งที่ navigate — เชื่อถือได้ แต่หน้าจอจะแฟลชขาวและ scroll position รีเซ็ต ส่วน SPA เลี่ยงเรื่องนั้นได้แต่ต้องแลกด้วย JavaScript router ที่หนัก **view transitions** ของ Astro ให้ความรู้สึกลื่นแบบ SPA บนเว็บ MPA ปกติ ด้วย script แค่ไม่กี่กิโลไบต์
+เว็บ multi-page แบบดั้งเดิม reload เต็มหน้าทุกครั้งที่ navigate — เชื่อถือได้ แต่จอกระพริบขาวและ scroll position รีเซ็ต SPA เลี่ยงปัญหานี้ได้แต่ต้องแลกกับ JavaScript router ที่หนัก **view transitions** ของ Astro ให้ความรู้สึกลื่นแบบ SPA บน MPA ปกติ ด้วย script แค่ไม่กี่ kilobyte
 
-เรา opt in ด้วยการเพิ่ม component เดียวคือ **`<ClientRouter />`** เข้าไปใน `<head>` ของหน้า — ปกติวางใน layout ที่ใช้ร่วมกันเพื่อให้มีผลทั้งเว็บ:
+เปิดใช้ด้วยการเพิ่ม component เดียว **`<ClientRouter />`** ใน `<head>` ของหน้า — ปกติวางใน layout ที่ใช้ร่วมกันเพื่อให้มีผลทั้งเว็บ ตรวจสอบตรงจาก virtual-module source ที่ติดตั้งจริงใน 7.3.5 (`astro/dist/transitions/vite-plugin-transitions.js`): path import จริงตอนนี้คือ **`astro:transitions`**:
 
 ```astro
 ---
@@ -31,15 +32,45 @@ import { ClientRouter } from 'astro:transitions';
 </html>
 ```
 
-พอมีตัวนี้แล้ว การ navigate ระหว่างหน้าในเว็บของเราจะถูก intercept และจัดการฝั่ง client: Astro fetch หน้าถัดไป, swap content เข้ามา และ animate การเปลี่ยน — ไม่มี full reload browser ที่ไม่รองรับ API เบื้องหลังจะ fallback ไปเป็น navigation ปกติ ทุกอย่างจึงไม่พัง
+เมื่อมีสิ่งนี้แล้ว การ navigate ระหว่างหน้าในเว็บของเราจะถูก intercept และจัดการฝั่ง client: Astro fetch หน้าถัดไป สลับเนื้อหาเข้าไป แล้ว animate การเปลี่ยน — ไม่มี reload เต็มหน้า browser ที่ไม่รองรับ API เบื้องหลังจะ fallback ไป navigate ปกติเฉย ๆ ไม่มีอะไรพัง
 
-<Callout title="ตอนนี้ชื่อ ClientRouter แล้ว ไม่ใช่ ViewTransitions">
-ใน Astro รุ่นเก่า component นี้ชื่อ `<ViewTransitions />` Astro ปัจจุบันเปลี่ยนชื่อเป็น **`<ClientRouter />`** (import จาก `astro:transitions`) เพื่อสื่อความหมายให้ชัดขึ้นว่าทำอะไร — เปิด client-side routing ถ้าเจอ `<ViewTransitions />` ใน tutorial เก่า ให้แทนที่ด้วย `<ClientRouter />` ในใจ
-</Callout>
+### ชื่อเก่าหายไปจริง ๆ — พิสูจน์แล้ว
+
+Astro รุ่นเก่า component นี้ชื่อ `<ViewTransitions />` มันไม่ใช่แค่ deprecated หรือ alias ใน 7.3.5 — มันไม่ export ออกมาเลย พิสูจน์ด้วย build จริง:
+
+```astro
+---
+import { ViewTransitions } from 'astro:transitions';
+---
+<ViewTransitions />
+```
+
+```text
+[ERROR] [vite] ✗ Build failed
+[MISSING_EXPORT] "ViewTransitions" is not exported by "\0astro:transitions".
+   ╭─[ src/pages/vt-bad-import.astro:2:10 ]
+ 2 │ import { ViewTransitions } from "astro:transitions";
+   │          ───────┬───────
+   │                 ╰───────── Missing export
+```
+
+ถ้าเจอ `<ViewTransitions />` ใน tutorial เก่า ทางแก้คือเปลี่ยนชื่อตรง ๆ เป็น `<ClientRouter />` — import specifier เดิม พฤติกรรมเดิม
+
+## `<ClientRouter />` เทียบกับ native cross-document view transitions
+
+`<ClientRouter />` ของ Astro เป็น client-side router: มัน intercept การคลิก link ด้วย JavaScript, fetch หน้าถัดไปเอง แล้วสลับ DOM — View Transitions API คือสิ่งที่มันใช้*animate*การสลับนั้นให้ลื่น browser สมัยใหม่ตอนนี้รองรับ **cross-document view transitions แบบ native** ด้วย ไม่ต้องใช้ JavaScript เลย ล้วน ๆ ด้วย CSS:
+
+```css
+@view-transition {
+  navigation: auto;
+}
+```
+
+declaration เดียวนี้เปิด transition แบบ full-page-navigation ของ *browser เอง* — ไม่มีการ intercept ไม่มีการ fetch ฝั่ง client ไม่มี `<ClientRouter />` เลย; browser ยัง navigate ปกติ แค่ animate การสลับระหว่างเอกสารเก่ากับใหม่ ใช้แบบ CSS-only นี้เมื่ออยากได้แค่ความลื่นทาง visual ไม่มีอะไรมากกว่านั้น (ไม่มี shared-element `transition:name` morph, ไม่มี `transition:persist` เก็บ state, ไม่มี lifecycle event ให้ hook) และอยากให้หน้าไม่มี JavaScript เพิ่มเลย ใช้ `<ClientRouter />` เมื่อต้องการ island ที่ persist, shared-element transition ที่ตั้งชื่อได้ หรือ hook เข้า lifecycle ของการ navigate (`astro:page-load` ฯลฯ) — สิ่งเหล่านี้ form CSS-only แบบ native ให้ไม่ได้เลย
 
 ## navigation ทำงานยังไง
 
-<Mermaid title="ClientRouter สลับเนื้อหาแทนการ reload ทั้งหน้า" code={navDiagram} />
+<Mermaid title="ClientRouter สลับเนื้อหาแทนที่จะ reload" code={navDiagram} />
 
 export const navDiagram = `flowchart LR
   click["User clicks a link"] --> intercept["ClientRouter intercepts (no full reload)"]
@@ -47,29 +78,74 @@ export const navDiagram = `flowchart LR
   fetch --> swap["Swap in the new content, animate"]
   swap --> event["Fire astro:page-load"]`;
 
-## Transition directives
+## Transition directive — markup จริงที่ build ออกมา
 
-โดย default Astro จะ cross-fade หน้า เราคุม animation ต่อ element ได้ด้วย directive:
+โดย default Astro cross-fade หน้าให้ เราคุม animation ต่อ element ได้ด้วย directive:
 
-- **`transition:name`** — ตั้งชื่อเดียวกันให้ element บนทั้งสองหน้า เพื่อให้ Astro morph จากอันหนึ่งไปอีกอัน (shared-element transition เช่น thumbnail ที่ค่อย ๆ ขยายเป็น hero image)
+- **`transition:name`** — ให้ element ชื่อเดียวกันทั้งสองหน้า Astro จะ morph ตัวหนึ่งไปเป็นอีกตัว (shared-element transition แบบ thumbnail โตขึ้นเป็น hero image)
 - **`transition:animate`** — เลือก animation (`fade`, `slide` หรือแบบ custom) import helper จาก `astro:transitions`
-- **`transition:persist`** — เก็บ DOM และ state ของ component ไว้ข้าม navigation แทนที่จะ re-render เหมาะกับ video ที่กำลังเล่นหรือ audio player ที่ไม่ควรเริ่มใหม่
+- **`transition:persist`** — เก็บ DOM และ state ของ component ไว้ข้าม navigation แทนที่จะ re-render ใหม่ เหมาะกับ video ที่กำลังเล่นหรือ audio player ที่ไม่ควรเริ่มใหม่
 
 ```astro
 ---
+import { ClientRouter } from 'astro:transitions';
 import { slide } from 'astro:transitions';
 ---
-<!-- This heading slides between pages; the player keeps playing across nav. -->
+<html>
+<head><title>A</title><ClientRouter /></head>
+<body>
 <h1 transition:name="page-title" transition:animate={slide({ duration: 200 })}>Title</h1>
-<video controls autoplay transition:name="player" transition:persist />
+<video controls autoplay transition:name="player" transition:persist></video>
+</body>
+</html>
 ```
 
-## Lifecycle events
+output จริงที่ build ออกมา (`astro build`) — Astro เขียน element ที่ตั้งชื่อไว้แต่ละตัวใหม่ให้เป็น id `data-astro-transition-scope` มาร์คตัวที่ persist ด้วย `data-astro-transition-persist` และใส่ keyframe ของ `slide()` เป็น CSS แบบ scoped ต่อ element ผูกกับ scope เดียวกัน พร้อม fallback CSS สำหรับ browser ที่ไม่มี native View Transitions API:
 
-เพราะ navigation ไม่ trigger full page load อีกต่อไป script ที่รันตอน `DOMContentLoaded` จะไม่รันซ้ำตอน navigate แบบ client-side Astro จึง fire event ของตัวเองให้เรา re-initialize:
+```html
+<body>
+  <h1 data-astro-transition-scope="astro-cqr5yetz-1">Title</h1>
+  <video data-astro-transition-persist="player" data-astro-transition-scope="astro-vnhdmk2z-2" controls autoplay></video>
+</body>
+```
 
-- **`astro:page-load`** — fire หลังทุก navigation (ทั้ง load ครั้งแรก *และ* การ swap แบบ client-side) วาง initialization ไว้ตรงนี้แทน `DOMContentLoaded`
-- **`astro:after-swap`** — fire ทันทีหลัง DOM ใหม่ถูก swap เข้ามา ก่อน paint (เหมาะกับการ restore theme/state เพื่อเลี่ยงการแฟลช)
+```css
+/* generated once per transition:name, real fence trimmed to the essentials */
+[data-astro-transition-scope="astro-cqr5yetz-1"] { view-transition-name: page-title; }
+@layer astro {
+  ::view-transition-old(page-title) { animation-name: astroFadeOut, astroSlideToLeft; animation-duration: 200ms, 200ms; }
+  ::view-transition-new(page-title) { animation-name: astroFadeIn, astroSlideFromRight; animation-duration: 200ms, 200ms; }
+}
+/* [data-astro-transition-fallback="old"/"new"] rules duplicate the same animation-name/-duration for browsers without the native API */
+```
+
+`transition:persist` บน `<video>` ไม่ได้แค่ข้าม animation — มันคือ attribute จริงแยกต่างหาก (`data-astro-transition-persist`) ที่บอก client router ให้เก็บ DOM node ตัวนั้นเป๊ะ ๆ (พร้อม state ที่กำลังทำงานอยู่ — ตำแหน่งเล่น, state ของ `<audio>`/`<video>`, ค่าใน form, state ในหน่วยความจำของ island) ข้าม swap แทนที่จะแทนที่ด้วย copy ของหน้าใหม่
+
+## Lifecycle event เป็นชื่อ string ไม่ใช่ constant ที่ export — พิสูจน์แล้ว
+
+เพราะ navigation ไม่ trigger full page load อีกต่อไป script ที่รันตอน `DOMContentLoaded` จะไม่รันซ้ำตอน client-side navigation Astro ยิง event ของตัวเอง และใน 7.3.5 มันเป็น **string event name ธรรมดา** ที่ dispatch ด้วย `document.dispatchEvent(new Event(name))` — ตรวจสอบตรงจาก `astro/dist/transitions/events.js` และ `router.js`:
+
+- `astro:before-preparation`
+- `astro:after-preparation`
+- `astro:before-swap`
+- `astro:after-swap` — ทันทีหลัง DOM ใหม่ถูกสลับเข้ามา ก่อน paint (เหมาะกับ restore theme/state เพื่อเลี่ยงการกระพริบ)
+- `astro:page-load` — ยิงหลังทุก navigation (โหลดครั้งแรก *และ* การสลับฝั่ง client)
+
+ไม่มี constant สไตล์ `TRANSITION_PAGE_LOAD` ให้ import เลย — มีแค่ TypeScript **class** export สองตัว (`TransitionBeforePreparationEvent`, `TransitionBeforeSwapEvent`) ไว้ type event object เอง ไม่ใช่ type ชื่อของมัน พิสูจน์ด้วย build จริง:
+
+```astro
+---
+import { TRANSITION_PAGE_LOAD } from 'astro:transitions/client';
+---
+<p>{TRANSITION_PAGE_LOAD}</p>
+```
+
+```text
+[ERROR] [vite] ✗ Build failed
+[MISSING_EXPORT] "TRANSITION_PAGE_LOAD" is not exported by "\0astro:transitions/client".
+```
+
+ฟังด้วย string ธรรมดา แล้ว re-initialize ตรงนี้แทนที่จะเป็น `DOMContentLoaded`:
 
 ```js
 document.addEventListener('astro:page-load', () => {
@@ -78,52 +154,146 @@ document.addEventListener('astro:page-load', () => {
 });
 ```
 
-นี่คือ gotcha ที่พบบ่อยที่สุดของ view transitions: init script ที่ทำงานตอน load ครั้งแรกแต่ "หยุดทำงาน" หลัง navigate เพราะผูกกับ `DOMContentLoaded` ให้ย้ายไปที่ `astro:page-load`
+นี่คือกับดักเรื่อง view-transitions ที่พบบ่อยที่สุด: init script ที่ทำงานตอนโหลดครั้งแรกแต่ "หยุดทำงาน" หลัง navigate เพราะมันผูกกับ `DOMContentLoaded` ย้ายไปที่ `astro:page-load`
 
-<Callout title="สรุปบรรทัดเดียว">
-เพิ่ม **`<ClientRouter />`** (จาก `astro:transitions`) เข้าไปใน `<head>` — ควรวางใน layout ที่ใช้ร่วมกัน — เพื่อเปลี่ยน MPA ธรรมดาให้มี navigation ที่ลื่นและมี animation คล้าย SPA พร้อม full-reload fallback สำหรับ browser ที่ไม่รองรับ คุม animation ด้วย `transition:name` (shared element), `transition:animate` และ `transition:persist` (เก็บ state ข้าม nav) และเพราะไม่มี full reload ให้ย้าย initialization จาก `DOMContentLoaded` ไปที่ event **`astro:page-load`**
+## `navigate()` และ fallback
+
+`astro:transitions/client` (ตรวจสอบตรงจาก virtual-module source เดียวกัน) ยัง export function **`navigate(href, options)`** จริง — เป็นการ navigate แบบเขียน script เอง ที่ไปผ่าน client router ตัวเดียวกับที่คลิก link ปกติ จึง animate และยิง lifecycle event เดียวกัน:
+
+```astro
+---
+import { ClientRouter } from 'astro:transitions';
+---
+<html><head><ClientRouter /></head>
+<body>
+<button id="go">Go</button>
+<script>
+  import { navigate } from 'astro:transitions/client';
+  document.getElementById('go')?.addEventListener('click', () => navigate('/next-page'));
+</script>
+</body></html>
+```
+
+การเรียก `navigate()` ตอน render ฝั่ง server (แทนที่จะเป็นการตอบสนอง event จริงใน browser) จะ log warning ใน source ที่ติดตั้งจริง (`router.js`: "The view transitions client API was called during a server side render...") — มันตั้งใจให้รันฝั่ง client เพื่อตอบสนอง user interaction
+
+ถ้า browser ของผู้ใช้ไม่รองรับ View Transitions API เลย `<ClientRouter />` ยัง intercept และสลับฝั่ง client ให้ — แค่ข้าม animation ไป (หรือใช้ CSS-fallback rule ที่เห็นข้างบน ซึ่ง browser บางตัวยังรันได้แม้ไม่มี native API) มีแต่ browser ที่ปิด JavaScript ไปเลยเท่านั้นที่ fallback ไป navigate เต็มหน้าธรรมดา ไม่มี animation
+
+## Island + `transition:persist`
+
+`transition:persist` บน island เก็บ DOM *และ live component state* ของ island นั้นไว้ข้าม client-side navigation — component ไม่ถูก unmount แล้ว remount ใหม่ มันคือ instance เดิมเป๊ะ ๆ ที่ถูกส่งต่อไป นี่ต่างจาก element ธรรมดาอย่าง `<video>`: สำหรับ island "persist" หมายถึง state ภายในของ framework component (ตัวนับ, ค่าใน form, อะไรก็ตามที่อยู่ในหน่วยความจำ) รอดไปด้วย ไม่ใช่แค่ DOM node กับตำแหน่งเล่นแบบ native
+
+<Callout title="ตอนนี้คือ ClientRouter ไม่ใช่ ViewTransitions แล้ว">
+Astro ปัจจุบันเปลี่ยนชื่อ component เป็น **`<ClientRouter />`** (ยัง import จาก `astro:transitions` เหมือนเดิม) — และพิสูจน์ข้างบนแล้วว่าชื่อเก่า `<ViewTransitions />` ไม่ใช่แค่ deprecated มันคือ `MISSING_EXPORT` build error จริงใน 7.3.5 ถ้าเจอ `<ViewTransitions />` ใน tutorial เก่า ให้เปลี่ยนชื่อ
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+- snippet `import { ViewTransitions } from 'astro:transitions'` หรือเปล่า? พิสูจน์ข้างบนแล้วว่า: นี่คือ `MISSING_EXPORT` build error จริงใน 7.3.5 ไม่ใช่แค่ deprecation เบา ๆ — เปลี่ยนเป็น `ClientRouter`
+- มันตั้ง caching header บนหน้าที่มี `<ClientRouter />` ด้วย แล้วคาดหวังว่าเนื้อหาที่สลับเข้ามาจะ "สด" หรือเปล่า? shell ที่ cache จาก edge ก็ยังเป็นแค่ HTML — `<ClientRouter />` ไม่ได้เปลี่ยน lesson เรื่อง caching ที่ใช้กับ response ข้างใต้มันเลย
+- มัน import lifecycle event เป็น named constant (`TRANSITION_PAGE_LOAD`, `AFTER_SWAP` ฯลฯ) แทนที่จะใช้ string ธรรมดาหรือเปล่า? พิสูจน์ข้างบนแล้วว่า: export แบบนั้นไม่มีอยู่จริง — ใช้ string ตรง ๆ กับ `addEventListener('astro:page-load', ...)`
+- `client:load` ถูกใช้กับ component ที่เป็น `transition:persist` ด้วย ทั้งที่ component ไม่ได้ต้องการ hydrate ทันทีจริง ๆ หรือเปล่า? `transition:persist` กับ timing ของ hydration เป็นอิสระจากกัน — persist ไม่ได้ต้องการ directive ที่หนักที่สุด
+- init script ยังผูกกับ `DOMContentLoaded` บนเว็บที่ใช้ `<ClientRouter />` อยู่หรือเปล่า? มันจะหยุด re-run เงียบ ๆ หลัง client-side navigation ครั้งแรก — ย้ายไปที่ `astro:page-load`
+
+<SpotTheBug code={`---
+// src/layouts/Layout.astro
+import { ViewTransitions } from 'astro:transitions';
+---
+<html>
+  <head><ViewTransitions /></head>
+  <body><slot /></body>
+</html>
+`}>
+นี่ไม่ใช่แค่ความชอบเรื่อง style — มันคือ build error จริงใน Astro 7.3.5 ที่ติดตั้งจริง พิสูจน์ข้างบนแล้ว: `[MISSING_EXPORT] "ViewTransitions" is not exported by "astro:transitions"` component นี้ถูกเปลี่ยนชื่อเป็น `ClientRouter` ใน Astro ปัจจุบัน ทางแก้คือ `import { ClientRouter } from 'astro:transitions'` แล้วใช้ `<ClientRouter />` ใน template — module specifier เดิม ตำแหน่งเดิมใน `<head>` แค่เปลี่ยนชื่อใหม่
+</SpotTheBug>
+
+## Mental Model
+
+`<ClientRouter />` คือ client-side interceptor ที่วางซ้อนบน MPA navigation ปกติ ไม่ใช่ router ใหม่ที่มี state model ของตัวเอง — มัน fetch HTML ของหน้าจริง สลับ DOM จริง และยิง event จริงให้เรา hook เข้าไป (`astro:page-load` ไม่ใช่ re-render มายากล) `transition:persist` คือทางออกเดียวจาก "สลับทุกอย่าง": มันเก็บ element (หรือ island พร้อม live state) ตัวเดียวไว้เป็น node เดิมเป๊ะ ๆ แทนที่จะเอา copy ของหน้าใหม่มาแทน
+
+## ข้อแลกเปลี่ยน
+
+| | `<ClientRouter />` | Native `@view-transition { navigation: auto }` |
+|---|---|---|
+| **JavaScript ที่ส่งไป** | ไม่กี่ KB (router + swap logic) | ศูนย์ |
+| **shared-element `transition:name` morph** | มี | ไม่มี |
+| **`transition:persist` (เก็บ state ของ island)** | มี | ไม่มี — ทุก navigation คือ document swap เต็มรูปแบบจริง ๆ |
+| **Lifecycle hook** (`astro:page-load` ฯลฯ) | มี | ไม่มี |
+| **Fallback สำหรับ browser ที่ไม่รองรับ** | สลับฝั่ง client ธรรมดา ไม่ animate | navigate เต็มหน้าธรรมดา ไม่ animate |
+| **เหมาะกับ** | เว็บที่ต้อง persist state หรือคุม animation ละเอียด | ความลื่นทาง visual แบบง่าย ๆ ไม่มี JS เพิ่ม |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`<ViewTransitions />` ยังใช้ได้ แค่ deprecated"** พิสูจน์ข้างบนแล้วด้วย build จริง: มันคือ `MISSING_EXPORT` error จริงใน 7.3.5 ไม่ใช่แค่ warning เบา ๆ
+- **"lifecycle event เป็น constant ที่ import ได้ อย่าง `TRANSITION_PAGE_LOAD`"** พิสูจน์ข้างบนแล้วว่า: export แบบนั้นไม่มีอยู่จริง (`MISSING_EXPORT` บน `astro:transitions/client`) — มันคือ string event name ธรรมดา (`'astro:page-load'` ฯลฯ) ที่ dispatch บน `document`
+- **"`transition:persist` บน element ธรรมดา persist state ของหน้าได้ทุกอย่าง"** มันเก็บแค่ DOM node ตัวนั้น (และสำหรับ island ก็ state ของ component) ข้าม swap — ไม่ได้ทำให้ state อื่นที่ไม่เกี่ยวข้อง (เช่นตัวแปรใน script อื่น) รอดจาก navigation ไปด้วย
+- **"ไม่มี `<ClientRouter />` แล้ว view transitions ไม่มีอยู่เลย"** browser สมัยใหม่รองรับ cross-document view transitions แบบ native ผ่าน `@view-transition { navigation: auto }` ใน CSS ล้วน ๆ — ไม่มี component ไม่มี JavaScript เลย
 
 export const quizVT = [
   {
-    q: 'เปิด view transitions ใน Astro ยังไง?',
+    q: 'import จริงในปัจจุบันของ client router component ใน Astro 7.3.5 คืออะไร?',
     options: [
-      'ติดตั้ง SPA router',
-      'เพิ่ม `<ClientRouter />` (จาก `astro:transitions`) เข้าไปใน `<head>` ของหน้า ปกติใน layout ที่ใช้ร่วมกัน',
-      'ตั้ง output เป็น server',
-      'เพิ่ม client:load ให้ทุก component',
+      '`import { ViewTransitions } from \'astro:transitions\'`',
+      '`import { ClientRouter } from \'astro:transitions\'` — พิสูจน์ข้างบนแล้วว่าชื่อเก่า `ViewTransitions` เป็น MISSING_EXPORT build error จริงตอนนี้',
+      '`import ClientRouter from \'astro/client-router\'`',
+      'เป็น global ไม่ต้อง import',
     ],
     answer: 1,
+    explain: 'ตรวจสอบตรงจาก virtual-module source และพิสูจน์ด้วย build ที่ fail จริง: การ import ViewTransitions จาก astro:transitions ตอนนี้ throw MISSING_EXPORT',
   },
   {
-    q: 'ชื่อปัจจุบันของ component นี้คืออะไร (Astro รุ่นเก่าเรียกชื่ออื่น)?',
+    q: '```astro\n---\nimport { ViewTransitions } from \'astro:transitions\';\n---\n<ViewTransitions />\n```\nเกิดอะไรขึ้นตอน build กับ astro@7.3.5?',
     options: [
-      '`<ViewTransitions />`',
-      '`<ClientRouter />` — เปลี่ยนชื่อมาจาก `<ViewTransitions />`',
-      '`<Router />`',
-      '`<Transition />`',
+      'ใช้ได้ แค่มี deprecation warning',
+      'build fail จริง: `[MISSING_EXPORT] "ViewTransitions" is not exported by "astro:transitions"`',
+      'render ออกมาเป็นค่าว่างเงียบ ๆ',
+      'fallback ไปเป็น ClientRouter อัตโนมัติ',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วด้วย vite build error จริง — ชื่อเก่าไม่ถูก export เลยใน 7.3.5 ไม่ใช่แค่ deprecation เบา ๆ',
   },
   {
-    q: '`transition:persist` ทำอะไร?',
+    q: 'lifecycle event ของ view-transition ใน Astro 7.3.5 คืออะไร ตรวจสอบจาก source แล้ว?',
     options: [
-      'บันทึกหน้าลง localStorage',
-      'เก็บ DOM และ state ของ component ไว้ข้าม navigation แทนการ re-render (เช่น video ที่กำลังเล่น)',
-      'persist ข้อมูลลง database',
-      'ปิด animation',
+      'constant ที่ export มาอย่าง `TRANSITION_PAGE_LOAD` ที่ import จาก `astro:transitions/client`',
+      'string event name ธรรมดา (`astro:before-preparation`, `astro:after-preparation`, `astro:before-swap`, `astro:after-swap`, `astro:page-load`) ที่ dispatch บน `document` — การ import constant อย่าง `TRANSITION_PAGE_LOAD` จะ throw MISSING_EXPORT',
+      'มีอยู่แค่ในรูป React hook',
+      'มี event เดียวคือ `astro:navigate`',
     ],
     answer: 1,
+    explain: 'ตรวจสอบตรงจาก astro/dist/transitions/events.js และ router.js และพิสูจน์ด้วย build ที่ fail จริงตอน import TRANSITION_PAGE_LOAD',
   },
   {
-    q: 'init script ที่ผูกกับ `DOMContentLoaded` หยุดทำงานหลัง navigate แบบ client-side แก้ยังไง?',
+    q: '```astro\n<video controls autoplay transition:name="player" transition:persist></video>\n```\nHTML ที่ build ออกมาจริงหน้าตาเป็นยังไง และ `transition:persist` ทำอะไรจริง ๆ?',
+    options: [
+      'compile หายไปเลยและไม่ทำอะไรตอน runtime',
+      'มันเพิ่ม `data-astro-transition-persist="player"` (บวก `data-astro-transition-scope`) — บอก client router ให้เก็บ DOM node ตัวนี้เป๊ะ ๆ พร้อม state ข้าม swap แทนที่จะแทนที่มัน',
+      'มัน duplicate video element ในทุกหน้า',
+      'ใช้ได้แค่กับ component ที่มี client:load เท่านั้น ไม่ใช่ element ธรรมดา',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วด้วย markup จริงที่ build ออกมา: `<video data-astro-transition-persist="player" data-astro-transition-scope="astro-vnhdmk2z-2" ...>`',
+  },
+  {
+    q: 'init script ที่ผูกกับ `DOMContentLoaded` หยุดทำงานหลัง client-side navigation ทางแก้คืออะไร?',
     options: [
       'ปิด view transitions',
-      'ย้าย initialization ไปที่ event `astro:page-load` ซึ่ง fire หลังทุก navigation',
+      'ย้าย initialization ไปที่ event `astro:page-load` ซึ่งยิงหลังทุก navigation (โหลดครั้งแรกและการสลับฝั่ง client)',
       'ใช้ client:only',
-      'reload ทั้งหน้าเอง',
+      'reload ทั้งหน้าด้วยมือ',
     ],
     answer: 1,
+    explain: '`DOMContentLoaded` ยิงเฉพาะตอน full page load จริง ๆ เท่านั้น ส่วน `astro:page-load` ยิงหลังทุก navigation รวมถึงการสลับฝั่ง client ด้วย นี่คือเหตุผลที่ logic re-init ควรอยู่ตรงนั้น',
+  },
+  {
+    q: 'ควรใช้ CSS แบบ native `@view-transition { navigation: auto }` แทน `<ClientRouter />` เมื่อไร?',
+    options: [
+      'ไม่มีเลย ClientRouter ดีกว่าเสมอ',
+      'เมื่ออยากได้แค่ความลื่นแบบ animated full-page-navigation ของ browser เอง ไม่ต้องการ shared-element transition:name morph, transition:persist หรือ lifecycle hook — มันส่ง JavaScript เพิ่มเป็นศูนย์',
+      'เฉพาะเว็บ static เท่านั้น',
+      'เฉพาะตอน target Internet Explorer',
+    ],
+    answer: 1,
+    explain: 'form CSS-only แบบ native ทำ navigation เต็มรูปแบบจริง (ไม่ intercept ไม่ persist ไม่มี lifecycle event) — มันเป็นแค่ layer ทำให้ visual ลื่นขึ้นเท่านั้น ไม่มี script เพิ่ม',
   },
 ];
 

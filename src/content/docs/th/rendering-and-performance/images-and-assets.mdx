@@ -1,6 +1,6 @@
 ---
 title: 'Images & Assets'
-description: 'image optimization อัตโนมัติด้วย component Image และ Picture, local vs remote image, โมดูล astro:assets และ font ที่ optimize'
+description: 'prop layout สำหรับ responsive image (constrained/fixed/full-width), srcset/sizes จริงที่ build ออกมา, Picture พร้อม formats, SVG-as-component, inferSize สำหรับ remote image, image.domains/remotePatterns, prop priority และ Fonts API ที่ stable แล้ว — ทุกข้อพิสูจน์กับ Astro 7.3.5 จริง'
 sidebar:
   order: 3
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Image คือผลไม้ที่เก็บง่ายที่สุดเรื่อง performance
 
@@ -34,6 +35,42 @@ import heroImage from '../assets/hero.png';   // a local import
 
 สำหรับ local import Astro รู้ dimension จริงอยู่แล้ว เราจึงละ width/height ได้และจะเติมให้เอง
 
+## prop `layout`: responsive image ของจริง
+
+`<Image />` และ `<Picture />` รับ prop **`layout`** — `'constrained'`, `'fixed'`, `'full-width'` หรือ `'none'` (ค่า default) — และมี key `image.layout` ใน `astro.config.mjs` เอาไว้ตั้งค่า default ทั้งเว็บ ไม่ต้องเซ็ตซ้ำทุก image เมื่อ `layout` ไม่ใช่ `'none'` Astro จะ generate `srcset` จริงที่ breakpoint width หลายค่า บวก attribute `sizes` และประทับ `data-astro-image="<layout>"` บน `<img>` ให้ CSS เฉพาะ layout นั้น (จัดการ `object-fit`/`object-position`)
+
+พิสูจน์กับ astro@7.3.5 ที่ติดตั้งจริง — source image 800×400 หนึ่งรูป กับค่า `layout` สามแบบ build ด้วย `astro build`:
+
+```html
+<!-- layout="constrained" -->
+<img src="/_astro/hero.BFDgznys_miIz9.webp"
+     srcset="/_astro/hero.BFDgznys_ZIPmIq.webp 640w, /_astro/hero.BFDgznys_h6wjP.webp 750w, /_astro/hero.BFDgznys_miIz9.webp 800w"
+     alt="constrained" loading="lazy" decoding="async"
+     sizes="(min-width: 800px) 800px, 100vw"
+     data-astro-image="constrained" data-astro-image-fit="cover" data-astro-image-pos="center"
+     width="800" height="400">
+
+<!-- layout="fixed" — a single width in the srcset, sizes is a fixed pixel value -->
+<img src="/_astro/hero.BFDgznys_miIz9.webp"
+     srcset="/_astro/hero.BFDgznys_miIz9.webp 800w"
+     alt="fixed" loading="lazy" decoding="async"
+     sizes="800px"
+     data-astro-image="fixed" data-astro-image-fit="cover" data-astro-image-pos="center"
+     width="800" height="400">
+
+<!-- layout="full-width" — sizes is 100vw, and the 800w step is dropped (image always fills the viewport) -->
+<img src="/_astro/hero.BFDgznys_miIz9.webp"
+     srcset="/_astro/hero.BFDgznys_ZIPmIq.webp 640w, /_astro/hero.BFDgznys_h6wjP.webp 750w"
+     alt="full-width" loading="lazy" decoding="async"
+     sizes="100vw"
+     data-astro-image="full-width" data-astro-image-fit="cover" data-astro-image-pos="center"
+     width="800" height="400">
+```
+
+- `constrained` — ไม่เกิน dimension ของตัวเอง แต่ย่อได้บน viewport เล็ก (ตัวเลือกทั่วไป)
+- `fixed` — render ที่ intrinsic size เสมอ; `srcset` ยังมี density variant ไม่ใช่ width variant
+- `full-width` — เต็ม viewport เสมอ (hero banner) ดังนั้น `sizes` เป็น `100vw` ตรง ๆ
+
 ## `<Picture />` สำหรับหลาย format และ art direction
 
 เมื่ออยากให้ browser *เลือก* format เอง หรือ serve crop ต่างกันในแต่ละ breakpoint ให้ใช้ **`<Picture />`** ซึ่ง render ออกมาเป็น element `<picture>` ที่มีหลาย `<source>`:
@@ -46,69 +83,252 @@ import hero from '../assets/hero.png';
 <Picture src={hero} formats={['avif', 'webp']} alt="Sunrise" width={800} height={400} />
 ```
 
-browser เลือก format แรกที่รองรับ (AVIF แล้วค่อย WebP) และ fallback ไปที่ต้นฉบับ — ได้ compression ที่ดีที่สุดเท่าที่ browser ของผู้ชมแต่ละคนรับได้
+output จริงของ fence นี้ (`astro build`, source image เดียวกัน):
 
-## Local vs remote image
+```html
+<picture>
+  <source srcset="/_astro/hero.BFDgznys_2jcwc1.avif" type="image/avif">
+  <source srcset="/_astro/hero.BFDgznys_Z2gYy6G.webp" type="image/webp">
+  <img src="/_astro/hero.BFDgznys_VT9BX.png" alt="Sunrise" loading="lazy" decoding="async" width="800" height="400">
+</picture>
+```
 
-- **local image** (import จาก `src/`) ถูก optimize เต็มที่และรู้ dimension — ควรใช้แบบนี้เสมอ
+browser เลือก `<source>` แรกที่รองรับ (AVIF แล้วค่อย WebP) และ fallback ไปที่ `<img>` ธรรมดา (format ต้นฉบับ re-encode แล้ว) — ได้ compression ที่ดีที่สุดเท่าที่ browser ของผู้ชมแต่ละคนรับได้
+
+## SVG ในฐานะ component
+
+import ไฟล์ `.svg` ตรง ๆ แล้ว Astro จะแปลงมันเป็น component จริง — render แบบ `<Logo />` แทนที่จะเป็น `<img src={logoUrl} />` prop เพิ่มเติมที่ส่งเข้าไปจะกลายเป็น literal HTML attribute บน root `<svg>` (Astro ไม่ได้ map prop ให้ `viewBox`/scaling อย่างฉลาด):
+
+```astro
+---
+import Logo from '../assets/logo.svg';
+---
+<Logo size={32} class="brand" />
+```
+
+markup จริงที่ build ออกมา (`src/assets/logo.svg` ต้นฉบับคือ `<svg viewBox="0 0 24 24" width="24" height="24">`):
+
+```html
+<svg viewBox="0 0 24 24" width="24" height="24" size="32" class="brand"><circle cx="12" cy="12" r="10" /></svg>
+```
+
+`class` merge เข้าไปตามที่คาดไว้ แต่ `size="32"` เป็นแค่ attribute เฉย ๆ บน `<svg>` — มัน**ไม่**ทำให้ขนาดเปลี่ยนเลย เพราะ `width`/`height` เดิม (`24`) ของ SVG ยังชนะอยู่ ถ้าอยากให้ prop คุมขนาด render จริง ต้องแก้ source SVG ให้ reference มัน (เช่น author SVG ด้วย `width={size} height={size}` ก่อน import หรือถอด `width`/`height` แบบ hardcode ออกแล้วคุมขนาดด้วย CSS แทน)
+
+## Local vs remote image และ `inferSize`
+
+- **local image** (import จาก `src/`) ถูก optimize เต็มที่และรู้ dimension ตอน build — ควรใช้แบบนี้เสมอ
 - **image ใน `public/`** ถูก serve ตามเดิม ไม่ optimize (Astro ไม่แตะ `public/` เลย) ใช้เฉพาะกับของที่ต้องคง path/ชื่อไว้เป๊ะ ๆ
-- **remote image** (URL) optimize ได้เหมือนกัน แต่ต้อง list domain เป็น **authorized** ใน `astro.config.mjs` (`image.domains` หรือ `image.remotePatterns`) — เป็นมาตรการความปลอดภัยไม่ให้เรา proxy host มั่วซั่ว
+- **remote image** (URL) optimize ได้เหมือนกัน แต่ Astro ไม่รู้ dimension ล่วงหน้า จะส่ง `width`/`height` เองก็ได้ หรือตั้ง **`inferSize`** แล้ว Astro จะ fetch image ตอน build (หรือตอน request สำหรับหน้า on-demand) เพื่ออ่าน dimension จริง
+
+พิสูจน์แล้ว — remote PNG พร้อม `inferSize` ไม่มี width/height ระบุเอง:
+
+```astro
+<Image src="https://raw.githubusercontent.com/github/explore/main/topics/astro/astro.png" inferSize alt="remote infer" />
+```
+
+```html
+<img src="/_astro/astro_FfxqH.webp" alt="remote infer" loading="lazy" decoding="async" width="288" height="288">
+```
+
+Astro fetch ไฟล์จริง อ่านค่า `288×288` จากมัน แล้ว optimize เข้า build output — และ fetch นั้นแหละคือต้นทุน: `inferSize` หมายถึง network round trip เพิ่มอีกครั้ง (ตอน build สำหรับหน้า prerender หรือตอน *request* สำหรับหน้า on-demand) ก่อนที่ image จะเริ่ม optimize ได้ด้วยซ้ำ เทียบกับไม่มี request เพิ่มเลยถ้าเรารู้และส่ง dimension เองอยู่แล้ว
+
+## `image.domains` / `remotePatterns` — สิ่งที่มันเช็คจริง ๆ
+
+docs อธิบาย `image.domains`/`image.remotePatterns` ว่าเป็น allowlist สำหรับ remote image ซึ่งจริง — แต่พิสูจน์กับ compiler ที่ติดตั้งจริงแล้ว จุดที่เช็ค**ไม่ใช่**ตามที่คนส่วนใหญ่คิด:
+
+```astro
+<!-- astro.config.mjs only allows "raw.githubusercontent.com" -->
+<Image src="https://not-allowed.example.com/photo.jpg" width={300} height={200} alt="bad host" />
+```
+
+เมื่อมี **`width`/`height` ระบุเอง** (ไม่มี `inferSize`) ตัวนี้ build ผ่าน *และรันแบบ on-demand ได้* โดย**ไม่มี error เลย** — image service ของ Astro (local) ข้าม optimize เงียบ ๆ แล้วปล่อย URL เดิมออกไปตรง ๆ:
+
+```html
+<img src="https://not-allowed.example.com/photo.jpg" alt="bad host" loading="lazy" decoding="async" width="300" height="200">
+```
+
+แต่ถ้าใส่ `inferSize` เข้าไปกับ URL ที่ไม่อนุญาตตัวเดียวกัน มัน *throw* ทันที — เพราะการอ่าน dimension จริงต้อง fetch URL ก่อน และ Astro เช็ค allowlist ก่อน fetch:
+
+```text
+[RemoteImageNotAllowed] Remote image https://not-allowed.example.com/photo.jpg is not allowed by your image configuration.
+  Hint:
+    Update `image.domains` or `image.remotePatterns`, or remove `inferSize` for this image.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/remote-image-not-allowed/
+```
+
+ดังนั้น allowlist มีจริง แต่มันคือ gate บน path ที่ต้อง *fetch* (optimize หรือ infer dimension) ไม่ใช่ gate การ render `<Image>` แบบ remote ทั้งหมด — `width`/`height` แบบ hardcode บน host ที่ไม่อนุญาตจะเงียบ ๆ ส่ง `<img>` ที่ไม่ optimize ไปยัง host นั้นแทนที่จะทำให้ build fail เรื่องนี้ควรจับใน review (ดู checklist ด้านล่าง)
+
+## `priority` — สิ่งที่มันเซ็ตจริง ๆ
+
+`priority` (boolean) เป็น prop จริงบน `<Image />`/`<Picture />` ใน 7.3.5 ตรวจสอบตรงจาก `astro/dist/assets/services/service.js` และ `astro/dist/assets/internal.js` มันไม่แตะ CSS หรือลำดับ element เลย — แค่พลิก attribute HTML สามตัวให้เป็นค่า "โหลดเดี๋ยวนี้":
+
+| | ไม่ตั้ง `priority` (default) | ตั้ง `priority` |
+|---|---|---|
+| `loading` | `lazy` | `eager` |
+| `decoding` | `async` | `sync` |
+| `fetchpriority` | *(ไม่ตั้ง)* | `high` |
+
+ใช้กับ image เดียวที่สำคัญต่อ Largest Contentful Paint (ปกติคือ hero) — ไม่ใช่ทุก image ไม่งั้นเท่ากับปิด lazy loading ทั้งเว็บ
+
+## Fonts: stable ใน 7.3.5 ไม่ใช่ experimental
+
+font pipeline ของ Astro เป็น **array config `fonts` แบบ stable ระดับบนสุด** ใน 7.3.5 — ตรวจสอบตรงจาก schema ที่ติดตั้งจริง (`astro/dist/core/config/schemas/base.js`: `fonts: z.array(FontFamilySchema).optional()` ไม่มี wrapper `experimental` เลย) ตั้ง font family ด้วย **provider** (built-in: `adobe`, `bunny`, `fontshare`, `fontsource`, `google`, `googleicons`, `local`, `npm` — จาก `fontProviders` ที่ import จาก `astro/config`) แล้ว render ด้วย **`<Font />`** จาก `astro:assets`:
+
+```js
+// astro.config.mjs
+import { defineConfig, fontProviders } from 'astro/config';
+
+export default defineConfig({
+  fonts: [
+    { provider: fontProviders.google(), name: 'Inter', cssVariable: '--font-inter' },
+  ],
+});
+```
+
+```astro
+---
+import { Font } from 'astro:assets';
+---
+<Font cssVariable="--font-inter" preload />
+```
+
+พิสูจน์ด้วย build จริง (provider `google()` download font ตอน build จริง ๆ — log ตอน build ขึ้น `[assets] Copying fonts (2 files)...` มีไฟล์ `.woff2` จริงสองไฟล์ลงใน `dist/client/_astro/fonts/`):
+
+```html
+<style>
+@font-face{font-family:Inter-d43fecb2c6d8ceb0;src:url("/_astro/fonts/863c6d4ebf55aa09.woff2") format("woff2");font-display:swap;unicode-range:U+0000-00FF,...;font-weight:400;font-style:italic;}
+@font-face{font-family:Inter-d43fecb2c6d8ceb0;src:url("/_astro/fonts/233f952ab2955996.woff2") format("woff2");font-display:swap;unicode-range:U+0000-00FF,...;font-weight:400;font-style:normal;}
+@font-face{font-family:"Inter-d43fecb2c6d8ceb0 fallback: Arial";src:local("Arial");font-display:swap;font-weight:400;font-style:italic;size-adjust:107.7766%;ascent-override:89.885%;descent-override:22.3806%;line-gap-override:0%;}
+@font-face{font-family:"Inter-d43fecb2c6d8ceb0 fallback: Arial";src:local("Arial");font-display:swap;font-weight:400;font-style:normal;size-adjust:107.7766%;ascent-override:89.885%;descent-override:22.3806%;line-gap-override:0%;}
+:root{--font-inter:Inter-d43fecb2c6d8ceb0,"Inter-d43fecb2c6d8ceb0 fallback: Arial",sans-serif;}
+</style>
+<link rel="preload" href="/_astro/fonts/863c6d4ebf55aa09.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/_astro/fonts/233f952ab2955996.woff2" as="font" type="font/woff2" crossorigin>
+```
+
+font ที่ self-host ถูก download ครั้งเดียวตอน build (ไม่มี request third-party ตอน runtime) และ Astro ยัง generate **local fallback** `@font-face` ที่ปรับขนาดให้เข้ากัน (`size-adjust`/`ascent-override`/`descent-override`) ให้ font ระบบที่ fallback กินพื้นที่กล่องเดียวกับ font จริงก่อนมันจะโหลดเสร็จ — ตัด layout shift ที่ web font แบบ swap มักทำให้เกิด
 
 <Mermaid title="ที่มาของรูปเป็นตัวกำหนดวิธีจัดการ" code={imgDiagram} />
 
 export const imgDiagram = `flowchart TB
   local["Imported from src/"] --> opt["Optimized, dimensions known"]
-  remote["Remote URL"] --> auth["Optimized only if domain is authorized"]
+  remote["Remote URL, explicit width/height"] --> silent["Optimized if domain allowed, else silently unoptimized — no error"]
+  inferred["Remote URL, inferSize"] --> checked["Domain checked before fetch — throws RemoteImageNotAllowed if not"]
   pub["In public/"] --> asis["Served as-is, not optimized"]`;
 
-## font ที่ optimize
+## อ่านโค้ดที่ AI เขียน
 
-font คืออีก asset ใหญ่ที่ render-blocking Fonts API ของ Astro มี component **`<Font />`** (จาก `astro:assets`) ที่ download, self-host และ optimize web font ตอน build time — สร้าง `@font-face` rule และ preload ที่ถูกต้อง — เราจึงเลี่ยง request ไป font ของ third-party และ layout shift ที่ตามมา เรา config font family ใน `astro.config.mjs` แล้ววาง `<Font />` ใน head
+เวลา review snippet ที่ AI generate มาเกี่ยวกับ image หรือ font เช็คสิ่งเหล่านี้:
 
-<Callout title="สรุปบรรทัดเดียว">
-ใช้ **`<Image />`** (จาก `astro:assets`) แทน `<img>` ธรรมดา: component นี้ auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อไม่ให้มี layout shift และ lazy-load โดย default ใช้ **`<Picture />`** เมื่ออยากได้หลาย format หรือ crop แบบ art direction เลือก **local imported image** (optimize เต็มที่ รู้ dimension) มากกว่า `public/` (serve ตามเดิม) และ remote URL (ต้องมี authorized domain) และ component **`<Font />`** ช่วย self-host และ optimize web font เพื่อตัด request render-blocking ของ third-party
+- เป็น `<img>` ธรรมดาสำหรับ asset local ที่อยู่ใน `src/assets/` หรือเปล่า? แบบนั้นข้าม optimize, ป้องกัน layout-shift และ lazy-loading ไปเลย — ควรเป็น `<Image src={imported} />`
+- `<Image>` แบบ remote มี `width` กับ `height` hardcode ทั้งคู่ บน host ที่ไม่ได้อยู่ใน `image.domains`/`remotePatterns` หรือเปล่า? พิสูจน์ข้างบนแล้วว่า: มันไม่ error แต่จะเงียบ ๆ ส่ง `<img>` ที่ไม่ optimize ไปยัง URL remote ตรง ๆ — เป็น regression เงียบ ไม่ใช่ build fail
+- `inferSize` ถูกใช้กับ asset ใน `public/` หรือ local import หรือเปล่า? พิสูจน์ไปก่อนหน้านี้แล้ว (`FailedToFetchRemoteImageDimensions`): `inferSize` มีไว้กับ URL remote จริง ๆ เท่านั้น
+- component `.svg` ที่ import มา ได้รับ prop `width`/`height`/`size` ที่ผู้เขียน *คาดหวัง* ว่าจะ resize มัน ทั้งที่ markup ของ SVG เอง hardcode attribute พวกนั้นอยู่หรือเปล่า? พิสูจน์ข้างบนแล้วว่า: prop เพิ่มเติมกลายเป็น attribute เฉย ๆ และไม่ทำอะไรเลยนอกจาก SVG เองจะถูก author ให้ใช้มัน
+- `priority` ถูกโรยไปมากกว่าหนึ่ง image ต่อหน้าหรือเปล่า? มัน map ไปที่ `fetchpriority="high"` — ใส่ทุกที่เท่ากับทำลายจุดประสงค์ของมันเอง (ไม่เหลืออะไรให้ deprioritize)
+- config `fonts` หรือการใช้ `<Font />` ถูก gate ไว้หลัง `experimental.fonts` หรือเปล่า? flag นั้นไม่มีใน 7.3.5 แล้ว — `fonts` เป็น key ระดับบนสุดที่ stable แล้ว
+
+<SpotTheBug code={`---
+// src/pages/product/[slug].astro
+import { Image } from 'astro:assets';
+
+const { product } = Astro.props;
+---
+<Image src={product.imageUrl} width={600} height={400} alt={product.name} />
+`}>
+`product.imageUrl` เป็น URL remote (จาก CMS หรือ API) ไม่มี `inferSize` และ `image.domains`/`remotePatterns` ใน config ของเว็บนี้ไม่ได้ list host asset ของ CMS ไว้ พิสูจน์ข้างบนแล้วว่า: มันไม่ทำให้ build fail หรือ throw ตอน request — image service (local) ของ Astro เช็ค `isRemoteAllowed` ใน `getURL()` และเมื่อ false มันแค่ return `src` เดิมกลับไป หน้านี้จึงเงียบ ๆ ส่ง `<img src="https://cms-host/...">` ที่ไม่ optimize ให้ทุก product จาก host นั้น ทางแก้คือเพิ่ม domain ของ CMS เข้า `image.domains`/`remotePatterns` (เพื่อให้ optimize จริง) หรือถ้าตั้งใจไม่ optimize host นี้จริง ๆ ก็ใช้ `<img>` ธรรมดาไปเลยแทนที่จะใช้ `<Image>` ที่ดูเหมือน optimize แต่จริง ๆ ไม่ได้ทำ
+</SpotTheBug>
+
+## Mental Model
+
+`<Image />`/`<Picture />` คือ *transform ตอน build (หรือตอน request สำหรับหน้า on-demand)* ไม่ใช่ component ที่ทำงานตอน runtime — prop ทุกตัวที่ส่งเข้าไป (`layout`, `formats`, `priority`, `inferSize`) เปลี่ยน HTML ที่ generate ออกมา ครั้งเดียว ไม่ใช่สิ่งที่เกิดขึ้นใน browser หลังจากนั้น allowlist `image.domains`/`remotePatterns` ถูกเช็คเฉพาะ path ที่ต้อง *fetch* ไฟล์ remote (optimize มัน หรือ infer dimension) — remote image ที่เราอธิบายเองครบแล้ว (`width`+`height` ไม่มี `inferSize`) ไม่ต้อง fetch เลย จึงไม่โดนเช็คเลย แล้วก็ผ่านไปตรง ๆ
+
+## ข้อแลกเปลี่ยน
+
+| | Local import | `public/` | Remote, ระบุ dimension เอง | Remote, `inferSize` |
+|---|---|---|---|---|
+| **Optimize** | ใช่ | ไม่ | เฉพาะถ้า domain อนุญาต | เฉพาะถ้า domain อนุญาต |
+| **Dimension** | รู้อัตโนมัติ | N/A | เราระบุเอง | Astro fetch มาอ่าน |
+| **Request เพิ่ม** | ไม่มี | ไม่มี | ไม่มี | หนึ่งครั้ง ตอน build หรือต่อ request |
+| **Domain ไม่อนุญาต** | N/A | N/A | ไม่ optimize เงียบ ๆ ไม่ error | throw `RemoteImageNotAllowed` |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`image.domains`/`remotePatterns` ป้องกัน host ที่ไม่ได้รับอนุญาตเสมอ"** พิสูจน์ข้างบนแล้วว่า: มัน gate เฉพาะ path ที่ต้อง fetch (`inferSize` หรือ fetch เพื่อ optimize) — `<Image>` แบบ remote ที่ hardcode `width`/`height` บน host ที่ไม่อนุญาต build ผ่านสบาย ๆ แล้วก็แค่ serve image แบบไม่ optimize
+- **"ส่ง prop `size` หรือ `width` ให้ SVG-as-component แล้วมันจะ resize"** พิสูจน์ข้างบนแล้วว่า: prop เพิ่มเติมกลายเป็น attribute เฉย ๆ บน root `<svg>`; ถ้า `width`/`height` ของ SVG เอง hardcode ไว้ มันก็ยังชนะอยู่ดี
+- **"`priority` เป็น toggle ทำให้ image โหลดไวขึ้น โรยได้ทั่วไป"** มันเซ็ต `loading="eager"`/`decoding="sync"`/`fetchpriority="high"` ตรง ๆ — มีประโยชน์กับ image above-the-fold ตัวเดียว แต่ถ้าใส่หลายที่จะสวนทางกับจุดประสงค์
+- **"Fonts API เป็น experimental ต้องมี flag `experimental.fonts`"** ตรวจสอบตรงกับ schema 7.3.5 ที่ติดตั้งจริงแล้วว่า: `fonts` เป็น array config ระดับบนสุดที่ stable ธรรมดา
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ใช้ **`layout`** (`constrained`/`fixed`/`full-width`) เพื่อได้ `srcset`/`sizes` แบบ responsive จริง และ **`<Picture formats={[...]}>`** สำหรับ markup `<picture>` หลาย format `.svg` ที่ import มา render เป็น component แต่ prop เพิ่มเติม (`size` ฯลฯ) ทำงานได้ก็ต่อเมื่อ SVG เองถูก author ให้ใช้มัน `inferSize` fetch dimension จริงของ remote image (request เพิ่มหนึ่งครั้ง) — และ fetch นั้นคือจุด*เดียว*ที่ `image.domains`/`remotePatterns` ถูกบังคับใช้จริง ๆ; `width`/`height` ระบุเองบน remote host ที่ไม่อนุญาตจะข้าม optimize เงียบ ๆ แทนที่จะทำให้ build fail `priority` เซ็ต `loading="eager"`/`decoding="sync"`/`fetchpriority="high"` — สำหรับ hero image เดียว ไม่ใช่หลายรูป Fonts เป็น config `fonts` ระดับบนสุดที่ stable บวก `<Font cssVariable>` จาก `astro:assets` — ไม่ต้องมี experimental flag
 </Callout>
 
 export const quizImg = [
   {
-    q: 'component `<Image />` ทำอะไรที่ `<img>` ธรรมดาไม่ทำ?',
+    q: 'prop `layout` (`constrained`/`fixed`/`full-width`) เปลี่ยนอะไรจริง ๆ ใน output ที่ build ออกมา?',
     options: [
-      'ไม่มีอะไร เป็นแค่ alias',
-      'auto-optimize เป็น format สมัยใหม่, บังคับ width/height เพื่อป้องกัน layout shift และ lazy-load โดย default',
-      'ใช้ได้กับ remote image เท่านั้น',
+      'ไม่มีอะไรเลย เป็นแค่ documentation',
+      'มันเปลี่ยน `srcset` widths ที่ generate ออกมาและ attribute `sizes` แล้วประทับ `data-astro-image="<layout>"` ให้ CSS ที่ match',
+      'เปลี่ยนแค่ alt text',
       'ปิด lazy loading',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วด้วย markup จริงของทั้งสามค่า: `constrained` กับ `full-width` generate srcset หลาย width พร้อม `sizes` ที่คำนวณมา ส่วน `fixed` มี width เดียวกับ `sizes` เป็นพิกเซลคงที่',
   },
   {
-    q: 'ควรใช้ `<Picture />` แทน `<Image />` เมื่อไร?',
+    q: '```astro\n<Image src="https://not-allowed.example.com/photo.jpg" width={300} height={200} alt="x" />\n```\n`not-allowed.example.com` ไม่ได้อยู่ใน `image.domains`/`remotePatterns` เกิดอะไรขึ้นตอน build จริง ๆ?',
     options: [
-      'ไม่มีเลย ทั้งสองตัวเหมือนกัน',
-      'เมื่ออยากให้ browser เลือกจากหลาย format หรือ serve crop ต่างกันในแต่ละ breakpoint',
-      'เฉพาะกับ SVG',
-      'เฉพาะใน server mode',
+      'build fail ด้วย `RemoteImageNotAllowed`',
+      'build ผ่านสำเร็จและ serve URL เดิมแบบไม่ optimize เงียบ ๆ — ไม่มี error เลย',
+      'Astro แทนที่ด้วย placeholder image',
+      'throw เฉพาะตอน dev mode ไม่ throw ตอน production build',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วว่า: มี width/height ระบุเอง (ไม่มี inferSize) allowlist ของ domain จะไม่ถูกเช็คเลยเพราะ Astro ไม่ต้อง fetch ไฟล์ — `getURL()` แค่ return src เดิมกลับไปเมื่อ host ไม่อนุญาต',
   },
   {
-    q: 'image ที่วางในโฟลเดอร์ `public/` ถูกจัดการยังไง?',
+    q: 'host ที่ไม่อนุญาตตัวเดิม แต่คราวนี้ใช้ `inferSize` แทน width/height ที่ระบุเอง เกิดอะไรขึ้น?',
     options: [
-      'optimize เต็มที่เหมือน local import',
-      'serve ตามเดิม ไม่ optimize — Astro ไม่ process `public/`',
-      'ถูก reject ตอน build',
-      'ถูกแปลงเป็น base64',
+      'ยังไม่ error เหมือนเดิม ผ่านเงียบ ๆ',
+      'throw `RemoteImageNotAllowed` ตอน build เพราะการอ่าน dimension จริงต้อง fetch URL ก่อน และ allowlist ถูกเช็คก่อน fetch นั้น',
+      'แค่ warn แล้วทำต่อ',
+      '`inferSize` ปิดการเช็ค domain ไปเลย',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วด้วย error text จริง: `[RemoteImageNotAllowed] Remote image https://not-allowed.example.com/photo.jpg is not allowed by your image configuration.` — path probe-แล้ว-fetch คือจุดที่การเช็คนี้อยู่พอดี',
   },
   {
-    q: 'จะ optimize remote image จาก URL ต้องมีอะไร?',
+    q: '```astro\n---\nimport Logo from \'../assets/logo.svg\';\n---\n<Logo size={32} class="brand" />\n```\nsource SVG คือ `<svg viewBox="0 0 24 24" width="24" height="24">` `size={32}` ทำอะไรใน HTML ที่ build ออกมา?',
     options: [
-      'ไม่ต้องมีอะไร ทุก URL ใช้ได้',
-      'domain ของตัวเองต้องถูก list เป็น authorized ใน Astro config (`image.domains` / `image.remotePatterns`)',
-      'ต้องเล็กกว่า 1KB',
-      'ต้องเป็น SVG',
+      'resize SVG ที่ render ให้เป็น 32×32',
+      'ไม่มีผลด้าน visual เลย — มันกลายเป็น attribute `size="32"` เฉย ๆ บน `<svg>` ในขณะที่ `width="24" height="24"` ที่ hardcode ไว้ยังชนะอยู่',
+      'build error เพราะ `size` ไม่ใช่ prop ที่ valid',
+      'แทนที่ viewBox',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วด้วย markup จริงที่ build ออกมา: `<svg viewBox="0 0 24 24" width="24" height="24" size="32" class="brand">` — prop เพิ่มเติมผ่านเข้าไปเป็น attribute ธรรมดา ไม่ได้ถูก map เข้ากับการคุมขนาดอย่างฉลาด',
+  },
+  {
+    q: 'prop `priority` เซ็ตอะไรบน `<Image />` เทียบกับ default?',
+    options: [
+      'ไม่มีอะไรที่วัดได้',
+      '`loading="eager"`, `decoding="sync"` และ `fetchpriority="high"` (default ตอนไม่ตั้ง: `loading="lazy"`, `decoding="async"`)',
+      'เปลี่ยนแค่การจัดการ `alt` text',
+      'บังคับให้ output เป็น AVIF',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบตรงจาก astro/dist/assets/internal.js ที่ติดตั้งจริง: `if (resolvedOptions.priority) { loading = "eager"; decoding = "sync"; fetchpriority = "high"; }`',
+  },
+  {
+    q: 'Fonts API ของ Astro (config `fonts` + `<Font />`) เป็น experimental ใน 7.3.5 หรือเปล่า?',
+    options: [
+      'ใช่ ต้องมี `experimental.fonts: true`',
+      'ไม่ — `fonts` เป็น array config ระดับบนสุดที่ stable (ตรวจสอบตรงจาก schema ที่ติดตั้งจริง) และ `<Font cssVariable>` เป็น component ธรรมดาจาก `astro:assets`',
+      'ยังไม่มีใน 7.3.5',
+      'stable เฉพาะกับ provider `local` เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบตรงจาก `astro/dist/core/config/schemas/base.js`: `fonts: z.array(FontFamilySchema).optional()` ไม่มี wrapper `experimental` เลย — และพิสูจน์แล้วด้วย build จริงที่ download และ self-host Google font',
   },
 ];
 

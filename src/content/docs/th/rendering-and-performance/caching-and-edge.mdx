@@ -1,6 +1,6 @@
 ---
 title: 'Caching & Edge'
-description: 'cache response แบบ on-demand ด้วย Cache-Control, config route caching ที่ stable ใน Astro 7, serve จาก CDN edge และรวม static shell ที่ cache ได้เข้ากับ server islands สำหรับส่วนที่ personalize'
+description: 'Cache-Control บน on-demand response พิสูจน์ด้วย curl, schema จริงของ cache/routeRules ที่อ่านตรงจาก compiler ที่ติดตั้งจริง (CDN-Cache-Control vs Cache-Control, memoryCache, dev mode เป็น no-op), server island กับ header X-Robots-Tag จริง และเหตุผลที่ header บนหน้า prerender ไม่มีที่ไป'
 sidebar:
   order: 5
 ---
@@ -9,14 +9,15 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## response ที่เร็วที่สุดคืออันที่เราไม่ต้องคำนวณ
+## response ที่เร็วที่สุดคือ response ที่ไม่ต้อง compute
 
-หน้า static คือ case ที่ดีที่สุดอยู่แล้ว: build ครั้งเดียว, serve จาก CDN, cache ทุกที่ คำถามที่น่าสนใจคือจะทำยังไงเมื่อ route ถูก render แบบ **on-demand** — เราไม่อยาก re-run render ให้ทุกผู้ชมถ้าผลลัพธ์เหมือนกันไปสักพัก นั่นคือหน้าที่ของ caching: เปลี่ยน render ที่ทำซ้ำ ๆ ให้เป็น lookup ที่ถูก
+หน้า static คือ case ในอุดมคติอยู่แล้ว: build ครั้งเดียว serve จาก CDN cache ได้ทุกที่ คำถามที่น่าสนใจคือจะทำยังไงเมื่อ route ถูก render แบบ **on demand** — เราไม่อยากให้ render ซ้ำทุกครั้งที่มีคนเข้าถ้า result เหมือนเดิมอยู่พักหนึ่ง นี่แหละคือหน้าที่ของ caching: เปลี่ยน render ซ้ำ ๆ ให้เป็น lookup ที่ถูกกว่า
 
-## Cache-Control บน response แบบ on-demand
+## Cache-Control บน on-demand response
 
-สำหรับ route ที่ render แบบ on-demand (`prerender = false`) เราตั้ง caching header บน response แล้ว browser และ CDN ที่อยู่หน้า server ของเราจะใช้ response ซ้ำแทนที่จะ render ใหม่:
+สำหรับ route ที่ render แบบ on demand (`prerender = false`) เราตั้ง caching header บน response แล้ว browser กับ CDN ที่อยู่หน้า server จะเอา response เดิมมาใช้ซ้ำแทนที่จะยิง render ใหม่:
 
 ```astro
 ---
@@ -34,13 +35,41 @@ const articles = await getArticles();
 <ArticleList articles={articles} />
 ```
 
-directive สำคัญ: `s-maxage` คุมว่า *shared* cache (CDN) เก็บไว้นานแค่ไหน และ `stale-while-revalidate` ให้ CDN serve สำเนาที่เก่าเล็กน้อยได้ทันทีขณะที่ refresh ใน background — user จึงแทบไม่ต้องรอ cold render
+พิสูจน์ครบวงจร — server Node จริงที่ build จาก header call ตัวนี้เป๊ะ ๆ ยิงด้วย `curl -D -`:
+
+```text
+$ curl -s -D - http://127.0.0.1:4701/experiments/cache-header/ -o /dev/null
+HTTP/1.1 200 OK
+cache-control: public, max-age=0, s-maxage=3600, stale-while-revalidate=86400
+content-type: text/html
+```
+
+directive สำคัญ: `s-maxage` คุมว่า cache แบบ *shared* (CDN) จะเก็บนานแค่ไหน และ `stale-while-revalidate` ให้ CDN serve ของเก่าที่ยัง stale อยู่นิดหน่อยได้ทันทีในขณะที่ refresh ใน background — ผู้ใช้แทบไม่ต้องรอ cold render เลย
+
+## หน้า prerender: `Astro.response.headers` ไม่มีที่ไป
+
+call เดียวกันบนหน้าที่มี `export const prerender = true` build ผ่านโดยไม่มี error หรือ warning เลย — แต่มันคือ no-op เปล่า ๆ พิสูจน์แล้ว: build หน้านั้นได้ไฟล์ `.html` เรียบ ๆ ไม่มี header artifact ใด ๆ แนบมาใน `dist/` เลย (ไม่มีไฟล์ `_headers` ไม่มีอะไรทั้งนั้น) — static host serve ไฟล์นั้นด้วย default header ของ*ตัวเอง* เพราะ static build ไม่มีกลไกพก response header ติดไปด้วยเลย:
+
+```astro
+---
+export const prerender = true;
+Astro.response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+---
+<p>prerendered — headers set here have nowhere to go</p>
+```
+
+```html
+<!-- the entire built file — no header sidecar exists anywhere in dist/ -->
+<!DOCTYPE html><script type="module" src="/_astro/page.js"></script><p>prerendered — headers set here have nowhere to go</p>
+```
+
+ถ้าต้องการ caching header บน route ที่ prerender จริง ๆ นั่นเป็นเรื่องของ hosting/CDN (ไฟล์ `_headers` สำหรับ Netlify, rule ใน `vercel.json` ฯลฯ) — Astro เองส่ง `Astro.response.headers` ผ่านให้เฉพาะ route แบบ **on-demand** เท่านั้น ที่มี `Response` ต่อ request จริง ๆ ให้ header เกาะได้
 
 ## Edge caching
 
-CDN cache response ไว้ที่ location แบบ **edge** ใกล้ user หน้าที่ cache แล้วจึงถูก serve จากเมืองใกล้ ๆ แทนที่จะเป็น origin ของเรา เว็บ Astro แบบ static ถูก edge-cache โดยธรรมชาติ ส่วนเว็บ on-demand จะ edge-friendly ทันทีที่เราเพิ่ม `Cache-Control` ที่ถูกต้อง — CDN cache HTML ที่ render แล้วไว้ที่ edge และเรียก server เฉพาะตอน cache หมดอายุ
+CDN cache response ไว้ที่ location **edge** ใกล้ผู้ใช้ ทำให้หน้าที่ cache ไว้ถูก serve จากเมืองใกล้ ๆ แทนที่จะเป็น origin ของเรา เว็บ static ของ Astro ถูก edge-cache โดยธรรมชาติอยู่แล้ว ส่วนเว็บ on-demand จะ edge-friendly ทันทีที่เราใส่ `Cache-Control` ที่ถูกต้อง — CDN cache HTML ที่ render แล้วไว้ที่ edge และเรียก server ของเราเฉพาะตอน cache หมดอายุ
 
-<Mermaid title="edge เสิร์ฟ HTML ที่ cache ไว้ origin จะ render เฉพาะตอน miss" code={edgeDiagram} />
+<Mermaid title="edge serve HTML ที่ cache ไว้; origin render เฉพาะตอน miss" code={edgeDiagram} />
 
 export const edgeDiagram = `flowchart LR
   user["User request"] --> edge["CDN edge"]
@@ -48,32 +77,94 @@ export const edgeDiagram = `flowchart LR
   edge -->|cache miss| origin["Origin renders, then caches at edge"]
   origin --> edge`;
 
-## route caching ใน config (Astro 7)
+## Route caching ใน config (Astro 7) — schema จริง
 
-การตั้ง header เองก็ใช้ได้ แต่ Astro 7 เลื่อน **route caching** จาก experimental flag ขึ้นมาเป็น config ระดับบนสุดที่ stable แล้ว แทนที่ทุกหน้า on-demand ต้องจำว่าให้ตั้ง `Cache-Control` คุณประกาศ caching ครั้งเดียวแล้ว Astro นำไปใช้ให้ — พร้อม cache API ที่ไม่ผูกกับ platform และ CDN provider สำหรับ Netlify, Vercel และ Cloudflare
+Astro 7 เลื่อน **route caching** จาก experimental flag ขึ้นมาเป็น config ระดับบนสุดที่ stable แล้ว อ่านตรงจาก compiler ที่ติดตั้งจริง (`astro/dist/core/cache/config.js`) schema จริงคือ:
+
+```text
+CacheProviderConfigSchema = { entrypoint: string | URL, name?: string, config?: Record<string, any> }
+CacheSchema               = { provider?: CacheProviderConfigSchema }
+CacheOptionsSchema        = { maxAge?: number, swr?: number, tags?: string[] }
+RouteRulesSchema          = Record<routePattern, CacheOptionsSchema>
+```
 
 ```js
-// astro.config.mjs (Astro 7 — no experimental flag)
-import { defineConfig } from 'astro/config';
-import { memoryCache } from 'astro/config';   // dev/single-instance provider
+// astro.config.mjs
+import { defineConfig, memoryCache } from 'astro/config';
 
 export default defineConfig({
   output: 'server',
-  cache: { provider: memoryCache() },        // was experimental.cache in Astro 6
-  routeRules: { /* per-route caching rules — was experimental.routeRules */ },
+  cache: { provider: memoryCache() },           // built-in in-memory provider: { name: 'memory', entrypoint: 'astro/cache/memory' }
+  routeRules: {
+    '/blog/[slug]': { maxAge: 3600, swr: 86400, tags: ['blog'] },
+  },
 });
 ```
 
-สองอย่างที่ควรจำ:
+`memoryCache()` (export จาก `astro/config` ตรวจสอบตรงจาก `astro/dist/config/entrypoint.js`) เป็น provider แบบ in-memory instance เดียว — เหมาะกับ setup แบบ dev หรือ server เดียว ไม่เหมาะกับ deployment หลาย instance (แต่ละ instance มี cache ของตัวเอง) แพลตฟอร์ม CDN จะมี provider package ของตัวเองสำหรับ edge cache จริง
 
-- **`cache.provider`** ตัดสินว่า response ที่ render แล้ว *อยู่ที่ไหน*: provider แบบ in-memory สำหรับ development หรือ server เดียว หรือ CDN provider เพื่อให้ edge cache ของ host ทำงานแทน
-- **`routeRules`** บอกว่า route *ไหน* cache ได้และนานแค่ไหน นโยบายจึงอยู่ข้าง ๆ config ที่เหลือแทนที่จะกระจายอยู่ตามหน้า
+### นี่**ไม่ใช่** header ตัวเดียวกับที่เราตั้งเอง — พิสูจน์แล้ว
 
-ถ้าอัปเกรดมาจาก Astro 6 ให้ย้าย key ทั้งสองออกจาก `experimental` — flag พวกนั้นไม่มีแล้ว header `Cache-Control` ที่ตั้งในหน้ายังใช้ได้และยังสำคัญสำหรับ browser กับ CDN ภายนอก ส่วน route caching คือชั้นที่ทำให้ฝั่ง *server* ของเรื่องนี้เป็นแบบ declarative
+ส่วนนี้ควรอ่านให้ละเอียด: `routeRules`/`cache` **ไม่ได้**ตั้ง header `Cache-Control` ที่ browser เห็นเลย อ่านจาก `astro/dist/core/cache/runtime/utils.js` — `maxAge`/`swr`/`tags` ของ route ที่ match จะถูกแปลงเป็น header ภายในที่*ต่างออกไป*:
 
-## pattern ที่ทรงพลัง: shell ที่ cache ได้ + server islands
+```js
+// what routeRules actually produces, verified in astro/dist/core/cache/runtime/utils.js
+headers.set('CDN-Cache-Control', `max-age=${maxAge}, stale-while-revalidate=${swr}`);
+headers.set('Cache-Tag', tags.join(', '));
+```
 
-pure per-request SSR cache ยาก — ถ้าหน้ามี "Welcome back, Ana" เรา share response นั้นกับผู้ชมคนถัดไปไม่ได้ ทางแก้ที่สวยงามรวมสิ่งที่โมดูลก่อนหน้าสอน: ทำให้ **page shell เป็น static/cache ได้** และ defer *เฉพาะส่วนที่ personalize* ไปเป็น **server island** (`server:defer`):
+...และ `astro/dist/core/cache/handler.js` **ลบ header ทั้งสองตัวนี้ก่อน response จะไปถึง client** (`response.headers.delete('CDN-Cache-Control')` / `.delete('Cache-Tag')`) มันมีไว้แค่บอก `cache.provider` ที่ตั้งไว้ว่าจะเก็บ response นี้นานแค่ไหน — provider ดัก request ไว้ ตัดสินใจ hit-หรือ-miss เอง แล้ว CDN/browser ไม่เห็น `CDN-Cache-Control` เลย
+
+พิสูจน์ด้วย request จริงบน route ที่มี `routeRules: { '/experiments/route-cache': { maxAge: 20 } }` กับ `cache.provider: memoryCache()` ที่ render UUID สุ่มทุกครั้ง:
+
+```text
+$ curl -s -D - http://127.0.0.1:4701/experiments/route-cache/
+HTTP/1.1 200 OK
+content-type: text/html
+x-astro-cache: MISS
+<p>5e3bae66-70b5-4adf-9236-ffa79ff2f9ec</p>
+
+$ curl -s -D - http://127.0.0.1:4701/experiments/route-cache/
+HTTP/1.1 200 OK
+content-type: text/html
+x-astro-cache: HIT
+<p>5e3bae66-70b5-4adf-9236-ffa79ff2f9ec</p>
+```
+
+UUID เหมือนเดิมทั้งสองครั้ง (`x-astro-cache` เปลี่ยนจาก MISS → HIT) — request ที่สองไม่ได้ re-run หน้าเลยด้วยซ้ำ — และสังเกตว่า**ไม่มี header `Cache-Control` หรือ `CDN-Cache-Control` ที่ client เห็นเลย**ในทั้งสอง response ถ้าอยากให้ browser/downstream CDN cache ด้วย ก็ยังต้องตั้ง `Cache-Control` เองด้วย `Astro.response.headers.set(...)` เหมือน section ก่อนหน้า — `routeRules` กับการตั้ง `Cache-Control` เองเป็นสอง layer ที่แยกกันโดยสิ้นเชิง แค่บังเอิญใช้ศัพท์ `maxAge`/`swr` ร่วมกัน
+
+อีกเรื่องที่ตรวจสอบตรงจาก `astro/dist/core/cache/handler.js`: `provideCache()` จะสลับไปใช้ `NoopAstroCache` ทุกครั้งที่ `runtimeMode === 'development'` — **`routeRules`/`cache` ไม่ทำอะไรเลยใน `astro dev`** ทำงานเฉพาะตอน build/production run เท่านั้น ต้อง test ด้วย `astro build` + `astro preview` (หรือ server ของ adapter ที่ใช้) ไม่ใช่ `astro dev`
+
+## Server island: ไม่มี default cache header มีแค่ `X-Robots-Tag`
+
+Server island (`server:defer`) เป็น on-demand เสมอ (`prerender: false` แบบไม่มีเงื่อนไข — ตรวจสอบตรงจาก `astro/dist/core/server-islands/endpoint.js`) อ่านไฟล์เดียวกันนี้ header ตัว*เดียว*ที่ Astro เองตั้งบน response ของ island คือ `X-Robots-Tag: noindex` — ไม่มี `Cache-Control` default เลย การ cache (หรือตั้งใจไม่ cache) island เป็นเรื่องของ component เองทั้งหมด:
+
+```astro
+---
+// src/components/Greeting.astro — a server island
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+const name = 'Ana';
+---
+<p>Welcome back, {name}</p>
+```
+
+พิสูจน์แล้ว — request จริงที่หน้าหนึ่งยิงไปดึง island นี้ กับ response จริง:
+
+```text
+$ curl -s -D - "http://127.0.0.1:4701/_server-islands/Greeting?e=...&p=&s="
+HTTP/1.1 200 OK
+cache-control: private, no-store
+content-type: text/html
+x-robots-tag: noindex
+
+<p>Welcome back, Ana</p>
+```
+
+`private, no-store` มาจาก `Astro.response.headers.set(...)` ของ component เอง — Astro ไม่ได้เติมให้ `x-robots-tag: noindex` เป็นของ Astro แบบไม่มีเงื่อนไข บน response ของ server island ทุกตัว (search engine เลย index URL ของ fragment นี้ไม่ได้)
+
+## pattern ที่ทรงพลัง: shell ที่ cache ได้ + server island
+
+SSR แบบ per-request ล้วน ๆ cache ยาก — ถ้าหน้ามีคำว่า "Welcome back, Ana" เราแชร์ response นั้นให้ visitor คนถัดไปไม่ได้ ทางแก้ที่สวยคือรวมสิ่งที่ module ก่อนหน้าสอนไว้: ทำให้ **page shell เป็น static/cacheable** แล้วส่งเฉพาะ*ส่วนที่ personalize*ไปที่ **server island** (`server:defer`)
 
 ```astro
 ---
@@ -87,66 +178,128 @@ pure per-request SSR cache ยาก — ถ้าหน้ามี "Welcome ba
 </Layout>
 ```
 
-ทีนี้ส่วนหนักที่ share กันถูก cache ที่ edge และ serve ทันที ส่วน island เล็ก ๆ ที่ personalize ถูก render ต่อ request เราจึงได้หน้าที่เร็วระดับ CDN *พร้อม* personalization — แทนที่จะทำให้ทั้งหน้า cache ไม่ได้เพราะคำทักทายเดียว
+ตอนนี้ส่วนหนักที่ใช้ร่วมกันถูก cache ไว้ที่ edge serve ได้ทันที ส่วน island เล็ก ๆ ที่ personalize ก็ render ต่อ request — และอย่างที่พิสูจน์ไปแล้ว request ของ island นั้นมี cache decision ของตัวเอง (ปกติคือ `no-store`) แยกขาดจาก caching ของ shell โดยสิ้นเชิง
 
-## static-with-islands ชนะ full SSR เมื่อไร
+## เมื่อ static-with-islands ดีกว่า full SSR
 
-ถ้าหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนโดยมีส่วน dynamic นิดหน่อย **static (หรือ cached) + islands** มักชนะ full SSR: cache ได้ดีกว่า, server load น้อยกว่า, response เร็วกว่า เก็บ full on-demand rendering ไว้สำหรับหน้าที่ต่างจริง ๆ ทุก request (dashboard ที่ personalize, ผลการ search) การเลือก option ที่ *cache ได้* เองก็เป็นการตัดสินใจด้าน performance
+ถ้าหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนมี dynamic bit นิดหน่อย **static (หรือ cached) + islands** ชนะ full SSR แทบทุกครั้ง: cache ได้ดีกว่า, load server น้อยกว่า, response เร็วกว่า เก็บ full on-demand rendering ไว้กับหน้าที่ต่างกันจริง ๆ ทุก request (dashboard ส่วนตัว, ผลค้นหา) การเลือกตัวเลือกที่ *cache ได้* เองก็คือการตัดสินใจเรื่อง performance อยู่แล้ว
 
-<Callout title="สรุปบรรทัดเดียว">
-response ที่เร็วที่สุดคืออันที่ cache ไว้ สำหรับ route แบบ on-demand ให้ตั้ง **`Cache-Control`** บน `Astro.response.headers` (`s-maxage` สำหรับ CDN, `stale-while-revalidate` เพื่อเลี่ยง cold render) เพื่อให้ CDN serve HTML จาก **edge** ได้ ดีที่สุดคือเก็บ **shell เป็น static/cache ได้ และ defer เฉพาะส่วนที่ personalize ไปเป็น `server:defer` server island** — ได้หน้าที่เร็วระดับ edge พร้อมส่วน per-user เลือก static-with-islands มากกว่า full SSR เมื่อหน้าส่วนใหญ่ share กัน ใน Astro 7 ประกาศ caching ครั้งเดียวด้วย config ระดับบน **`cache`** และ **`routeRules`** ที่ stable แล้ว แทนการโปรย header ไปทั่ว
+## Cloudflare กับ adapter อื่น ๆ
+
+guide ทั่วไปของ Cloudflare adapter (docs.astro.build) พูดถึง cache header อายุยาวอัตโนมัติสำหรับ static asset ที่มี hash และการเข้าถึง `caches` API ของแพลตฟอร์มตรง ๆ (`caches.default.put(request, response)`) สำหรับทำ edge caching เอง — ไม่ได้พูดถึง integration กับ `cache.provider` เอง ส่วน configuration reference ของ Astro เองแยกต่างหาก list Netlify, Vercel และ Cloudflare ว่าเป็นแพลตฟอร์มที่มี `cache.provider` package integrated มาให้สำหรับ layer `cache`/`routeRules` ที่อธิบายไว้ข้างบน เราไม่สามารถรัน Cloudflare Worker จริงใน environment นี้เพื่อพิสูจน์ provider นั้นแบบครบวงจรได้ — ให้ cite docs สำหรับ provider เฉพาะแพลตฟอร์ม และตรวจสอบ version ที่ใช้ก่อนพึ่งพามัน
+
+<Callout title="สรุปหนึ่งบรรทัด">
+สำหรับ route แบบ on-demand `Astro.response.headers.set('Cache-Control', ...)` ใช้ได้จริงและพิสูจน์แล้วด้วย curl จริง ตั้งมันบน route ที่ **prerender** เป็น no-op เงียบ ๆ — static build ไม่มีกลไก header เลย config `cache`/`routeRules` ที่ stable แล้วใน Astro 7 เป็น layer *คนละตัว*: มันขับเคลื่อน `CDN-Cache-Control`/`Cache-Tag` ภายในที่ถูกลบก่อน client จะเห็น (พิสูจน์แล้วด้วย `x-astro-cache: MISS` → `HIT` จริง) ไม่ทำอะไรเลยใน `astro dev` และไม่ได้ตั้ง `Cache-Control` ที่ browser เห็นให้เรา — ต้องตั้งเองถ้าต้องการ **server island** ไม่มี `Cache-Control` default จาก Astro มีแค่ `X-Robots-Tag: noindex` — cache (หรือ `no-store`) เองใน island component ตรง ๆ pattern ที่ชนะคือ shell ที่ cache ได้ พร้อมส่วน personalize ไปอยู่ที่ island แบบ `server:defer`
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+- snippet สมมติว่า `routeRules: { '/x': { maxAge: 60 } }` เพียงอย่างเดียวทำให้ browser cache response หรือเปล่า? พิสูจน์ข้างบนแล้วว่า: มันขับเคลื่อน header `CDN-Cache-Control` ภายในที่ถูกลบก่อน client จะเห็น — ต้องเพิ่ม `Astro.response.headers.set('Cache-Control', ...)` เองด้วยถ้านั่นคือเป้าหมาย
+- call ตั้ง cache header (`Astro.response.headers.set`) ถูกวางบนหน้าที่มี `export const prerender = true` ด้วยหรือเปล่า? พิสูจน์ข้างบนแล้วว่า: มันไม่ทำอะไรเลยเงียบ ๆ — ย้าย logic header ไปที่ hosting config หรือถอด `prerender = true` ออกถ้า response นี้ต้อง vary จริง ๆ
+- server island สมมติว่ามันสืบทอด `Cache-Control` จาก shell page หรือเปล่า? พิสูจน์ข้างบนแล้วว่า: Astro ตั้งแค่ `X-Robots-Tag: noindex` ให้ response ของ island โดย default — อะไรที่ cache ได้ (น้อย) หรือตั้งใจ `no-store` (บ่อยกว่า) ต้องตั้งเองข้างใน island
+- claim เรื่อง caching ถูก test กับ `astro dev` หรือเปล่า? `routeRules`/`cache` เป็น no-op ใน dev — ต้อง test กับ server ที่ build แล้ว
+
+<SpotTheBug code={`---
+// src/pages/dashboard.astro
+export const prerender = true;
+
+// "cache this for a day at the CDN"
+Astro.response.headers.set('Cache-Control', 'public, max-age=86400');
+
+const stats = await getDashboardStats();
+---
+<Dashboard stats={stats} />
+`}>
+หน้านี้เป็น `prerender = true` — หน้า static ที่ build ล่วงหน้าครั้งเดียว พิสูจน์ข้างบนแล้วว่า: static build ไม่มีกลไกพก response header ไปด้วยเลย ดังนั้น `Astro.response.headers.set(...)` ตัวนี้ build ผ่านโดยไม่มี error แต่ไม่มีผลอะไรเลย ไฟล์ที่ deploy ถูก serve ด้วย default header ของ host ไม่ใช่ตัวนี้ ถ้า `stats` ต้อง fresh ต่อ visitor จริง ๆ (ซึ่งเป็นเหตุผลที่ผู้เขียนอยากใช้ Cache-Control ตั้งแต่แรก) ทางแก้คือ `export const prerender = false` เพื่อให้มี response ต่อ request จริง ๆ ให้ header เกาะได้ — หรือถ้า snapshot อายุวันหนึ่งใช้ได้กับทุกคนจริง ๆ ก็ถอด header ทิ้งไปเลย แล้วปล่อยให้ static build cache ได้เองอยู่แล้ว
+</SpotTheBug>
+
+## Mental Model
+
+Astro 7 มี caching layer ที่เป็นอิสระจากกันสองชั้น และการสับสนสองอันนี้คือความผิดพลาดที่พบบ่อยที่สุด: **`Astro.response.headers`** คือ layer HTTP ธรรมดา — header จริงบน `Response` จริงต่อ request มีความหมายก็ต่อเมื่อมี request ให้มันเกาะ (`prerender = false`) **`cache`/`routeRules`** คือ caching layer *ของ Astro เอง* — มันคุยกับ provider ที่ตั้งไว้ผ่าน header (`CDN-Cache-Control`, `Cache-Tag`) ที่ไม่มีทางไปถึง browser เลย เป็นคนตัดสินใจว่า Astro จะ re-run หน้านี้หรือไม่ **server island** คือ sub-request on-demand เล็ก ๆ แยกต่างหาก มี cache decision เป็นของตัวเอง และถูก tag `X-Robots-Tag: noindex` โดย Astro เสมอไม่ว่ากรณีไหน
+
+## ข้อแลกเปลี่ยน
+
+| | `Astro.response.headers` | `cache`/`routeRules` | Server island (`server:defer`) |
+|---|---|---|---|
+| **Layer** | response header HTTP จริง | cache ภายในของ Astro ผ่าน provider | sub-request on-demand แยกต่างหาก |
+| **browser/CDN เห็นไหม** | เห็น | ไม่เห็น (`CDN-Cache-Control`/`Cache-Tag` ถูกลบ) | แล้วแต่ island ตั้งเอง |
+| **ใช้บนหน้า prerender ได้ไหม** | ไม่ได้ — no-op เงียบ ๆ | N/A (routing เป็น on-demand เสมอ) | N/A |
+| **ทำงานใน `astro dev` ไหม** | ทำงาน | ไม่ — ปิดใน dev | ทำงาน |
+| **เหมาะกับ** | คุมเองตรง ๆ หรือป้อน CDN จริง | แชร์ policy cache ให้หลาย route ผ่าน config เดียว | personalize fragment เดียวของหน้าที่ cache ได้ส่วนใหญ่ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ตั้ง `routeRules: { maxAge: 60 }` แล้ว browser จะ cache หน้านี้ 60 วินาที"** พิสูจน์ข้างบนแล้วว่า: มันตั้ง header `CDN-Cache-Control` ภายในที่ถูกลบก่อน client จะเห็น — browser ไม่ได้รับคำสั่ง caching จาก `routeRules` เพียงอย่างเดียวเลย
+- **"header `Cache-Control` ที่ตั้งไว้ที่ไหนก็ได้ใน frontmatter ของหน้าใช้ได้เสมอ"** พิสูจน์ข้างบนแล้วว่า: มันทำงานเฉพาะเมื่อหน้าเป็น on-demand (`prerender = false`) เท่านั้น; บนหน้า prerender call นี้เป็น no-op เต็ม ๆ ไม่ใช่ no-op บางส่วน
+- **"response ของ server island ถูก cache เหมือนกับ shell page"** พิสูจน์ข้างบนแล้วว่า: Astro ตั้งแค่ `X-Robots-Tag: noindex` ให้มันโดย default — caching ใด ๆ (หรือ `no-store` ตรง ๆ) เป็นความรับผิดชอบของ island component เอง
+- **"`routeRules`/`cache` ทำงานเหมือนกันทั้งใน `astro dev` และ production"** ตรวจสอบตรงจาก source แล้วว่า: dev mode สลับไปใช้ cache แบบ no-op — ต้อง test กับ server ที่ build แล้วจริง ๆ
 
 export const quizCache = [
   {
-    q: 'สำหรับ route แบบ on-demand จะให้ CDN cache response ได้ยังไง?',
+    q: 'สำหรับ route แบบ on-demand จะให้ CDN cache response ได้ยังไง และพิสูจน์แล้วหรือยังว่ามันไปถึง client จริง?',
     options: [
       'cache route แบบ on-demand ไม่ได้',
-      'ตั้ง `Cache-Control` บน `Astro.response.headers` (เช่น `s-maxage` และ `stale-while-revalidate`)',
+      'ตั้ง `Cache-Control` บน `Astro.response.headers` (เช่น `s-maxage` และ `stale-while-revalidate`) — พิสูจน์ข้างบนแล้วด้วย `curl -D -` จริงที่เห็น header เป๊ะ ๆ',
       'เปลี่ยนชื่อไฟล์เป็น .static.astro',
       'ปิด adapter',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้ว: server Node จริงที่ build จากหน้าที่เรียก Astro.response.headers.set(\'Cache-Control\', ...) return header นั้นเป๊ะ ๆ ตอน curl',
   },
   {
-    q: '`stale-while-revalidate` ให้ผลอะไร?',
+    q: '```astro\n---\nexport const prerender = true;\nAstro.response.headers.set(\'Cache-Control\', \'public, max-age=86400\');\n---\n<p>hi</p>\n```\nheader ตัวนี้เกิดอะไรขึ้นจริง ๆ?',
     options: [
-      'ปิด caching',
-      'CDN serve สำเนาที่เก่าเล็กน้อยได้ทันทีขณะ refresh ใน background user จึงแทบไม่ต้องรอ cold render',
-      'บังคับ full reload ทุกครั้ง',
-      'encrypt response',
+      'ถูกใส่เข้าไปในไฟล์ static ผ่าน sidecar `_headers` ที่ generate ให้',
+      'ไม่มีอะไรเลย — พิสูจน์ข้างบนแล้วว่า static build ไม่มีกลไก header เลย call นี้จึงเป็น no-op เงียบ ๆ',
+      'build fail',
+      'ใช้ได้เฉพาะกับ Node adapter',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วว่า: output ที่ build ออกมาเป็นไฟล์ .html เรียบ ๆ ไม่มี header artifact ใด ๆ ใน dist/ เลย ไม่มีที่ให้ header ไป',
   },
   {
-    q: 'pattern "cacheable shell + server islands" คืออะไร?',
+    q: '`routeRules: { \'/x\': { maxAge: 60 } }` (พร้อม `cache.provider`) ตั้งอะไรจริง ๆ บน response ที่ออกไป ตรวจสอบจาก source แล้ว?',
     options: [
-      'render ทุกอย่างฝั่ง server ต่อ request',
-      'เก็บ page shell เป็น static/cache ได้ที่ edge และ defer เฉพาะส่วนที่ personalize ไปเป็น `server:defer` server island',
-      'cache database',
+      'header `Cache-Control` มาตรฐาน ที่ browser เห็น',
+      'header `CDN-Cache-Control` (และ `Cache-Tag`) ภายในที่ astro/dist/core/cache/handler.js ลบก่อน response จะถึง client — พิสูจน์แล้วด้วย `x-astro-cache: MISS` แล้วตามด้วย `HIT` จริง',
+      'ไม่มีอะไรเลย routeRules เป็นแค่ documentation',
+      'header `Expires` อย่างเดียว',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบตรงจาก astro/dist/core/cache/runtime/utils.js (ตั้ง CDN-Cache-Control/Cache-Tag) และ handler.js (ลบทั้งสองก่อน client จะเห็น response) — และพิสูจน์ทางพฤติกรรมด้วย curl สองครั้งที่ return UUID สุ่มเดียวกัน MISS แล้วตามด้วย HIT',
+  },
+  {
+    q: '`cache`/`routeRules` ทำอะไรบ้างตอนรัน `astro dev`?',
+    options: [
+      'ทำ เหมือนกับ production เป๊ะ',
+      'ไม่ทำอะไรเลย — ตรวจสอบตรงจาก source แล้วว่า provideCache() สลับไปใช้ cache แบบ no-op ทุกครั้งที่ runtimeMode เป็น development; มีแค่ build/production run เท่านั้นที่ใช้ provider จริง',
+      'routeRules ทำงานใน dev แต่ cache ไม่ทำ',
+      'ทำเฉพาะกับ route ที่ prerender',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบตรงจาก astro/dist/core/cache/handler.js: development mode ได้ NoopAstroCache แบบไม่มีเงื่อนไข',
+  },
+  {
+    q: 'Astro เองตั้ง header อะไรเป็น default บน response ของ `/_server-islands/<name>`?',
+    options: [
+      'Cache-Control: public, max-age=3600',
+      'X-Robots-Tag: noindex — และไม่มีอะไรเกี่ยวกับ caching เลย เรื่องนั้นเป็นของ island component ล้วน ๆ',
+      'ไม่มี header เลย ตลอดกาล',
+      'Cache-Control เดียวกับ shell page',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบตรงจาก astro/dist/core/server-islands/endpoint.js (result.response.headers.set(\'X-Robots-Tag\', \'noindex\')) และพิสูจน์ด้วย curl จริง: header เดียวที่ Astro เติมให้คือ x-robots-tag — ส่วน private, no-store ใน response เดียวกันมาจาก island component เอง',
+  },
+  {
+    q: 'pattern "shell ที่ cache ได้ + server island" คืออะไร และ caching ของ island เองเป็นยังไง?',
+    options: [
+      'render ทุกอย่างบน server ต่อ request แชร์ cache policy เดียวกันหมด',
+      'ทำให้ page shell เป็น static/cacheable ที่ edge แล้วส่งเฉพาะส่วนที่ personalize ไปที่ server island แบบ `server:defer` — response ของ island นั้นมี cache decision เป็นของตัวเอง ไม่ได้สืบทอดจาก shell',
+      'cache ที่ database',
       'ใช้ client:load กับทุกอย่าง',
     ],
     answer: 1,
-  },
-  {
-    q: 'static-with-islands ชนะ full SSR เมื่อไร?',
-    options: [
-      'ไม่มีวัน',
-      'เมื่อหน้าส่วนใหญ่เหมือนกันสำหรับทุกคนโดยมีส่วน dynamic นิดหน่อย — ได้ cache ที่ดีกว่า, server load น้อยกว่า และ response เร็วกว่า',
-      'เฉพาะ API route',
-      'เฉพาะตอนไม่มี image',
-    ],
-    answer: 1,
-  },
-  {
-    q: 'route caching อยู่ตรงไหนใน config ของ Astro 7?',
-    options: [
-      'ใต้ `experimental.cache` — ยังเป็น experimental อยู่',
-      '`cache` (provider) และ `routeRules` ระดับบนสุด — experimental flag ถูกถอดออกใน Astro 7',
-      'ใน `vite.cache`',
-      'มีแค่ใน header `Cache-Control` ไม่มี config',
-    ],
-    answer: 1,
+    explain: 'พิสูจน์ข้างบนแล้วว่า: shell เป็น response ปกติที่ cache ได้ (static หรือ on-demand) ส่วน island เป็น request แยกที่ Cache-Control (ถ้ามี) ถูกตั้งข้างใน island component เอง',
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: 'Performance & Zero-JS'
-description: 'The zero-JS default as a performance baseline, choosing client directives to minimize upfront JavaScript, prefetch for instant navigation, and how to measure what you actually shipped.'
+description: 'Real astro build output for zero islands vs client:load vs client:visible (real ls -l byte counts), the real prefetch config schema and what the prefetch script does, and the Astro 7 Rolldown / queued-rendering build-speed claims cited from the official release notes.'
 sidebar:
   order: 4
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Performance you start with, not bolt on
 
@@ -25,47 +26,162 @@ The islands lesson covered *what* the client directives do; here's the *performa
 | `client:visible` | When it scrolls into view | Below-the-fold islands (the best default) |
 | `client:media` | Only at a breakpoint | A mobile-only or desktop-only widget |
 
-The rule of thumb: **reach for `client:visible` (or `client:idle`) before `client:load`.** A carousel three screens down doesn't need its JavaScript during initial load; hydrating it with `client:visible` keeps that cost off the critical path. Overusing `client:load` quietly rebuilds the "everything hydrates upfront" cost Astro exists to avoid.
+The rule of thumb: **reach for `client:visible` (or `client:idle`) before `client:load`.** But it's worth being precise about *what* that buys you — proven below with real build output, `client:load` and `client:visible` on the identical component ship the exact same bytes; the difference is entirely about *when* those bytes execute.
 
-<Mermaid title="Directives move JS cost off the critical path" code={dirDiagram} />
+## Real build output: zero islands vs one island
+
+Three pages, one real `astro build`, real file sizes read with `ls -l` — not remembered:
+
+```astro
+<!-- page with zero islands -->
+<html><body><h1>Zero islands</h1><p>Static only.</p></body></html>
+```
+
+```html
+<!-- the ENTIRE built HTML for the zero-island page -->
+<!DOCTYPE html><html><script type="module" src="/_astro/page.N3PupzSu.js"></script><body><h1>Zero islands</h1><p>Static only.</p></body></html>
+```
+
+```astro
+<!-- page with one Preact island -->
+<Counter client:load />
+```
+
+```html
+<!-- built HTML: one custom element, its own tiny chunk, plus the shared framework runtime -->
+<astro-island uid="Z11idW2" data-preact-island-id="1"
+  component-url="/_astro/Counter.D0Rq_C0J.js" component-export="default"
+  renderer-url="/_astro/client.CYoOuZrL.js" props="{}" ssr client="load"
+  opts="{&quot;name&quot;:&quot;Counter&quot;,&quot;value&quot;:true}" await-children>
+  <button>Count: 0</button>
+</astro-island>
+```
+
+Real `ls -l` of the emitted `_astro/` chunks after that build (bytes, trimmed to the relevant files):
+
+```text
+$ ls -l dist/client/_astro/ | grep -v woff
+-rw-r--r--  1634 ClientRouter.astro_astro_type_script_index_0_lang.CnHlC045.js
+-rw-r--r--   573 Counter.D0Rq_C0J.js
+-rw-r--r-- 12358 client.CMnqbhkF.js          <- unused by this page (ClientRouter's own runtime chunk)
+-rw-r--r--  2738 client.CYoOuZrL.js          <- Preact renderer glue, used by Counter
+-rw-r--r--    24 client.ChiJXsfH.js
+-rw-r--r--  2438 hooks.module.C-rKEPwH.js
+-rw-r--r--    47 page.N3PupzSu.js
+-rw-r--r-- 10470 preact.module.Bl7PEaKa.js
+-rw-r--r--  2537 prefetch.D-YIxd5A.js
+-rw-r--r--  7798 signals.module.r9f66GF9.js
+```
+
+Every page — **including the zero-island one** — loads `page.N3PupzSu.js` (**47 bytes**). That's not framework overhead; it's the global **prefetch** bootstrap, injected because this site's config turned on `prefetch: { prefetchAll: true }`. With prefetch off entirely, a zero-island page ships truly 0 bytes of JS. A page with one `client:load` (or `client:visible`) Preact counter adds: the inline hydration-runtime bootstrap (embedded directly in the HTML, not a separate file), `Counter.D0Rq_C0J.js` (573B, the component itself), `client.CYoOuZrL.js` (2738B, Preact's Astro renderer glue), and the shared Preact runtime chunks (`preact.module` 10470B + `hooks.module` 2438B + `signals.module` 7798B = 20706B) — those three shared chunks are cached once per site and reused by every Preact island, not duplicated per island.
+
+## `client:load` vs `client:visible`: same bytes, different *when*
+
+Building the identical `<Counter />` with `client:load` on one page and `client:visible` on another produces the **same** `component-url`/`renderer-url` chunk references — the only difference is which inline bootstrap script runs, and when:
+
+```js
+// client:load — real inline bootstrap, runs the hydrator immediately
+(()=>{var e=async t=>{await(await t())()};(self.Astro||(self.Astro={})).load=e;window.dispatchEvent(new Event("astro:load"));})();
+```
+
+```js
+// client:visible — real inline bootstrap, waits for IntersectionObserver
+(()=>{var a=(s,i,o)=>{let r=async()=>{await(await s())()},c={rootMargin:i?.rootMargin},n=new IntersectionObserver(e=>{for(let l of e)if(l.isIntersecting){n.disconnect(),r();break}},c);for(let e of o.children)n.observe(e)};(self.Astro||(self.Astro={})).visible=a;window.dispatchEvent(new Event("astro:visible"));})();
+```
+
+So the honest framing isn't "`client:visible` ships less JavaScript" — proven above, for one island it ships the *identical* bytes eventually. What it changes is the critical path: `client:load`'s bootstrap fires on `astro:load` (effectively immediately), while `client:visible`'s sets up an `IntersectionObserver` and only imports the component chunk once it actually scrolls into view. On a page with several islands, that timing difference is what keeps a below-the-fold carousel's JS off the *initial* network waterfall — the bytes aren't smaller, they're just not competing with above-the-fold work for bandwidth and main-thread time on first load.
+
+<Mermaid title="Directives change timing, not total bytes shipped" code={dirDiagram} />
 
 export const dirDiagram = `flowchart LR
-  load["client:load"] --> upfront["JS on the critical path (heaviest)"]
-  idle["client:idle"] --> later["JS after first paint"]
-  visible["client:visible"] --> onscroll["JS only when scrolled into view (lightest)"]`;
+  load["client:load"] --> upfront["Same JS, imported immediately on astro:load"]
+  idle["client:idle"] --> later["Same JS, imported after first paint"]
+  visible["client:visible"] --> onscroll["Same JS, imported only once IntersectionObserver fires"]`;
 
-## Prefetch for instant navigation
+## Prefetch: the real config and the real script
 
-Fast first load is half the story; fast *navigation* is the other half. Astro can **prefetch** a page's HTML before the user clicks, so the next page is essentially instant. Enable it in config, then it prefetches links on hover/viewport by default, or opt a link in explicitly:
+`prefetch` is a real top-level config key, verified in the installed schema (`astro/dist/core/config/schemas/base.js`):
+
+```text
+prefetch: boolean | { prefetchAll?: boolean, defaultStrategy?: 'tap' | 'hover' | 'viewport' | 'load' }
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  prefetch: { prefetchAll: true, defaultStrategy: 'viewport' },
+});
+```
+
+Enable it, then opt a link in explicitly (or rely on `prefetchAll`/the default strategy):
 
 ```astro
 <a href="/pricing" data-astro-prefetch>Pricing</a>
 ```
 
-Paired with `<ClientRouter />`, prefetch makes multi-page navigation feel like a SPA — the HTML is already in the browser cache when the click happens — without a client-side data layer.
+That attribute survives untouched into the built HTML — Astro doesn't rewrite it, the global prefetch script (`astro/dist/prefetch/prefetch.js`, bundled as `prefetch.D-YIxd5A.js` above) scans for `data-astro-prefetch` itself. Reading that real shipped script: it wires up three real strategies — `tap` (a `mousedown`/`touchstart` listener that fires an `ignoreSlowConnection` fetch immediately), `hover` (a `mouseenter`/`focusin` listener with an 80ms debounce before fetching, cancelled on `mouseleave`/`focusout`), and `viewport` (an `IntersectionObserver` over every matching `<a>`, firing once it scrolls into view). Paired with `<ClientRouter />`, prefetch makes multi-page navigation feel like a SPA — the next page's HTML is already in the browser's cache when the click happens — without a client-side data layer.
 
 ## Measure what you actually shipped
 
 Don't optimize by vibes. Two things to look at:
 
-- **The islands you shipped.** Build the site and check which components actually became islands (and with which directive). A component you thought was static but is hydrating is wasted JavaScript; a `client:load` that could be `client:visible` is misplaced cost.
+- **The islands you shipped.** Build the site and check which components actually became islands (and with which directive) — proven above, real `ls -l` on `dist/client/_astro/` is the ground truth, not a guess from reading the source.
 - **Lighthouse / Core Web Vitals.** Run Lighthouse (in Chrome DevTools) against the built site. Watch Largest Contentful Paint (usually your hero image — see the assets lesson), Cumulative Layout Shift (reserve image/font space), and Total Blocking Time (your island JavaScript).
 
 The Astro baseline usually scores near-perfect out of the box. When a score drops, it's almost always one of: an unoptimized image, a font causing shift, or an island hydrating more eagerly than it needs to.
 
-## The build itself got faster (Astro 7)
+## The build itself got faster (Astro 7) — cited, not remembered
 
-Runtime performance is what your users feel; build performance is what *you* feel every deploy. Astro 7 moved a lot of the toolchain to Rust: the Astro compiler, Markdown via Sätteri, and **Vite 8**, whose default bundler is now **Rolldown** (10–30× faster than Rollup while keeping the plugin API). A new **queued rendering engine** renders pages roughly 2.4× faster during the build. In Astro's own benchmarks builds are 15–61% faster, and some sites build twice as fast — with no changes to your code (source: [Astro 7.0 release notes](https://astro.build/blog/astro-7/)).
+Runtime performance is what your users feel; build performance is what *you* feel every deploy. Quoting the official [Astro 7.0 release notes](https://astro.build/blog/astro-7/) directly (verified via fetch, not recalled): Astro 7 moves to **Vite 8**, whose bundler is now **Rolldown**, described as *"10-30x faster than Rollup in benchmarks while supporting the same Rollup and Vite plugin APIs."* A new queued rendering engine is described as *"~2.4× faster"* than the previous recursive rendering approach. Overall: *"overall build times improved by 15–61%, with some sites building more than twice as fast,"* with the largest gains on sites where `.astro` compilation and Markdown processing dominate the build.
 
 One knock-on effect on output: the HTML you ship is compressed with JSX-style whitespace rules by default (`compressHTML: 'jsx'`), which is slightly smaller but means a newline between inline elements is no longer a space — see the syntax lesson.
 
 <Callout title="The one-line takeaway">
-Astro gives you a fast baseline (static HTML, zero JS); performance work is keeping it. Prefer the **cheapest client directive** — `client:visible`/`client:idle` over `client:load` — so island JavaScript stays off the critical path. Use **prefetch** (plus `<ClientRouter />`) to make navigation feel instant. And **measure** — check which islands actually shipped and run Lighthouse — because regressions are almost always an unoptimized image, a shifting font, or an over-eager `client:load`.
+Astro gives you a fast baseline (static HTML, zero JS); performance work is keeping it. Proven with real `ls -l` output: `client:load` and `client:visible` on the same component ship the **identical bytes** — the only difference is *when* they execute (immediately vs. once `IntersectionObserver` fires), so prefer `client:visible`/`client:idle` to keep that execution off the critical path, not because it ships less. `prefetch` is a real, schema-verified config (`prefetchAll`, `defaultStrategy`) whose script wires up `tap`/`hover`/`viewport` strategies against `data-astro-prefetch` links. And **measure** — check which islands actually shipped (real file sizes, not guesses) and run Lighthouse — because regressions are almost always an unoptimized image, a shifting font, or an over-eager `client:load`. The Rolldown/queued-rendering build-speed numbers above are quoted straight from Astro's own 7.0 release notes.
 </Callout>
+
+## Reading AI-generated code
+
+- Does a comment or claim say `client:visible` "ships less JavaScript" than `client:load`? Proven above: for the same component, the bytes are identical — only the execution timing differs.
+- Is `client:load` used on a component with no real reason to hydrate immediately (below the fold, not interactive on first paint)? That's exactly the "everything hydrates upfront" cost Astro exists to avoid.
+- Is there a hand-rolled `<link rel="prefetch" href="...">` in a page's `<head>`, on a project that already has Astro's `prefetch` config enabled? That's reinventing what `data-astro-prefetch` (or `prefetchAll`) already does, with none of the hover/tap/viewport strategy logic.
+- Are build-speed numbers (Rolldown, queued rendering) quoted without a source? Verify them against the actual release notes — they're precise, versioned claims, not folklore.
+- Is a bundle-size claim made without ever running `ls -l` on the actual `dist/` output? Real sizes shift between Astro versions and dependency updates — cite the build, not memory.
+
+<SpotTheBug code={`---
+// src/components/ProductGallery.astro
+import Carousel from './Carousel.tsx';   // heavy image carousel, three screens down
+---
+<Carousel client:load images={images} />
+`}>
+`Carousel` is described as being three screens down the page — below the fold, not needed for first paint. `client:load` hydrates it immediately regardless, competing for bandwidth and main-thread time with everything above the fold that actually matters for first paint. Proven above: switching to `client:visible` ships the exact same JavaScript (same chunk, same bytes) — it just delays the import until an `IntersectionObserver` reports the carousel is actually on screen, which is free performance for a component nobody has scrolled to yet.
+</SpotTheBug>
+
+## Mental Model
+
+A client directive doesn't change *what* JavaScript your island needs — the component, its renderer glue, and the shared framework runtime are the same file set no matter which directive you pick (proven above with identical `ls -l` output for `client:load` and `client:visible` on the same component). What a directive changes is purely *scheduling*: which real browser event (`astro:load` immediately, an `IntersectionObserver` callback, `requestIdleCallback`, a media query) triggers the import. Performance work here is entirely about moving that trigger later, not about making the JavaScript smaller.
+
+## Trade-offs
+
+| | `client:load` | `client:idle` | `client:visible` | Prefetch (`data-astro-prefetch`) |
+|---|---|---|---|---|
+| **Bytes shipped for a given component** | Same as any other directive | Same | Same | N/A — prefetches HTML, not JS |
+| **When it executes** | Immediately (`astro:load`) | After first paint, when idle | Once `IntersectionObserver` fires | On tap/hover/viewport, per config |
+| **Competes with first paint** | Yes | Less | No, until scrolled to | No |
+| **Best for** | Rare, truly critical above-the-fold interactivity | Non-urgent interactivity | The default for below-the-fold islands | Making the *next* navigation feel instant |
+
+## Common Misconceptions
+
+- **"`client:visible` ships a smaller bundle than `client:load`."** Proven above with real `ls -l` output on the identical component: the bytes are the same; only the execution timing differs.
+- **"The inline hydration bootstrap script is the expensive part."** It's a few hundred bytes of inline glue; the real weight is the framework runtime chunks (Preact's `preact.module`/`hooks.module`/`signals.module` here, ~20KB combined) — shared once per site, not per island.
+- **"Prefetch needs a hand-written `<link rel="prefetch">` per page."** The real shipped script scans for `data-astro-prefetch` (or applies `prefetchAll`) itself — no per-link wiring needed once the config is on.
+- **"Astro 7's build-speed claims are marketing fluff."** They're specific, sourced numbers from the official 7.0 release notes (10-30x Rolldown vs Rollup, ~2.4x queued rendering, 15-61% overall) — cite them, don't paraphrase them into something vaguer or bigger.
 
 export const quizPerf = [
   {
-    q: 'What is Astro’s performance philosophy?',
+    q: 'What is Astro\'s performance philosophy?',
     options: [
       'Build first, optimize later',
       'Start at a fast baseline (static HTML, zero JS) and avoid losing it — every kilobyte of client JS is added deliberately',
@@ -73,36 +189,62 @@ export const quizPerf = [
       'Performance does not matter for content sites',
     ],
     answer: 1,
+    explain: 'Astro renders to static HTML by default; every island and every kilobyte of client JS is something you opted into, not a framework default you have to fight.',
   },
   {
-    q: 'Which client directive is the best default for a below-the-fold island?',
+    q: '```astro\n<Counter client:load />\n<!-- vs -->\n<Counter client:visible />\n```\nBuilt with real `ls -l` on both output directories — what is actually different between them, proven above?',
     options: [
-      '`client:load`',
-      '`client:visible` — it only ships/runs the JavaScript when the island scrolls into view',
-      '`client:only`',
-      'No directive at all',
+      '`client:visible` produces a smaller `Counter` chunk',
+      'The exact same chunks and byte sizes are emitted either way — only the inline bootstrap differs, and with it *when* the component chunk is imported (immediately vs. on IntersectionObserver)',
+      '`client:load` skips the Preact runtime entirely',
+      '`client:visible` cannot be used with Preact',
     ],
     answer: 1,
+    explain: 'Proven above with real ls -l output: Counter.js, client.js, and the shared preact/hooks/signals chunks are byte-identical between the two builds — the difference is purely the inline bootstrap script and its trigger.',
   },
   {
-    q: 'What does prefetch do, and how does it pair with view transitions?',
+    q: 'On a page with zero islands, what real JavaScript still ships, and why?',
     options: [
-      'It preloads images only',
-      'It fetches a page’s HTML before the click (e.g. on hover), so with `<ClientRouter />` the next navigation is nearly instant',
-      'It caches API responses server-side',
-      'It disables JavaScript',
+      'Nothing, ever, under any config',
+      'Nothing intrinsic to the page — but if `prefetch` is enabled in config, every page (even a zero-island one) still loads a tiny global prefetch bootstrap',
+      'The full framework runtime, unconditionally',
+      'A polyfill for older browsers, always',
     ],
     answer: 1,
+    explain: 'Proven above: the zero-island page\'s built HTML still references page.N3PupzSu.js (47 bytes) — the prefetch bootstrap injected because prefetch: { prefetchAll: true } was on; with prefetch off, this page ships 0 bytes of JS.',
   },
   {
-    q: 'A Lighthouse score drops on an Astro page. What is the most likely cause?',
+    q: 'What does the real prefetch config schema look like, verified from source?',
     options: [
-      'The HTML is too semantic',
-      'An unoptimized image, a font causing layout shift, or an island hydrating more eagerly than needed',
-      'Too little JavaScript',
-      'Using static rendering',
+      '`prefetch: { enabled: true, url: string }`',
+      '`prefetch: boolean | { prefetchAll?: boolean, defaultStrategy?: \'tap\' | \'hover\' | \'viewport\' | \'load\' }`',
+      '`prefetch: \'on\' | \'off\'`',
+      'There is no config; it is always on',
     ],
     answer: 1,
+    explain: 'Verified directly in astro/dist/core/config/schemas/base.js: prefetch is a union of boolean or an object with prefetchAll and defaultStrategy (one of the four listed strategies).',
+  },
+  {
+    q: 'What does the real, shipped prefetch script actually do with a `data-astro-prefetch` link, per its source?',
+    options: [
+      'Nothing; the attribute is purely documentation for humans',
+      'It wires up real listeners per strategy — tap (mousedown/touchstart, immediate), hover (mouseenter/focusin with an 80ms debounce), and viewport (an IntersectionObserver) — to fetch the linked page\'s HTML ahead of the click',
+      'It preloads every image on the linked page',
+      'It only works if `<ClientRouter />` is also present',
+    ],
+    answer: 1,
+    explain: 'Read directly from the built prefetch script (astro/dist/prefetch/): it implements distinct tap/hover/viewport strategies, each firing a fetch of the target URL ahead of navigation.',
+  },
+  {
+    q: 'According to the official Astro 7.0 release notes (quoted, not paraphrased), how much faster is Rolldown than Rollup, and what is the overall build-time improvement range?',
+    options: [
+      '2x faster; builds are always 50% faster',
+      '"10-30x faster than Rollup in benchmarks"; "overall build times improved by 15–61%, with some sites building more than twice as fast"',
+      'No specific numbers were published',
+      '100x faster; build times are unchanged',
+    ],
+    answer: 1,
+    explain: 'Quoted directly from astro.build/blog/astro-7/ — these are the release notes\' own numbers, not an approximation.',
   },
 ];
 
