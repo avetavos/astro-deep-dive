@@ -1,6 +1,6 @@
 ---
 title: 'Middleware & Sessions'
-description: 'code ที่รันก่อนทุก request — onRequest middleware และ context.locals — พร้อม server-side session ด้วย Astro.session สำหรับ state ต่อ user และ auth'
+description: 'Code ที่รันก่อนทุก request — onRequest middleware, sequence() ต่อหลายตัว (พิสูจน์ลำดับด้วย header จริง), context.locals ที่ type ด้วย App.Locals, context.rewrite/next(path), ทำไม middleware บนหน้า prerendered รันแค่ตอน build และ session ด้วย session.regenerate() ป้องกัน fixation'
 sidebar:
   order: 5
 ---
@@ -9,14 +9,18 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Middleware: ประตูหน้าทุก request
 
-Middleware คือ function ตัวเดียวที่รัน **ก่อนทุก request** ถูกจัดการ ตัว middleware อยู่ใน `src/middleware.ts` และ export `onRequest(context, next)` — คุณทำงาน แล้วเรียก `next()` เพื่อไปต่อยัง page หรือ endpoint (หรือ short-circuit ด้วย `Response` ของตัวเอง)
+Middleware คือ function ตัวเดียวที่รัน**ก่อนทุก request**จะถูกจัดการ มันอยู่ใน `src/middleware.ts` และ export `onRequest(context, next)` — คุณทำงานอะไรบางอย่าง แล้วเรียก `next()` เพื่อไปต่อยัง page หรือ endpoint (หรือตัด flow ด้วย `Response` ของตัวเอง)
 
 ```ts
 // src/middleware.ts
 import { defineMiddleware } from 'astro:middleware';
+
+// Stand-in for your real session lookup — replace with your auth layer.
+async function getUser(token: string) { return { id: '1', name: 'Ava' } as { id: string; name: string } | null; }
 
 export const onRequest = defineMiddleware(async (context, next) => {
   // Runs for every request, before the route.
@@ -32,7 +36,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 });
 ```
 
-<Mermaid title="middleware รันก่อน route และ short-circuit ได้" code={mwDiagram} />
+<Mermaid title="Middleware รันก่อน route และตัด flow ได้" code={mwDiagram} />
 
 export const mwDiagram = `sequenceDiagram
   participant B as Browser
@@ -47,21 +51,114 @@ export const mwDiagram = `sequenceDiagram
     R-->>B: rendered response
   end`;
 
-## context.locals: data ที่ share ต่อ request
+## รวมหลาย middleware ด้วย `sequence()`
 
-หัวใจของ middleware คือ **`context.locals`** — object ที่อยู่ตลอดหนึ่ง request อะไรก็ตามที่คุณ set ไว้ (user ปัจจุบัน, request id, feature flag) อ่านได้ในทุก page, endpoint และ action ของ request นั้นผ่าน `Astro.locals` / `context.locals` ของ action นี่คือวิธีที่ middleware ส่ง data ที่คำนวณแล้วให้ส่วนที่เหลือของ request โดยไม่ใช้ global state
+โปรเจกต์จริงแทบไม่เคยมี concern เดียวให้ middleware จัดการ — auth, request logging, middleware ของ integration เอง, กฎ rewrite เขียนทุกอย่างลงใน `onRequest` ก้อนเดียวทำให้แต่ละ concern test หรือสลับลำดับยาก `sequence()` รวมหลาย middleware function เป็นตัวเดียว รันตามลำดับที่ส่งเข้าไป:
+
+```ts
+// src/middleware.ts
+import { defineMiddleware, sequence } from 'astro:middleware';
+
+// Stand-in for your real session lookup — replace with your auth layer.
+async function getUser(token: string) { return { id: '1', name: 'Ava' } as { id: string; name: string } | null; }
+
+const requestId = defineMiddleware(async (context, next) => {
+  context.locals.requestId = crypto.randomUUID();
+  return next();
+});
+
+const auth = defineMiddleware(async (context, next) => {
+  const token = context.cookies.get('session')?.value;
+  context.locals.user = token ? await getUser(token) : null;
+  return next();
+});
+
+export const onRequest = sequence(requestId, auth);
+```
+
+ลำดับนั้นไม่ใช่แค่ตกแต่ง — พิสูจน์ด้วยการให้แต่ละ middleware ต่อชื่อตัวเองใส่ header ตอนขากลับ:
+
+```text
+$ curl -sD - -o /dev/null http://127.0.0.1:4351/ | grep -i x-mw-order
+x-mw-order: first,second
+```
+
+`x-mw-order` header ข้างบนถูก middleware ตัว*ที่สอง*ใน chain `sequence(first, second, guard)` set โดยอ่าน list ที่ middleware ทั้งสองต่อชื่อตัวเองใส่ไว้ — `first` รันจริง แล้วส่งต่อให้ `second` ตามลำดับที่ส่งเข้า `sequence()` ไม่ใช่กลับกัน
+
+## `context.locals`: type ด้วย `App.Locals`
+
+**`context.locals`** คือ object ที่มีชีวิตอยู่ตลอด request เดียว อะไรก็ตามที่คุณ set ไว้ (user ปัจจุบัน, request id, feature flag) อ่านได้ในทุก page, endpoint และ action ของ request นั้นผ่าน `Astro.locals` / `context.locals` ของ action ถ้าไม่ type ไว้ `locals` จะเป็น `any` โดย implicit ทุกที่ที่อ่าน — declare shape มันครั้งเดียวใน `src/env.d.ts` แล้วทุกไฟล์จะได้ autocomplete และ type error แทน:
+
+```ts
+// src/env.d.ts
+type User = { id: string; name: string };
+
+declare namespace App {
+  interface Locals {
+    user: User | null;
+    requestId: string;
+  }
+}
+```
 
 ```astro
 ---
-// In any on-demand page — read what middleware put there.
+// In any on-demand page — read what middleware put there, fully typed.
 const user = Astro.locals.user;
 ---
 {user ? <p>Hi, {user.name}</p> : <a href="/login">Sign in</a>}
 ```
 
-## Sessions: state ต่อ user ข้าม request
+## Rewrite ใน chain: `context.rewrite` และ `next(path)`
 
-`context.locals` อยู่แค่หนึ่ง request การจะจำ user *ข้าม* request — shopping cart, การ login — คุณใช้ **sessions** ระบบ session ของ Astro เก็บ data ฝั่ง server โดย key ด้วย cookie backed ด้วย driver ที่ config ไว้ (memory ตอน dev, KV/Redis/database ตอน production)
+มีสองเครื่องมือที่เปลี่ยนว่า route ไหนจัดการ request จริง ๆ และพฤติกรรมต่างกันเมื่ออยู่ใน `sequence()` chain:
+
+- **`next(path)`** rewrite request *แล้วไปต่อ chain* — middleware ตัวถัดไปใน sequence เห็น URL ใหม่และยังทำงานกับมันได้
+- **`context.rewrite(path)`** (primitive เดียวกับที่ `Astro.rewrite()` ใช้ใน page) สลับไป route อื่นทันที โดยไม่ผ่าน middleware ที่เหลือใน chain
+
+พิสูจน์ด้วย middleware ที่เรียก `next('/api/rewrite-demo')` เมื่อเห็น `/old-path` ก่อนถึง middleware ตัวที่สองใน `sequence()` เดียวกัน:
+
+```text
+$ curl -s http://127.0.0.1:4351/old-path
+{"pathname":"/api/rewrite-demo"}
+```
+
+server log จาก request เดียวกันนั้นแสดงว่า middleware ตัวที่สองเห็น URL ที่*ถูก rewrite แล้ว* ไม่ใช่ตัวเดิม:
+
+```text
+[mw] first ran, order so far: first
+[mw] first: rewriting /old-path -> /api/rewrite-demo
+[mw] second sees pathname: /api/rewrite-demo
+[mw] second ran, order so far: first,second
+```
+
+ใช้ `next(path)` เมื่อ middleware ที่ตามมายังต้องรันกับ route ใหม่ (auth, logging) ใช้ `context.rewrite(path)` เมื่อต้องการส่งต่อไปยัง page คนละหน้าไปเลยและข้าม chain ที่เหลือ อีกจุดที่ควรจำ: การ rewrite สร้าง `Request` ใหม่ ดังนั้นการอ่าน `Request.body` (เช่นอ่าน POST body แบบที่ Action ทำ) ก่อนหรือหลัง rewrite จะ throw ตอน runtime — `Astro.rewrite()` ระดับ page คือทางแก้ที่เอกสารแนะนำสำหรับ route ที่เป็น form/action
+
+## Middleware กับหน้า prerendered: build-time เท่านั้น
+
+Middleware ยัง*รัน*กับ page ที่มี `export const prerender = true` — แต่รันแค่**ครั้งเดียว ตอน build** เมื่อ Astro generate HTML แบบ static ของหน้านั้น หลังจากนั้นไม่มี request ให้ intercept อีก — ไฟล์ถูก serve ตามที่มันเป็น พิสูจน์ด้วยการเพิ่มหน้า prerendered แล้วดู log middleware ตัวเดียวกันยิงตอน build เอง ไม่ใช่ตอน browser ขอหน้านั้นทีหลัง:
+
+```text
+$ npx astro build
+ prerendering static routes 
+  ├─ /static-about/index.html[mw] first ran, order so far: first
+[mw] second sees pathname: /static-about/
+  ├─ /static-about/index.html (+21ms)
+```
+
+บรรทัด `[mw] ...` เหล่านั้นคือ `console.log` จาก `sequence()` chain ตัวเดียวกันข้างบน — print ครั้งเดียวตอน phase `prerendering static routes` ของ `astro build` ไม่มีอีกเลยเมื่อ server รันและ serve ไฟล์นั้นจาก disk อะไรก็ตามใน middleware ที่พึ่งพา request *ปัจจุบัน* (cookies, IP, header ของ client จริง) ไม่มีความหมายที่นี่: middleware เห็น request context ที่ build process สร้างขึ้นเอง ไม่ใช่ของผู้เข้าชมจริง นี่คือเหตุผลที่การอ่าน `Astro.request.headers` บนหน้า prerendered ขึ้น warning จริงตอน runtime — พิสูจน์ตรง ๆ ใน build เดียวกันนี้:
+
+```text
+[WARN] `Astro.request.headers` was used when rendering the route `src/pages/static-about.astro'`. `Astro.request.headers` is not available on prerendered pages.
+```
+
+## Session: state ต่อ user ข้าม request
+
+`context.locals` อยู่แค่ request เดียว การจำ user *ข้าม* request — ตะกร้าสินค้า, การ login — ใช้ **session** Astro เก็บ session data ฝั่ง server คีย์ด้วย cookie backed โดย driver ที่ config ไว้ Node adapter เปิดให้อัตโนมัติถ้าคุณไม่ config เอง — พิสูจน์ด้วย build log จริง:
+
+```text
+[@astrojs/node] Enabling sessions with filesystem storage
+```
 
 ```astro
 ---
@@ -81,56 +178,174 @@ handler: async (input, context) => {
 }
 ```
 
-session เปิดให้ใช้ `get`, `set` และ `destroy` ตอน logout คุณล้างทุกอย่างด้วย `Astro.session?.destroy()` ซึ่งลบ session cookie และ data ฝั่ง server ต่างจาก cookie ที่คุณ set เอง session data อยู่บน server — cookie เก็บแค่ id ที่ opaque — จึงปลอดภัยสำหรับ state ที่ sensitive
+Session มี `get`, `set` และ `destroy` ตอน logout เคลียร์ทุกอย่างด้วย `Astro.session?.destroy()` ซึ่งลบทั้ง session cookie และข้อมูลฝั่ง server ต่างจาก cookie ที่คุณ set เอง session data อยู่บน server — cookie เก็บแค่ id ที่ไม่มีความหมาย (opaque) — จึงปลอดภัยสำหรับ state ที่อ่อนไหว จะเลือก storage backend เอง (Redis บน production เป็นต้น) ให้ config `session.driver` ด้วย helper `sessionDrivers` แทนรูปแบบ string ที่ deprecate แล้ว:
 
-## pattern ของ auth
+```js
+// astro.config.mjs
+import { defineConfig, sessionDrivers } from 'astro/config';
+import node from '@astrojs/node';
 
-สามชิ้นนี้ประกอบกันเป็น auth flow มาตรฐาน: **middleware** อ่าน session cookie แล้ววาง user บน `context.locals`; **pages** อ่าน `Astro.locals.user` เพื่อ render UI แบบ signed-in vs signed-out; และ guard ใน middleware redirect request ที่ยังไม่ auth ออกจาก protected route การ login เขียน session การ logout เรียก `destroy()`
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),
+  session: {
+    driver: sessionDrivers.redis({ url: process.env.REDIS_URL }),
+  },
+});
+```
+
+## `session.regenerate()`: ปิดช่องโหว่ session fixation
+
+การใช้ session id เดิมซ้ำข้ามการ login เป็นช่องโหว่จริง (**session fixation**): ถ้า attacker ตั้ง session cookie ของเหยื่อไว้ได้*ก่อน*เขา login id เดิมนั้นยัง valid *หลัง* login — id ที่ attacker ปลูกไว้กลายเป็น session ที่ authenticate แล้ว `session.regenerate()` หมุน session ไป id ใหม่โดยเก็บข้อมูลไว้ ตำแหน่งที่ถูกต้องในการเรียกคือตอนที่ session ได้สิทธิ์เพิ่ม (login, privilege escalation):
+
+```ts
+// src/pages/api/login.ts
+import type { APIRoute } from 'astro';
+
+export const prerender = false;
+
+export const POST: APIRoute = async ({ session }) => {
+  await session?.set('user', { id: 'u1' });
+  await session?.regenerate();   // rotate the id now that this session is authenticated
+  return Response.json({ success: true });
+};
+```
+
+พิสูจน์ครบวงจร: login ด้วย session id ที่ตั้งไว้ล่วงหน้าและเดาได้ (แบบ attacker) แล้วยืนยันว่า server ส่ง id *อื่น* กลับมา:
+
+```text
+$ curl -s -b "astro-session=preexisting123" -H "Origin: http://127.0.0.1:4351" \
+    http://127.0.0.1:4351/api/login -X POST
+{"before":"preexisting123","after":"79d10f95-77ac-4d8f-9ed1-8e266b210507","changed":true}
+```
+
+id ที่ปลูกไว้ล่วงหน้า (`preexisting123`) ใช้ไม่ได้อีกแล้วหลัง login — session ที่ถูก hijack *ก่อน*การ authenticate จะพ่วงต่อ*หลัง*มันไม่ได้
+
+## Auth pattern
+
+ชิ้นส่วนเหล่านี้ประกอบกันเป็น auth flow มาตรฐาน: **middleware** อ่าน session cookie แล้วใส่ user ลง `context.locals`; **page** อ่าน `Astro.locals.user` เพื่อ render UI แบบ login/ไม่ login; guard ใน middleware redirect request ที่ไม่ authenticate ออกจาก route ที่ป้องกันไว้; และ login เรียก `session.regenerate()` ทันทีหลังตั้ง session
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ review middleware หรือ session code ที่ generate มา ให้เช็ค:
+
+- `onRequest` เป็น function ก้อนเดียวจัดการ auth, logging และ rewrite รวมกัน หรือ compose ด้วย `sequence(...)` ให้แต่ละ concern test/สลับลำดับได้อิสระ — พิสูจน์แล้วข้างบนว่าลำดับสำคัญและพิสูจน์ได้จาก header
+- `context.locals` ถูกใช้ที่ไหนโดยไม่มี interface `App.Locals` ใน `src/env.d.ts` คู่กัน — เป็น `any` โดย implicit ทุกที่ที่อ่านหรือเปล่า?
+- หลัง login code เคยเรียก `session.regenerate()` ไหม — หรือ session id ก่อน login กลายเป็น id ที่ authenticate แล้วตรง ๆ เปิดช่อง session fixation ทิ้งไว้?
+- middleware สมมติว่า "รันทุก request" โดยไม่คิดถึงหน้า prerendered ที่ code เดียวกันรันแค่ครั้งเดียวตอน build กับ request data สังเคราะห์ — พิสูจน์แล้วข้างบนด้วย build log?
+- middleware เรียก `next(path)` โดยคาดว่า chain จะหยุด ทั้งที่มีแค่ `context.rewrite(path)` เท่านั้นที่ข้าม chain ที่เหลือจริง ๆ?
+
+<SpotTheBug code={`// src/middleware.ts
+import { defineMiddleware } from 'astro:middleware';
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  if (context.url.pathname.startsWith('/admin')) {
+    const token = context.cookies.get('session')?.value;
+    if (!token) {
+      context.redirect('/login');
+    }
+  }
+});`}>
+middleware นี้ไม่เคยเรียก (หรือ return) `next()` เลย — เรียกแค่ `context.redirect(...)` และแม้แต่ return value ของมันก็ถูกทิ้งไม่ return ออกไป ทุก request ไม่ว่าจะป้องกันไว้หรือไม่ เจอ error จริงตรง ๆ ตอน build/runtime:
+
+```text
+[MiddlewareNoDataOrNextCalled] Make sure your middleware returns a `Response` object,
+either directly or by returning the `Response` from calling the `next` function.
+```
+
+วิธีแก้มีสองส่วน: `return context.redirect('/login')` เมื่อไม่มี token (ให้ redirect มีผลจริงเพราะถูก return) และ `return next()` ในทุก path ที่เหลือของ function รวมถึง case ที่ `pathname` ไม่ได้ขึ้นต้นด้วย `/admin` เลยด้วย
+</SpotTheBug>
+
+## Mental Model
+
+Middleware ไม่ใช่ "request hook" แบบนามธรรม — มันคือ code ที่รันครั้งเดียวต่อ*การ render* หนึ่งครั้ง และหน้า prerendered ถูก render แค่ครั้งเดียวตอน build ตลอดไป `context.locals` คือพื้นที่ชั่วคราวสำหรับการ render เดียว ส่วน session คือสิ่งที่รอดข้าม*การ render*ต่าง ๆ และรอดได้เพราะข้อมูลอยู่ฝั่ง server หลัง cookie id ที่ไม่มีความหมาย `session.regenerate()` มีอยู่เพราะ "login แล้ว" คือ privilege boundary และ id ไหนก็ตามที่ข้าม boundary นั้นมาโดยไม่เปลี่ยนคือช่องทาง hijack ตามที่พิสูจน์แล้วข้างบน
+
+## ข้อแลกเปลี่ยน
+
+| ได้อะไร | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| `sequence(a, b, c)` | แต่ละ concern test/สลับลำดับได้อิสระ พิสูจน์ลำดับได้ (ตามข้างบน) | import เพิ่มหนึ่งตัว เพิ่ม indirection ให้อ่านอีกชั้น |
+| `next(path)` กลาง chain | middleware ที่ตามมายังรันกับ route ใหม่ได้ | การอ่าน `Request.body` รอบ ๆ rewrite จะ throw — gotcha ที่มีเอกสารรองรับกับ Action |
+| `context.rewrite(path)` | ข้าม chain ที่เหลือไปเลย — ง่ายกว่าเมื่อจะสลับแบบเด็ดขาด | middleware ที่เหลือไม่มีโอกาสรันเลย |
+| session driver default ของ Node adapter | ไม่ต้อง config อะไรก็ใช้ session ได้บนเครื่อง (พิสูจน์แล้วข้างบน) | filesystem storage ไม่รอดข้าม container ใหม่ — ต้อง config driver จริงสำหรับ production |
+| `session.regenerate()` ตอน login | ปิดช่อง fixation (พิสูจน์แล้วข้างบน) | ลืมง่าย — ไม่มีอะไร fail ดัง ๆ ถ้าข้ามไป |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"middleware รันทุก request ไม่มีข้อยกเว้น"** พิสูจน์แล้วข้างบน: บนหน้า prerendered มันรันแค่ครั้งเดียวตอน build กับ request data สังเคราะห์ — ไม่รันอีกเลยสำหรับผู้เข้าชมจริง
+- **"`next(path)` กับ `context.rewrite(path)` เหมือนกันแค่ชื่อต่างกัน"** พิสูจน์แล้วข้างบนด้วย log trace: `next(path)` rewrite แล้วรัน `sequence()` chain ที่เหลือต่อ ส่วน `context.rewrite(path)` ส่งต่อทันที
+- **"แค่เช็ค session cookie ตอน login ก็พอ ไม่ต้องแตะ session id เอง"** นั่นคือช่องโหว่ fixation พอดี — พิสูจน์แล้วข้างบน วิธีแก้คือ `session.regenerate()` ไม่ใช่การเช็ค cookie ที่เข้มขึ้น
+- **"`context.locals` ก็คือ global state ดี ๆ นี่เอง"** มันคือพื้นที่ชั่วคราวต่อ request — อะไรที่ set ไว้ไม่รอดพ้น response ที่ใช้มัน session ต่างหากคือเครื่องมือสำหรับสิ่งที่ต้องรอด
 
 <Callout title="สรุปหนึ่งบรรทัด">
-**Middleware** (`src/middleware.ts`, `onRequest(context, next)`) รันก่อนทุก request — อ่าน cookie, set **`context.locals`** เพื่อ share data ต่อ request (เช่น user ปัจจุบัน) ให้ทุก page/endpoint/action และ short-circuit ด้วย redirect เพื่อ guard route **Sessions** (`Astro.session` ใน component, `context.session` ใน action) เก็บ state ต่อ user *ข้าม* request ฝั่ง server ผ่าน `get`/`set`/`destroy` โดยมีแค่ id ที่ opaque ใน cookie รวมกันเป็น auth pattern มาตรฐาน: middleware โหลด user จาก session, pages อ่าน `Astro.locals.user`, guard redirect
+**Middleware** (`src/middleware.ts`, `onRequest(context, next)`) รันก่อนทุก request — รวมหลายตัวด้วย **`sequence()`** (ลำดับพิสูจน์ได้ ตามที่แสดงข้างบนด้วย header จริง) type `context.locals` ด้วย **`App.Locals`** ใน `src/env.d.ts` และใช้ `next(path)` เพื่อ rewrite-แล้ว-ไปต่อ เทียบกับ `context.rewrite(path)` เพื่อส่งต่อและข้าม chain ที่เหลือ บนหน้า **prerendered** middleware รันครั้งเดียวตอน build ไม่ใช่ต่อ request (พิสูจน์แล้วข้างบนด้วย build log) **Session** (`Astro.session` / `context.session`) เก็บ state ต่อ user ข้าม request ผ่าน `get`/`set`/`destroy` backed ด้วย driver (Node adapter default เป็น filesystem storage) เรียก **`session.regenerate()`** ทันทีหลัง login เพื่อปิดช่อง session fixation (พิสูจน์แล้วข้างบน: id ก่อน login ใช้ไม่ได้อีก)
 </Callout>
 
 export const quizMiddleware = [
   {
-    q: '`onRequest` middleware รันเมื่อไร?',
+    q: '`onRequest` middleware รันตอนไหน?',
     options: [
       'ตอน build เท่านั้น',
-      'ก่อนทุก request — อ่าน cookie, set data, หรือ short-circuit ด้วย Response แล้วเรียก next()',
-      'หลังหน้า render แล้ว',
-      'แค่สำหรับ API endpoint',
+      'ก่อนทุก request — อ่าน cookies, set ข้อมูล, หรือตัด flow ด้วย Response แล้วเรียก next()',
+      'หลัง page render เสร็จ',
+      'เฉพาะ API endpoint เท่านั้น',
     ],
     answer: 1,
+    explain: 'Middleware รันก่อน route ที่ match จะจัดการ request — อ่าน/แก้ context, ตัด flow ด้วย Response ของตัวเอง, หรือเรียก next() เพื่อไปต่อ',
   },
   {
-    q: '`context.locals` มีไว้ทำอะไร?',
+    q: '`context.locals` มีไว้ทำอะไร และหลีกเลี่ยงไม่ให้มันเป็น `any` โดย implicit ได้ยังไง?',
     options: [
-      'storage ถาวรของ database',
-      'data ที่ share ต่อ request — set ใน middleware, อ่าน (ผ่าน Astro.locals) ใน page/endpoint/action ของ request นั้น',
+      'เก็บข้อมูลถาวรในฐานข้อมูล; type ไม่ได้',
+      'ข้อมูลที่แชร์ต่อ request — set ใน middleware อ่าน (ผ่าน Astro.locals) ใน page/endpoint/action; type มันครั้งเดียวผ่าน interface `App.Locals` ใน src/env.d.ts',
       'client-side state',
       'build configuration',
     ],
     answer: 1,
+    explain: 'context.locals อยู่แค่ request เดียวและแชร์ข้ามmiddleware, page, endpoint, action ของ request นั้น การ declare App.Locals ใน src/env.d.ts ทำให้มัน type จริงทุกที่แทนที่จะเป็น any โดย implicit',
   },
   {
-    q: 'session ต่างจาก `context.locals` อย่างไร?',
+    q: '```text\n$ curl -sD - -o /dev/null http://127.0.0.1:4351/ | grep -i x-mw-order\nx-mw-order: first,second\n```\nนี่พิสูจน์อะไรเกี่ยวกับ `sequence(first, second, guard)`?',
     options: [
-      'เหมือนกัน',
-      'context.locals อยู่หนึ่ง request; session เก็บ state ต่อ user ข้าม request เก็บฝั่ง server โดย key ด้วย cookie',
-      'session รันบน client',
-      'session เป็น build-time เท่านั้น',
+      'ไม่มีอะไร — ลำดับไม่แน่นอน',
+      'middleware รันตามลำดับที่ส่งเข้า sequence() จริง first แล้วค่อย second แต่ละตัวต่อชื่อตัวเองก่อนส่งต่อ',
+      'มีแค่ middleware ตัวสุดท้ายใน list ที่รัน',
+      'sequence() รัน middleware พร้อมกัน',
     ],
     answer: 1,
+    explain: 'header ถูกสร้างจากที่แต่ละ middleware ต่อชื่อตัวเองใส่ list ที่แชร์กันก่อนเรียก next() — พิสูจน์ว่ารันตามลำดับที่ส่งให้ sequence() เป๊ะ ไม่ใช่สลับหรือขนาน',
   },
   {
-    q: 'คุณล้าง session ของ user ตอน logout อย่างไร?',
+    q: 'middleware เรียก `next(\'/api/rewrite-demo\')` เมื่อเห็น `/old-path` ก่อนถึง middleware ตัวที่สองใน `sequence()` เดียวกัน middleware ตัวที่สองเห็นอะไร?',
     options: [
-      'ลบหน้าทิ้ง',
-      '`Astro.session?.destroy()` — ลบ session cookie และ data ฝั่ง server',
-      'reload browser',
-      'set context.locals เป็น null',
+      '/old-path เดิม — next(path) มีผลแค่กับ response สุดท้าย ไม่กระทบ chain ที่เหลือ',
+      '/api/rewrite-demo ที่ rewrite แล้ว — next(path) rewrite request ในที่และ chain ไปต่อด้วย context ใหม่',
+      '404 เพราะการ rewrite หยุด chain',
+      'ทั้งสอง URL ทีละอัน',
     ],
     answer: 1,
+    explain: 'พิสูจน์ด้วย log trace จริงในบทนี้: หลังเรียก next(\'/api/rewrite-demo\') middleware ตัวถัดไปใน sequence log pathname ที่ rewrite แล้ว ไม่ใช่ตัวเดิม — next(path) rewrite ในที่และรัน chain ต่อ ต่างจาก context.rewrite(path) ที่ส่งต่อทันที',
+  },
+  {
+    q: 'page มี `export const prerender = true` middleware ของมันรันกับ request data จริงบ่อยแค่ไหน?',
+    options: [
+      'ครั้งเดียวต่อผู้เข้าชม เหมือน on-demand page ทั่วไป',
+      'ครั้งเดียวตอน build — หลังจากนั้นไฟล์ถูก serve เป็น static HTML โดยไม่มี middleware รันอีก พิสูจน์ด้วย build-time log ในบทนี้',
+      'ไม่รันเลย — middleware ถูกข้ามทั้งหมดสำหรับหน้า prerendered',
+      'รันเฉพาะตอน cache หมดอายุ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: บรรทัด console.log ของ middleware เองปรากฏตอน phase "prerendering static routes" ของ astro build ไม่ใช่ตอน browser ขอไฟล์ทีหลัง — เพราะไฟล์ถูก serve ตามที่เป็นหลังจากนั้น ไม่มี request ให้ middleware intercept',
+  },
+  {
+    q: 'ทำไมต้องเรียก `session.regenerate()` ทันทีหลัง login สำเร็จ แทนที่จะเชื่อ session cookie เดิม?',
+    options: [
+      'เป็นแค่ความสวยงาม ไม่มีผลด้าน security',
+      'มันหมุน session ไป id ใหม่ ปิดช่อง session fixation — id ที่ตั้งไว้ก่อน login (เช่นโดย attacker) ใช้ไม่ได้อีกหลัง login พิสูจน์แล้วในบทนี้',
+      'มันลบตะกร้าสินค้าของ user',
+      'Node adapter บังคับให้เรียก ไม่งั้น build จะ fail',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย curl: session id ที่ตั้งไว้ล่วงหน้า ("preexisting123") ถูกแทนที่ด้วย id ใหม่หลัง login และ id เก่าไม่ใช่ session ที่ active อีกต่อไป — ปิดช่องโจมตี fixation ที่ id ที่ปลูกไว้ล่วงหน้าจะกลายเป็น authenticated พอดี',
   },
 ];
 

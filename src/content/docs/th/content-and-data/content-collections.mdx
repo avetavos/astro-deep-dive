@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ประกาศ collection
 
@@ -46,6 +47,80 @@ Astro มี loader มาให้สองตัวจาก `astro/loaders`:
 pattern `**/[^_]*.{md,mdx}` น่าอ่านให้เข้าใจ pattern นี้ตรงกับไฟล์ `.md` และ `.mdx` ในทุก subfolder แต่ `[^_]` ตัดไฟล์ที่ขึ้นต้นด้วย underscore ออก ที่เป็น convention ที่สะดวกสำหรับ draft
 
 นอกจากนี้ loader เป็น interface ที่มีเอกสารกำกับ ecosystem จึงมี loader สำหรับ CMS และ API ต่าง ๆ และคุณเขียนเองเพื่อดึงจากแหล่งไหนก็ได้
+
+### เขียน custom loader เอง
+
+loader คือ object ธรรมดาที่มี `name` กับฟังก์ชัน `load()` — `glob` และ `file` เองก็สร้างจาก contract เดียวกันนี้ที่คุณเอาไปใช้เองได้ `load()` รับ `LoaderContext` ที่มีของครบสำหรับเติม content store ด้วยมือ: **`store`** (เขียน entry ลง collection), **`parseData`** (validate raw data กับ schema ก่อนเก็บ), **`meta`** (key-value store เล็ก ๆ ที่ผูกกับ collection นี้ และอยู่ข้าม build — เหมาะกับ sync token หรือ timestamp ล่าสุด), และ **`generateDigest`** (hash data ของ entry เพื่อเช็คว่าเปลี่ยนไปหรือยัง)
+
+```ts
+// src/lib/notes-loader.ts
+import type { Loader } from 'astro/loaders';
+import { z } from 'astro/zod';
+
+// A tiny custom loader: no filesystem, no network — just the loader
+// contract (store, meta, parseData, generateDigest) against a fixed feed.
+const FEED = [
+  { id: 'note-1', title: 'First note', body: 'Hand-written note one.' },
+  { id: 'note-2', title: 'Second note', body: 'Hand-written note two.' },
+];
+
+export function notesLoader(): Loader {
+  return {
+    name: 'notes-loader',
+    schema: z.object({ title: z.string(), body: z.string() }),
+    load: async ({ store, meta, parseData, generateDigest, logger }) => {
+      const lastRun = meta.get('lastRun');
+      logger.info(`notes-loader: lastRun=${lastRun ?? 'never'}`);
+
+      store.clear();
+      for (const item of FEED) {
+        const data = await parseData({ id: item.id, data: item });
+        const digest = generateDigest(data);
+        store.set({ id: item.id, data, digest });
+      }
+      meta.set('lastRun', new Date().toISOString());
+    },
+  };
+}
+```
+
+```ts
+// src/content.config.ts — the same file, extended with a third collection
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+import { notesLoader } from './lib/notes-loader';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string(),
+    pubDate: z.coerce.date(),
+    draft: z.boolean().default(false),
+  }),
+});
+
+const notes = defineCollection({ loader: notesLoader() });
+
+export const collections = { blog, notes };
+```
+
+รัน `astro sync` (หรือ `astro dev`/`astro build` ที่ sync ให้ก่อน) จะเรียก `load()` จริง พิสูจน์แล้วในโพรบ — บรรทัด `logger.info` ของ loader โผล่ใน sync output จริง และรันครั้งที่สอง `meta` ก็จำค่าจากครั้งแรกได้:
+
+```text
+$ npx astro sync
+04:54:09 [content] Syncing content
+04:54:09 [notes-loader] notes-loader: lastRun=never
+04:54:09 [content] Synced content
+04:54:09 [types] Generated 1.16s
+
+$ npx astro sync
+04:54:19 [content] Syncing content
+04:54:19 [notes-loader] notes-loader: lastRun=2026-09-25T21:54:09.825Z
+04:54:19 [content] Synced content
+```
+
+โปรเจกต์ส่วนใหญ่ใช้ `glob` หรือ `file` ก็พอ — เขียน custom loader เองก็ต่อเมื่อ content มาจากที่ที่ทั้งสองตัวไปไม่ถึงจริง ๆ (API ที่มี pagination, database, feed ที่ต้อง sync แบบ incremental ผ่าน `meta`)
 
 <Mermaid title="pipeline ของ content collection" code={diagram} />
 
@@ -105,8 +180,92 @@ const { Content } = await render(post);
 
 `render` คอมไพล์ Markdown/MDX ของ entry ให้เป็น component ดังนั้น `<Content />` จึงพ่น HTML สำเร็จรูปออกมา ทั้งหัวข้อ, code block, และ component ที่ใช้ใน MDX render ครบ
 
+**`render(entry)` เป็นฟังก์ชันแยกเดี่ยว ๆ — method เก่า `entry.render()` หายไปแล้ว** entry ที่ `getCollection`/`getEntry` คืนมาเป็น object ธรรมดาที่ serializable (เพื่อให้ส่งเป็น `props` จาก `getStaticPaths` ได้เป็นต้น) method จึงอยู่รอดจากตรงนั้นไม่ได้ `entry.render()` ถูก deprecate ตั้งแต่ Astro 5 และ Astro 6 ถอดออกไปเลย พิสูจน์แล้วในโพรบ — สลับ `render(post)` เป็น `post.render()` บน Astro 7.3.5 แล้ว build พังด้วย runtime error จริง ไม่ใช่แค่ warning:
+
+```text
+[ERROR] TypeError: post.render is not a function
+    at .../chunks/index_*.mjs:699:33
+    at async renderToString (.../chunks/server_*.mjs:1861:25)
+[ERROR] [build] Caught error rendering /: TypeError: post.render is not a function
+```
+
+## astro sync กับ type ที่ generate ให้
+
+ทุก collection ที่ประกาศจะได้ TypeScript type ของตัวเองที่ `astro sync` เขียนลง `.astro/content.d.ts` ให้ (Astro รันขั้นตอนนี้อัตโนมัติก่อน `dev`/`build`/`check` ด้วย) ผลลัพธ์ query มี type ผ่าน **`CollectionEntry<'blog'>`** ที่ import จาก `astro:content` — เอาไปใส่ type ให้ prop หรือฟังก์ชัน helper ได้โดยไม่ต้องเขียน shape ซ้ำเอง:
+
+```ts
+// src/lib/format-post.ts
+import type { CollectionEntry } from 'astro:content';
+
+export function formatPost(post: CollectionEntry<'blog'>) {
+  return `${post.data.title} — ${post.data.pubDate.toDateString()}`;
+}
+```
+
+นี่ไม่ใช่ interface ที่เขียนเอง — มัน generate ตรงจาก `content.config.ts` เลย พิสูจน์แล้วในโพรบ: หลัง `astro sync` ไฟล์ `.astro/content.d.ts` มี `DataEntryMap` ที่มีหนึ่ง entry ต่อ collection และ `CollectionEntry<C>` ถูกประกาศเป็น `Flatten<DataEntryMap[C]>`:
+
+```ts
+// .astro/content.d.ts (generated — real output for the `blog` collection above)
+"blog": Record<string, {
+  id: string;
+  body?: string;
+  collection: "blog";
+  data: InferEntrySchema<"blog">;
+  rendered?: RenderedContent;
+  filePath?: string;
+  digest?: string | number;
+}>;
+```
+
+`InferEntrySchema<'blog'>` เองก็ generate จาก Zod schema (`import('astro/zod').infer<...>`) — schema จึงเป็นแหล่งความจริงเดียวทั้งฝั่ง validate ตอน runtime และ type ที่ editor โชว์ให้ ถ้าแก้ `content.config.ts` แล้ว field ใหม่ไม่ autocomplete ให้รัน `astro sync` (หรือ restart `astro dev` ที่ทำให้อัตโนมัติ)
+
+## Mental Model
+
+collection ไม่ใช่แค่ "โฟลเดอร์ของ Markdown" — มันคือ database เล็ก ๆ ที่มี type ที่มีทางเขียนทางเดียว (`loader` ที่ `astro sync` รันให้) และทางอ่านทางเดียว (`getCollection`/`getEntry` แล้ว resolve ด้วย `render`) ไม่มีอะไรอ่านไฟล์ collection ตรง ๆ ตอน request เลย พอถึงตอนที่ page รัน loader ก็แปลง raw content เป็น entry ที่ validate แล้วเก็บใน content store เสร็จแล้ว การ query ก็แค่อ่านจาก store นั้น นี่คือเหตุผลที่ custom loader ดึงจาก database หรือ API ได้ด้วย `getCollection('blog')` เดียวกันเป๊ะกับ collection ที่มาจาก Markdown — ฝั่ง *query* ไม่ต้องรู้เลยว่าฝั่ง *loader* ทำอะไรมา
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+| --- | --- | --- |
+| `loader` หน้าทุก collection | query API เดียวกันไม่ว่าจะเป็นไฟล์ในเครื่อง, ไฟล์ข้อมูล, หรือแหล่งภายนอก | ต้องเรียนอีกหนึ่ง concept ก่อน collection แรกจะทำงานได้ — โยนไฟล์ลง `src/content/` แล้วใช้ได้เลยแบบเดิมไม่มีอีกแล้ว |
+| custom loader (`store`/`parseData`/`generateDigest`) | คุมได้เต็มที่ — pagination, sync แบบ incremental ผ่าน `meta`, data shape อะไรก็ได้ | ต้องดูแล load logic เอง ในขณะที่ `glob`/`file` ครอบกรณีทั่วไปให้แบบไม่ต้องเขียนโค้ด |
+| `render(entry)` เป็นฟังก์ชันแยก | entry ยังเป็น object ธรรมดา serializable ส่งเป็น `props` ได้ | ต้อง import เพิ่มอีกตัว และ tutorial/โค้ด AI เก่าที่โชว์ `entry.render()` ผิดแล้วตั้งแต่ Astro 6 |
+| type ที่ generate ให้ (`CollectionEntry<'blog'>`) | autocomplete และ type-check โดยไม่ต้องเขียน interface เอง | type จะตามหลัง `content.config.ts` จนกว่า `astro sync` จะรัน |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"collection ใช้ได้แค่กับไฟล์ Markdown ในเครื่อง"** — `loader` คือประเด็นทั้งหมด `glob`/`file` บังเอิญอ่านไฟล์ในเครื่อง แต่ loader เรียก API, query database, หรือ generate entry ในหน่วยความจำก็ได้ (แบบ `notesLoader` ด้านบน) query API (`getCollection`, `getEntry`, `render`) เหมือนกันทุกแบบ
+- **"`entry.render()` ยังใช้ได้ แค่เป็นแบบเก่า"** — มันถูก deprecate ตั้งแต่ Astro 5 และหายไปแล้วใน Astro 6/7 — เรียกมันจะ throw `TypeError: post.render is not a function` ตอน runtime ตามที่พิสูจน์ไว้ด้านบน ใช้ฟังก์ชัน `render(entry)` ที่ import มาแทน
+- **"ต้องเขียน interface `Post` เองให้ `entry.data`"** — ไม่ต้อง `astro sync` generate `CollectionEntry<'blog'>` (และ `InferEntrySchema` ที่มันสร้างมาจาก) ตรงจาก Zod schema ให้แล้ว interface ที่เขียนเองคือจุดเพิ่มที่ shape จะเพี้ยนไม่ตรงกันได้
+- **"`getCollection` อ่าน filesystem ทุกครั้งที่เรียก"** — มันอ่านจาก content store ในหน่วยความจำที่ loader เติมไว้ตอน `sync` แล้ว เรียก `getCollection` สิบครั้งใน build เดียวไม่ได้รัน `glob` หรือยิง network สิบครั้ง
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ snippet ที่ generate มาประกาศหรือ query content collection ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- ทุก call `defineCollection` มี `loader` ไหม? โค้ดที่โยนไฟล์ Markdown ลง `src/content/<name>/` โดยไม่มี `loader` เลยคือ syntax ของ Astro 5 ลงไป ที่ Astro 6/7 ปฏิเสธ
+- มันเรียก `entry.render()` แบบ method แทนที่จะ import `render` จาก `astro:content` แล้วเรียก `render(entry)` หรือเปล่า? แบบ method จะ throw ตอน runtime — ไม่ใช่แค่เรื่องสไตล์
+- ถ้า custom loader เขียนเอง มันเรียก `store.clear()` ก่อนเติมใหม่ทุกครั้งที่ `load()` รันไหม หรือ entry เก่าจาก run ก่อนจะค้างอยู่?
+- `z` import มาจาก `astro/zod` (แหล่งที่ถูกต้องปัจจุบัน) ไม่ใช่จาก `astro:content` (re-export เก่าที่ถอดไปแล้ว) ใช่ไหม?
+- field แบบ `reference()` ถูก resolve ด้วย `getEntry(...)` ก่อนเอา data ไปใช้ หรือโค้ดพยายามอ่าน `.data.name` ตรงจาก reference เลย (ซึ่งมันคือแค่ id ไม่ใช่ entry ที่ resolve แล้ว)?
+
+<SpotTheBug code={`---
+import { getEntry, render } from 'astro:content';
+
+const post = await getEntry('blog', 'hello-world');
+if (!post) throw new Error('Post not found');
+
+const { Content } = await post.render();
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <Content />
+</article>`}>
+`post.render()` ถูกเรียกแบบ method บน entry object entry ที่ `getEntry`/`getCollection` คืนมาคือ data ธรรมดา — `render` มีแบบฟังก์ชันแยกที่ import จาก `astro:content` เท่านั้น เพราะ Astro 5 deprecate method form แล้ว Astro 6 ถอดออกไปเลย พิสูจน์แล้วในโพรบบน Astro 7.3.5: สลับจาก `render(post)` (เวอร์ชันที่ถูก) เป็น `post.render()` แล้ว build พังด้วย `TypeError: post.render is not a function` ที่ throw จากในหน้าที่ render ไม่ใช่ type error ที่จับได้ก่อนล่วงหน้า ทางแก้คือ `import { getEntry, render } from 'astro:content'` แล้ว `const { Content } = await render(post);`
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-collection คือ `defineCollection({ loader, schema })` ใน **`src/content.config.ts`** โดย `loader` (`glob` สำหรับหลายไฟล์, `file` สำหรับไฟล์ข้อมูลไฟล์เดียว) บอกว่า content อยู่ที่ไหน ส่วน `schema` validate ข้อมูลนั้น query ด้วย `getCollection` (หลายอัน) และ `getEntry` (อันเดียว) แต่ละ entry มี `id` และ `data` ที่มี type ถ้าจะพ่น body ให้เรียก `render(entry)` แล้ววาง `<Content />` ที่ได้ลง template ใน Astro 6 ทุก collection ต้องมี loader
+collection คือ `defineCollection({ loader, schema })` ใน **`src/content.config.ts`** โดย `loader` (`glob` สำหรับหลายไฟล์, `file` สำหรับไฟล์ข้อมูลไฟล์เดียว, หรือเขียนเองด้วย `store`/`parseData`/`generateDigest`) บอกว่า content อยู่ที่ไหน ส่วน `schema` validate ข้อมูลนั้น query ด้วย `getCollection` (หลายอัน) และ `getEntry` (อันเดียว) แต่ละ entry มี `id` และ `data` ที่มี type ซึ่ง `astro sync` generate ให้เป็น `CollectionEntry<'blog'>` ถ้าจะพ่น body ให้เรียกฟังก์ชันแยก **`render(entry)`** แล้ววาง `<Content />` ที่ได้ลง template — method เก่า `entry.render()` หายไปแล้วตั้งแต่ Astro 6
 </Callout>
 
 export const quizCollections = [
@@ -119,6 +278,7 @@ export const quizCollections = [
       'ใน package.json',
     ],
     answer: 1,
+    explain: 'ทุก collection ประกาศใน src/content.config.ts ด้วย defineCollection({ loader, schema }) — ไม่มีการประกาศแบบต่อหน้าเพจหรือใน config file อื่น',
   },
   {
     q: 'loader แบบ glob กับ file ต่างกันยังไง?',
@@ -129,6 +289,7 @@ export const quizCollections = [
       'เหมือนกันทุกอย่าง',
     ],
     answer: 1,
+    explain: 'glob จับคู่หลายไฟล์แล้วทำให้แต่ละไฟล์เป็นหนึ่ง entry ส่วน file อ่านไฟล์ข้อมูลไฟล์เดียว (array JSON/YAML) แล้วทำให้แต่ละ item ในนั้นเป็นหนึ่ง entry',
   },
   {
     q: 'จะ render body ที่เป็น Markdown ของ entry ให้เป็น HTML ยังไง?',
@@ -139,6 +300,7 @@ export const quizCollections = [
       'render ให้เองอัตโนมัติ',
     ],
     answer: 1,
+    explain: 'render(entry) ที่ import จาก astro:content จะคอมไพล์ body ที่เป็น Markdown/MDX เป็น component <Content /> ที่เอาไปวางใน template ได้',
   },
   {
     q: 'หลัง schema validate แล้ว field แบบ z.coerce.date() บน entry.data เป็น type อะไร?',
@@ -149,6 +311,29 @@ export const quizCollections = [
       'undefined',
     ],
     answer: 1,
+    explain: 'z.coerce.date() parse ค่า frontmatter ดิบให้เป็น Date object จริง และ type ที่ generate ก็สะท้อนแบบนั้น',
+  },
+  {
+    q: '```ts\nconst post = await getEntry(\'blog\', \'hello-world\');\nif (!post) throw new Error(\'Post not found\');\n\nconst { Content } = await post.render();\n```\nโค้ดนี้ compile แล้วรันได้บน Astro 7 ไหม?',
+    options: [
+      'ได้ — .render() เป็นแค่ alias เก่าของ render(entry)',
+      'ไม่ได้ — entry เป็น data ธรรมดา render มีแบบฟังก์ชันแยกที่ import จาก astro:content เท่านั้น และ post.render() จะ throw ตอน runtime',
+      'ได้ แต่ใช้ได้แค่กับ entry ที่เป็น MDX',
+      'ไม่ได้ — getEntry เองก็ถูกถอดออกใน Astro 7',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในโพรบ: TypeError: post.render is not a function ถูก throw ตอน build/render บน Astro 7.3.5 method form ถูก deprecate ตั้งแต่ Astro 5 และถอดออกใน Astro 6',
+  },
+  {
+    q: 'generateDigest() ของ custom loader เอาไปใช้ตรงไหน และทำไม?',
+    options: [
+      'เพื่อเข้ารหัส data ของ entry ตอนเก็บ',
+      'เพื่อ hash data ของ entry ให้ loader (หรือ run ครั้งต่อไป) เช็คได้ว่าเปลี่ยนไปหรือยัง',
+      'เพื่อ generate id ของ entry',
+      'ใช้ได้แค่กับ glob loader เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'generateDigest(data) คืน content hash ที่เก็บคู่กับ entry (store.set({ id, data, digest })) — วิธีตรวจจับความเปลี่ยนแปลงข้าม loader run โดยไม่ต้องเทียบ object เต็ม ๆ',
   },
 ];
 

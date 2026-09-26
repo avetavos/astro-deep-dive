@@ -1,6 +1,6 @@
 ---
 title: 'Actions'
-description: 'Astro Actions — type-safe server function ที่ define ด้วย defineAction, เรียกจาก client พร้อม input ที่ validate แล้ว, เชื่อมกับ form พร้อม progressive enhancement'
+description: 'Astro Actions — type-safe server function ที่ define ด้วย defineAction, ทำไม action ทุกตัวเป็น public endpoint ที่ต้อง authorize ตัวเอง, ActionError codes, isInputError/orThrow, progressive enhancement และเรียก action จาก client island — พิสูจน์ด้วย curl 401 จริง'
 sidebar:
   order: 4
 ---
@@ -9,19 +9,25 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ปัญหาที่ Actions แก้
 
 การจะเรียก server logic จาก client แบบเดิม คุณต้องเขียน endpoint, คิด URL, `fetch()` เอง, stringify body, เดา type ของ response และ validate input ด้วยมือบน server **Actions** ยุบทั้งหมดนั้นเหลือ function ที่ typed ตัวเดียว: define บน server แล้วเรียกจาก client ด้วย type-safety เต็มและ validation อัตโนมัติ
 
-## define action
+## Action คือ public endpoint
 
-Action อยู่ใน `src/actions/index.ts` export เป็น object ชื่อ `server` แต่ละตัวคือ `defineAction` ที่มี schema **`input`** (Zod) และ **`handler`**:
+ก่อนพูดถึง syntax: **การเรียก `actions.createComment(...)` จาก client code ของคุณเอง กับการ `curl` ไปที่ URL ของ action ตรง ๆ คือ request แบบเดียวกันในสายตาของ server** Astro compile ทุก action เป็น HTTP endpoint จริงที่ `/_actions/<name>` — ใครก็เข้าถึงได้ถ้ารู้ (หรือเดา) ชื่อ ไม่ว่าจะเคยโหลดหน้าของคุณหรือไม่ก็ตาม action ไม่ใช่ channel ส่วนตัวระหว่าง UI กับ server ของคุณ — มันคือ public POST endpoint ที่บังเอิญมี TypeScript binding ให้
+
+นั่นแปลว่า **การ authorize ไม่ใช่ของแต่งเพิ่ม มันคือบรรทัดแรกของ handler** — เช็คว่าใครเรียกก่อนแตะฐานข้อมูล ในทุก action ตัวเดียว ตั้งแต่ตัวแรกที่คุณเขียน:
 
 ```ts
 // src/actions/index.ts
-import { defineAction } from 'astro:actions';
+import { defineAction, ActionError } from 'astro:actions';
 import { z } from 'astro/zod';
+
+// Stand-in for your real database client — replace with your ORM/query layer.
+const db = { comments: { create: async (data: { postId: string; body: string; userId: string }) => ({ id: crypto.randomUUID(), ...data }) } };
 
 export const server = {
   createComment: defineAction({
@@ -30,11 +36,21 @@ export const server = {
       body: z.string().min(1).max(2000),
     }),
     handler: async (input, context) => {
+      // Reject first — before anything else runs. `locals.user` is set by
+      // middleware (see the middleware & sessions lesson); it is `null` for
+      // anyone without a valid session, curl included.
+      if (!context.locals.user) {
+        throw new ActionError({
+          code: 'UNAUTHORIZED',
+          message: 'You must be signed in to comment.',
+        });
+      }
+
       // input is fully typed and already validated against the schema.
       const comment = await db.comments.create({
         postId: input.postId,
         body: input.body,
-        userId: context.locals.user?.id,   // per-request data from middleware
+        userId: context.locals.user.id,
       });
       return comment;                       // the return type flows to the client
     },
@@ -42,29 +58,72 @@ export const server = {
 };
 ```
 
-สองอย่างเป็นอัตโนมัติ: input ถูก **validate** กับ Zod schema ก่อน handler รัน และ return type ของ handler ถูก **infer ไปจนถึงผู้เรียก** — ไม่ต้อง type response ด้วยมือ
+พิสูจน์กับ build จริงของ handler นี้เป๊ะ ๆ — POST ที่ไม่มี session cookie เลย:
 
-## เรียก action จาก client
+```text
+$ curl -s -X POST http://127.0.0.1:4351/_actions/createComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":"hi"}' \
+    -w "\nHTTP %{http_code}\n"
+{"type":"AstroActionError","code":"UNAUTHORIZED","status":401,"message":"You must be signed in to comment."}
+HTTP 401
+```
 
-ฝั่ง client ให้ import `actions` จาก `astro:actions` แล้วเรียกใช้ ทุกการเรียก return `{ data, error }` — Astro ไม่ throw ข้าม boundary:
+สองอย่างยังเป็นอัตโนมัติแม้เพิ่ม auth check แล้ว: input ถูก **validate** กับ Zod schema ก่อน handler รัน และ return type ของ handler ถูก **infer ไปจนถึงผู้เรียก** — ไม่ต้อง type response ด้วยมือ
+
+## `ActionError`: code ไม่ใช่ตัวเลข status ดิบ
+
+`ActionError` รับ **code** ที่อ่านออก (จาก set คงที่ที่ map ไปยัง HTTP status จริง) แทนตัวเลขเปล่า ๆ — list เดียวกับที่ action และ endpoint ใช้ร่วมกัน:
+
+| Code | Status | ใช้เมื่อ |
+|---|---|---|
+| `BAD_REQUEST` | 400 | request ผิดรูปแบบนอกเหนือจากที่ input schema เช็ค |
+| `UNAUTHORIZED` | 401 | ไม่มี session ที่ valid — พิสูจน์แล้วข้างบน |
+| `FORBIDDEN` | 403 | มี session valid แต่ไม่มีสิทธิ์ทำ *เรื่องนี้* |
+| `NOT_FOUND` | 404 | row ที่จะแก้ไม่มีอยู่ (หรือไม่ใช่ของ user นี้) |
+| `CONFLICT` | 409 | เขียนซ้ำหรือข้อมูลเก่ากว่าที่คาด |
+| `TOO_MANY_REQUESTS` | 429 | rate limiting |
+| `INTERNAL_SERVER_ERROR` | 500 | default ถ้า throw `Error` เปล่า |
+
+การ validate input ล้มเหลวเป็น error shape **อีกแบบ** ที่เป็นอัตโนมัติ — `isInputError` narrow ไปยังมันได้:
 
 ```ts
 import { actions, isInputError } from 'astro:actions';
 
-const { data, error } = await actions.createComment({
-  postId: '42',
-  body: 'Nice post!',
-});
+const { data, error } = await actions.createComment({ postId: '42', body: '' });
 
 if (isInputError(error)) {
-  // Validation failed — error.fields has per-field messages.
-  console.log(error.fields.body);
-} else if (data) {
-  console.log('Created comment', data.id);   // data is typed
+  // error.fields is keyed by input field name, each an array of messages.
+  console.log(error.fields.body);   // ["Too small: expected string to have >=1 characters"]
+} else if (error) {
+  // Any other ActionError — check error.code.
+  console.log(error.code);
 }
 ```
 
-<Mermaid title="การเรียกจาก client รัน handler ที่ validate แล้ว" code={actionDiagram} />
+พิสูจน์กับ handler ตัวเดียวกัน คราวนี้ `body` ว่าง (ผิดกฎ `.min(1)`) — shape จริงที่ได้เมื่อเรียก endpoint `/_actions/createComment` ตรง ๆ:
+
+```text
+$ curl -s -X POST http://127.0.0.1:4351/_actions/createComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":""}'
+{"type":"AstroActionInputError","issues":[{"origin":"string","code":"too_small","minimum":1,"inclusive":true,"path":["body"],"message":"Too small: expected string to have >=1 characters"}],"fields":{"body":["Too small: expected string to have >=1 characters"]}}
+```
+
+<Callout title="curl เห็น devalue ไม่ใช่ JSON ธรรมดา">
+response ข้างบนคือสิ่งที่ endpoint `/_actions/<name>` ดิบ ๆ return — และสังเกตว่ามัน **ไม่ใช่** shape เดียวกับที่ `actions.createComment(...)` ส่งกลับใน client code ของคุณ client helper จะ decode wire format ที่รวยกว่า (`devalue` ซึ่งพก `Date`, `Map`, `undefined` และอื่น ๆ ได้) ให้กลายเป็น object `{ data, error }` ธรรมดาที่เห็นตลอดทั้งบทนี้ เรียก action ผ่าน `actions.name(...)` (หรือ `.orThrow()`) — อย่าเขียน `fetch()` ไปที่ action path เองแล้วคาดหวัง JSON ปกติ
+</Callout>
+
+เมื่อไม่อยากแยก branch ด้วย `{ data, error }` เลย — เช่นใน code ที่มี try/catch ของตัวเองอยู่แล้ว — เรียก `.orThrow()` แทน มัน return `data` ตรง ๆ และ throw `ActionError` (หรือ error ทั่วไป) เมื่อ fail:
+
+```ts
+try {
+  const comment = await actions.createComment.orThrow({ postId: '42', body: 'Nice post!' });
+  console.log('Created comment', comment.id);
+} catch (e) {
+  // e is the ActionError instance when the server threw one.
+}
+```
+
+<Mermaid title="การเรียกจาก client รัน handler ที่ validate และ authorize แล้ว" code={actionDiagram} />
 
 export const actionDiagram = `sequenceDiagram
   participant C as Client
@@ -73,28 +132,112 @@ export const actionDiagram = `sequenceDiagram
   C->>A: actions.createComment(input)
   A->>A: validate input against Zod schema
   A->>H: run handler(input, context)
+  H->>H: reject if !locals.user (ActionError UNAUTHORIZED)
   H-->>A: return value (typed)
   A-->>C: { data, error }`;
 
-## form และ progressive enhancement
+## Form, progressive enhancement และ `Astro.getActionResult`
 
-Action เชื่อมกับ HTML `<form>` ตรง ๆ ได้ด้วยการส่ง `action.name` — ทำงานเป็น form POST ปกติแม้ JavaScript ยังไม่โหลด แล้วอัปเกรดเป็น client call เมื่อ hydrate นี่คือ **progressive enhancement**: form submit ได้ทั้งสองทาง
+Action เชื่อมกับ HTML `<form>` ตรง ๆ ได้ด้วยการส่งมันเป็น prop `action` — ทำงานเป็น form POST ปกติแม้ JavaScript ยังไม่โหลด แล้วอัปเกรดเป็น client call เมื่อ hydrate นี่คือ **progressive enhancement**: form submit ได้ทั้งสองทาง อ่านผลของ POST-แล้ว-redirect-กลับ ด้วย `Astro.getActionResult`:
 
 ```astro
 ---
+// src/pages/index.astro
 import { actions } from 'astro:actions';
+
+const result = Astro.getActionResult(actions.createComment);
 ---
 <form method="POST" action={actions.createComment}>
   <input type="hidden" name="postId" value="42" />
   <textarea name="body"></textarea>
   <button type="submit">Comment</button>
 </form>
+{result?.error && <p class="error">{result.error.code}: {result.error.message}</p>}
 ```
 
-คุณยังเรียก action จาก component script ได้ด้วย `Astro.callAction(actions.createComment, input)` เมื่อต้องการผลตอน server render handler ที่ validate แล้วตัวเดียวกันจะรันในทุกกรณี
+`getActionResult` อ่านผลของ action ที่เพิ่ง submit ไปยังหน้านี้ (Astro ห่อมันไว้ให้หลัง redirect) — เป็น `undefined` ตอนโหลดหน้าปกติ และมีค่าทันทีหลัง POST
+
+## เรียกจาก client island และ `getActionPath`
+
+`import` `actions` ตัวเดียวกันเป๊ะใช้ได้จาก framework component ที่ hydrate แล้ว — Astro แปลงการเรียกเป็น `fetch()` ให้เอง:
+
+```tsx
+// src/components/LikeButton.tsx (a Preact island, client:visible)
+import { actions } from 'astro:actions';
+
+export default function LikeButton({ postId }: { postId: string }) {
+  return (
+    <button onClick={() => actions.likePost({ postId })}>
+      Like
+    </button>
+  );
+}
+```
+
+สำหรับกรณีที่ `await` `fetch` ปกติไม่ได้ — ยิง request ตอน `unload` หรือ ping "mark as read" เบื้องหลัง — `getActionPath` ให้ URL ดิบมาใช้กับ `navigator.sendBeacon` ซึ่งยิง request โดยไม่รอ (หรือ block บน) response:
+
+```astro
+<script>
+  import { actions, getActionPath } from 'astro:actions';
+
+  navigator.sendBeacon(
+    getActionPath(actions.likePost),
+    new Blob([JSON.stringify({ postId: '42' })], { type: 'application/json' }),
+  );
+</script>
+```
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ snippet ที่ generate มา define action ให้เช็คสิ่งเหล่านี้ก่อนเชื่อ:
+
+- handler เช็ค `context.locals.user` (หรือ auth check ที่เทียบเท่า) เป็นบรรทัด*แรก*หรือเปล่า หรือสมมติว่า caller login แล้วเพราะ form render เฉพาะหลัง login? การ render form เฉพาะ user ที่ login ควบคุมแค่ว่า UI โชว์อะไร ไม่ใช่ว่า endpoint จะรับ request ไหน — action เองยังถูกเรียกตรงด้วย POST ได้อยู่ดี
+- ถ้า action แก้หรือลบ row เช็ค query กรองด้วย id ของ user ปัจจุบันด้วยไหม นอกจาก id ของ row — หรือ user ที่ login คนไหนก็แก้ข้อมูลของคนอื่นได้?
+- ทุก field ถูกอ่านผ่าน Zod `input` schema หรือ handler เอื้อมไปอ่าน `context.request` แล้ว parse body เองข้าม validation?
+- `fetch()` ดิบไปที่ `/_actions/<name>` ถูกปฏิบัติเหมือนว่า return JSON ธรรมดาหรือเปล่า? มัน return ข้อมูลที่ encode ด้วย `devalue` — มีแค่ `actions.name(...)` (หรือ `.orThrow()`) เท่านั้นที่ decode ให้ ตามที่พิสูจน์ข้างบน
+- `ActionError` ถูก throw ด้วย `code` จริงจากตารางข้างบน หรือ string ที่คิดขึ้นเองซึ่งจะไม่ map ไปยัง HTTP status ที่สมเหตุสมผล?
+
+<SpotTheBug code={`// src/actions/index.ts
+import { defineAction } from 'astro:actions';
+import { z } from 'astro/zod';
+
+export const server = {
+  deletePost: defineAction({
+    input: z.object({ postId: z.string() }),
+    handler: async (input, context) => {
+      // "the delete button only shows for the post's author, so this is safe"
+      await db.posts.delete({ where: { id: input.postId } });
+      return { ok: true };
+    },
+  }),
+};`}>
+comment อธิบาย bug จริง ๆ ไว้เอง: การซ่อนปุ่มลบใน UI ควบคุมแค่ว่า author ที่ login อยู่จะ*เห็น*อะไร ไม่ใช่ว่า endpoint `/_actions/deletePost` จะ*รับ*อะไร ไม่มีจุดไหนเช็ค `context.locals.user` เลย ดังนั้น caller ที่ authenticate แล้วคนไหน — หรือแม้แต่ curl request ที่ไม่ authenticate เลยเพราะไม่มี `UNAUTHORIZED` check เลยด้วยซ้ำ — ลบ post ไหนก็ได้ด้วยการเดาหรือไล่ `postId` แก้ตามแบบ `createComment` ข้างบน: reject เมื่อ `!context.locals.user` ด้วย `ActionError({ code: 'UNAUTHORIZED' })` แล้วกรอง delete ด้วย `userId: context.locals.user.id` ด้วย เพื่อให้ user ที่ login ลบได้เฉพาะ post ของ*ตัวเอง* (`ActionError({ code: 'FORBIDDEN' })` หรือ `where` ที่แค่ไม่ match อะไรเลยก็ใช้ได้ — `NOT_FOUND` สำหรับ row ที่ไม่ใช่ของ user ยังช่วยไม่ leak ด้วยว่า id นั้นมีอยู่จริง)
+</SpotTheBug>
+
+## Mental Model
+
+Action คือปุ่มที่บังเอิญ compile ออกมาเป็น HTTP endpoint ไม่ใช่ HTTP endpoint ที่บังเอิญมีปุ่ม function signature ที่คุณเขียนคือ signature เดียวกับที่คำสั่ง `curl` ของคนแปลกหน้าเรียกได้ — พิสูจน์แล้วข้างบนด้วย 401 จริง ถ้าคุณไม่ยอมรับ field จาก POST body ที่ไม่ระบุตัวตน ก็อย่ายอมรับมันจาก `input` object ที่ validate แล้วเช่นกัน — validation พิสูจน์แค่ว่า *รูปแบบ* ถูก ไม่ใช่ว่า *ผู้เรียก* มีสิทธิ์ทำเรื่องนี้
+
+## ข้อแลกเปลี่ยน
+
+| | Action | API endpoint |
+|---|---|---|
+| **คุณเขียน** | function ตัวเดียว เรียกตรงจาก form หรือ client code | URL ที่ต่อสายและ `fetch` เอง |
+| **Validation** | อัตโนมัติ จาก Zod `input` schema | ทำมือใน handler body |
+| **รูปแบบ response** | `{ data, error }` ที่ infer แล้ว, encode ด้วย devalue บน wire | `Response` อะไรก็ได้ที่คุณสร้าง |
+| **Progressive enhancement** | มีในตัวผ่าน `<form action={actions.x}>` | ไม่มี — ต้องมี JavaScript เพื่อ `fetch` |
+| **เหมาะกับ** | mutation และ form ในแอปของตัวเอง | public API, webhook หรือ client ที่ไม่ใช่ form |
+| **เข้าถึงได้จากสาธารณะ** | ได้ ผ่าน `/_actions/<name>` — พิสูจน์แล้วข้างบน | ได้ ผ่าน path ของมัน |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"แค่ form ของฉันเรียก action นี้ ก็ปลอดภัยแล้ว"** พิสูจน์แล้วข้างบน: request แบบเดียวกันเป๊ะไปถึง handler จาก `curl` โดยไม่มี form และไม่มี session เลย — action ID คือสัญญาทั้งหมด
+- **"ซ่อนปุ่มสำหรับคนที่ไม่ใช่เจ้าของก็พอแล้ว"** การ gate ตอน render ควบคุมแค่ UI ที่โชว์ ไม่ใช่ request ที่ server รับ — ดู bug `deletePost` ข้างบน
+- **"`isInputError` กับ `ActionError` ที่ throw เองหน้าตาเหมือนกันฝั่ง client"** เป็นคนละ shape กัน (`AstroActionInputError` vs `AstroActionError`, พิสูจน์แล้วข้างบน) — `isInputError` narrow เฉพาะกรณี validation ล้มเหลว พร้อม `fields` แยกตาม field
+- **"`fetch()` ไปที่ action path แล้วอ่าน JSON ปกติได้เลย"** พิสูจน์แล้วข้างบน: endpoint ดิบ return ข้อมูลที่ encode ด้วย `devalue` — ใช้ `actions.name(...)` หรือ `.orThrow()` ซึ่ง decode ให้
 
 <Callout title="สรุปหนึ่งบรรทัด">
-**Actions** คือ type-safe server function: define ใน `src/actions/index.ts` ด้วย `defineAction({ input: zodSchema, handler })` export บน object `server` เรียก `actions.name(input)` จาก client — input ถูก **validate อัตโนมัติ** กับ schema, return type ถูก **infer ไปถึงผู้เรียก** และทุกการเรียก return `{ data, error }` (เช็ค `isInputError(error)` เพื่อดู `error.fields`) เชื่อมกับ `<form action={actions.name}>` เพื่อ **progressive enhancement** หรือรันตอน render ด้วย `Astro.callAction`
+ทุก **Action** คือ public POST endpoint ที่ `/_actions/<name>` — พิสูจน์แล้วข้างบนด้วย 401 จริง — จึง authorize ข้างใน handler (`ActionError({ code: 'UNAUTHORIZED' })` เมื่อ `!context.locals.user`) ก่อนแตะฐานข้อมูล ในทุก action ไม่ใช่แค่ตัวที่ดูอ่อนไหว input ถูก validate อัตโนมัติกับ Zod schema (`isInputError` narrow ความล้มเหลวของ validation พร้อม `error.fields` แยกตาม field) เรียก `actions.name(input)` จาก client code หรือ island หรือ `.orThrow()` เพื่อข้าม branch `{ data, error }` เชื่อมกับ `<form action={actions.name}>` เพื่อ progressive enhancement แล้วอ่านผลด้วย `Astro.getActionResult` ใช้ `getActionPath` เมื่อต้องการ URL ดิบ (`sendBeacon`)
 </Callout>
 
 export const quizActions = [
@@ -107,6 +250,7 @@ export const quizActions = [
       'ใน .astro component เท่านั้น',
     ],
     answer: 1,
+    explain: 'Action อยู่ใน src/actions/index.ts export เป็น object `server` — แต่ละตัวคือ defineAction ที่มี Zod `input` schema และ `handler`',
   },
   {
     q: 'input ของ action เกิดอะไรก่อน handler รัน?',
@@ -117,26 +261,51 @@ export const quizActions = [
       'ถูกทิ้ง',
     ],
     answer: 1,
+    explain: 'Astro validate input กับ schema ก่อน handler code จะรันเลย — input ที่ validate ไม่ผ่านจะไม่ถึง handler',
   },
   {
-    q: 'การเรียก action จาก client return อะไร?',
+    q: '```ts\nhandler: async (input, context) => {\n  const comment = await db.comments.create({ body: input.body });\n  return comment;\n}\n```\nพิสูจน์ด้วย curl POST จริงไปที่ `/_actions/createComment` โดยไม่มี session cookie — response จริงคืออะไร?',
     options: [
-      'data ตรง ๆ และ throw เมื่อ error',
-      'object `{ data, error }` — Astro ไม่ throw ข้าม boundary (เช็ค isInputError(error))',
-      'Promise ที่ไม่ resolve เลย',
-      'HTML string',
+      'HTTP 401 พร้อม ActionError เพราะ Astro reject การเรียกที่ไม่ authenticate ให้อัตโนมัติ',
+      'HTTP 200 — handler ไม่เคยเช็ค `context.locals.user` เลย จึงรันให้ใครก็ได้',
+      'compile-time error',
+      'HTTP 500 เสมอ',
     ],
     answer: 1,
+    explain: 'Astro ไม่เพิ่ม authorization ให้อัตโนมัติ พิสูจน์แล้วก่อนหน้าในบทนี้: action ที่ไม่มี auth check ข้างใน handler รันสำเร็จให้ curl request ที่ไม่ authenticate เหมือนกับที่รันให้ form ของคุณเอง — วิธีแก้คือ UNAUTHORIZED check แบบใน createComment',
   },
   {
-    q: 'คุณได้อะไรจากการเชื่อม action กับ `<form action={actions.name}>`?',
+    q: 'การเรียก endpoint `/_actions/<name>` ดิบ ๆ ด้วย curl ต่างจากการเรียก `actions.name(...)` จาก client code ยังไง?',
     options: [
-      'ไม่ได้อะไร',
-      'progressive enhancement — form submit เป็น POST ปกติได้โดยไม่มี JS แล้วอัปเกรดเป็น client call เมื่อ hydrate',
+      'ได้ JSON ธรรมดาเหมือนกันทั้งคู่',
+      'curl ได้ข้อมูลที่ encode ด้วย devalue — `actions.name(...)` decode ให้เป็น shape `{ data, error }` ธรรมดา',
+      'curl ได้ HTML ส่วน client call ได้ JSON',
+      'ทั้งสองไปคนละ route กันเลย',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: curl ไปที่ action path ตรง ๆ ได้ข้อมูลที่ encode ด้วย devalue (เช่น payload รูปแบบ array สำหรับตัวเลขที่ return) ไม่ใช่ JSON ธรรมดา — มีแค่ client helper actions.name(...) (หรือ .orThrow()) เท่านั้นที่ decode ให้',
+  },
+  {
+    q: 'อะไรแยก `isInputError(error)` ออกจาก `ActionError({ code: \'UNAUTHORIZED\' })` ที่ throw เอง?',
+    options: [
+      'ไม่มีอะไรต่าง เหมือนกันทุกอย่าง',
+      'isInputError narrow ไปยัง shape ความล้มเหลวจาก Zod validation อัตโนมัติ (AstroActionInputError พร้อม error.fields แยกตาม field) ส่วน ActionError ที่ throw เองเป็นอีก shape (AstroActionError) ที่มี `code` เดียว',
+      'isInputError มีแค่บน server',
+      'ActionError throw สำหรับ validation ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย response body จริงสองแบบ: AstroActionInputError พก issues/fields จาก schema validation ส่วน ActionError ที่ throw เองพก code/status/message เดียว',
+  },
+  {
+    q: 'การเชื่อม action กับ `<form action={actions.name}>` ให้อะไร และอ่านผลหลัง POST ยังไง?',
+    options: [
+      'ไม่ได้อะไรเพิ่ม ต้อง fetch เอง',
+      'progressive enhancement — form ทำงานเป็น POST จริงก่อน JS โหลดด้วยซ้ำ — และอ่านผลด้วย `Astro.getActionResult(actions.name)`',
       'ปิด validation',
-      'ทำให้ form เป็น static',
+      'ทำงานได้เฉพาะหลัง hydrate เท่านั้น',
     ],
     answer: 1,
+    explain: 'form submit เป็น POST ปกติได้แม้ก่อน hydrate (progressive enhancement) Astro.getActionResult(actions.name) อ่านผลที่ Astro แนบมาให้หลัง POST-แล้ว-redirect cycle นั้น',
   },
 ];
 

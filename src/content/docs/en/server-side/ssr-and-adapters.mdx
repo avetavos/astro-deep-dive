@@ -1,6 +1,6 @@
 ---
 title: 'SSR & Adapters'
-description: 'On-demand rendering in depth — installing an adapter, reading the incoming request with Astro.request and Astro.url, cookies, and shaping the response.'
+description: 'On-demand rendering in depth — output modes and per-page prerender (why "hybrid" is a legacy term), installing an adapter, standalone vs middleware mode proven by running both, reading the incoming request, and astro:env — proven with a real ServerOnlyModule build error and a real missing-secret runtime error.'
 sidebar:
   order: 2
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Turning on the server
 
@@ -37,6 +38,80 @@ export const flowDiagram = `sequenceDiagram
   C->>C: read cookies, user, query params
   C-->>S: HTML + response settings
   S-->>B: Response (status, headers, body)`;
+
+## `output` and per-page `prerender`
+
+Two settings decide, per route, whether it's built once or rendered per request: the project-wide **`output`** default, and a page's own **`prerender`** export, which always wins over the default.
+
+- `output: 'static'` (the default) — every route is prerendered to static HTML at build time, unless a page opts into on-demand rendering with `export const prerender = false` (and an adapter is installed).
+- `output: 'server'` — every route renders on demand by default; a page opts *out* into a static file with `export const prerender = true`.
+
+```astro
+---
+// src/pages/about.astro — always static, even under output: 'server'
+export const prerender = true;
+---
+<h1>About</h1>
+```
+
+```astro
+---
+// src/pages/dashboard.astro — always on-demand, even under output: 'static'
+export const prerender = false;
+const user = Astro.locals.user;
+---
+{user && <h1>Hi, {user.name}</h1>}
+```
+
+<Callout title='"Hybrid" is a legacy term, not a config value'>
+Older Astro guides (and a lot of AI training data) describe a third mode called **`output: 'hybrid'`** — "static by default, with some on-demand pages." As of Astro v5, that value doesn't exist: `'hybrid'` was merged into `'static'`, which has meant exactly that ("static by default, opt in per page with `prerender = false`") ever since. If you see `output: 'hybrid'` in a config, or a guide calling this pattern "hybrid rendering," treat it as a stale term for what `'static'` (with per-page `prerender`) already does — not a value you can still set.
+</Callout>
+
+## Node adapter modes: standalone vs middleware, both proven
+
+`@astrojs/node` ships two distinct modes, and they produce a genuinely different `dist/server/entry.mjs`:
+
+```js
+// astro.config.mjs
+import node from '@astrojs/node';
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),   // or { mode: 'middleware' }
+});
+```
+
+**Standalone** is a complete, self-running server — `node ./dist/server/entry.mjs` starts listening on its own:
+
+```text
+$ node ./dist/server/entry.mjs
+04:47:44 [@astrojs/node] Server listening on http://127.0.0.1:4351
+```
+
+**Middleware** mode builds no listener at all — the same entrypoint instead exports a raw handler, meant to be mounted into a server you already run (Express, Fastify, plain `http`):
+
+```text
+$ node -e "import('./dist/server/entry.mjs').then(m => console.log(Object.keys(m)))"
+[ 'handler', 'options', 'startServer' ]
+```
+
+Proven by mounting that exact `handler` into a bare Node `http` server and confirming a real route still resolves through it:
+
+```js
+// host.mjs — a minimal example of what "mounting into an existing server" means
+import http from 'node:http';
+import { handler as ssrHandler } from './dist/server/entry.mjs';
+
+const server = http.createServer((req, res) => {
+  ssrHandler(req, res, (err) => { if (err) { res.statusCode = 500; res.end(String(err)); } });
+});
+server.listen(4351);
+```
+
+```text
+$ curl -s http://127.0.0.1:4351/api/health
+{"ok":true,"hasSecret":true}
+```
+
+Reach for **standalone** when Astro is the whole server; reach for **middleware** when Astro's output needs to live inside an app you already have (an existing Express server with other routes, custom TLS termination, etc.) — and remember middleware mode does no static file serving on its own, so `dist/client/` still needs to be served separately.
 
 ## Reading the request
 
@@ -80,8 +155,112 @@ Astro.response.headers.set('Cache-Control', 'private, max-age=0');
 
 `Astro.redirect('/login')` returns a redirect `Response`; `Astro.response.headers` mutates the outgoing headers; and you can `return new Response(...)` to take full control (a 404 page, a custom status). This is the same `Request`/`Response` model the whole web platform uses — Astro doesn't invent its own.
 
+## `astro:env`: typed environment variables, checked at the boundary
+
+Plain `import.meta.env.WHATEVER` is untyped and doesn't stop a server secret from being read in client code. **`astro:env`** schema-checks every variable and, more importantly, enforces *where* each one is allowed to be read from — along two independent axes:
+
+```js
+// astro.config.mjs
+import { defineConfig, envField } from 'astro/config';
+
+export default defineConfig({
+  env: {
+    schema: {
+      PUBLIC_SITE_NAME: envField.string({ context: 'client', access: 'public', default: 'Probe' }),
+      API_URL: envField.string({ context: 'server', access: 'public', default: 'https://api.example.com' }),
+      DB_PASSWORD: envField.string({ context: 'server', access: 'secret' }),
+    },
+  },
+});
+```
+
+| `context` | `access: 'public'` | `access: 'secret'` |
+|---|---|---|
+| `client` | Readable from `astro:env/client` — inlined as a literal into the client bundle | **Not a valid combination** — Astro refuses to configure it, there is no safe way to ship a secret to the browser |
+| `server` | Readable from `astro:env/server`, server-only code | Readable from `astro:env/server` only, never bundled to the client |
+
+A `client`/`public` variable really is inlined as a plain literal — proven by grepping the actual compiled client script for a page that imports `PUBLIC_SITE_NAME`:
+
+```text
+$ grep -o 'var e=.*Probe.*;' dist/server/chunks/*.mjs
+var e=`Probe`;document.getElementById(`client-side`).textContent=e;
+```
+
+Try to import the **server**-only module from a client `<script>` and the build refuses outright — not a runtime `undefined`, a real compiler error:
+
+```astro
+<script>
+  import { DB_PASSWORD } from 'astro:env/server';
+  console.log(DB_PASSWORD);
+</script>
+```
+
+```text
+[ServerOnlyModule] The "astro:env/server" module is only available server-side.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/server-only-module/
+```
+
+And a required **secret** with no value set doesn't silently become `undefined` either — the route that imports it fails with the schema's own diagnostic the moment it's actually used:
+
+```text
+$ curl -s http://127.0.0.1:4351/api/health
+(500)
+[ERROR] EnvInvalidVariables: The following environment variables defined in `env.schema` are invalid:
+
+- DB_PASSWORD is missing
+```
+
+(You can force this check to happen for every configured secret regardless of whether it's imported, with `env: { validateSecrets: true }` — useful for catching a missing production secret in CI rather than on the first request that happens to need it.)
+
+## Reading AI-generated code
+
+When reviewing generated rendering/config/env code, check for:
+
+- Does the config set `output: 'hybrid'`? That value doesn't exist since Astro v5 (proven above) — it's a stale term from older training data or docs, not something the compiler accepts.
+- Does a page read `Astro.cookies`, `Astro.clientAddress`, or anything else request-specific while also carrying (or inheriting) `prerender = true`? Those reads need a live request that a prerendered page never has.
+- Is a secret ever read through plain `import.meta.env.SOMETHING` instead of `astro:env/server`, losing both the schema check and the client/server boundary enforcement proven above?
+- Does client-side code import from `astro:env/server` directly, expecting it to "just be undefined" if misused, rather than the hard build error proven above?
+- Is `node ./dist/server/entry.mjs` assumed to always start a listener? In `middleware` mode it does not — proven above, it exports a handler you must mount yourself.
+
+<SpotTheBug code={`// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'hybrid',
+  adapter: node({ mode: 'standalone' }),
+});`}>
+`output: 'hybrid'` was removed in Astro v5 — this config fails validation on a current Astro install, it isn't a quietly-accepted legacy alias. The behavior the author wants ("static by default, with some on-demand pages") is exactly what `output: 'static'` already does, using per-page `export const prerender = false` for the pages that need the server — proven earlier in this lesson. The fix is `output: 'static'` (or simply omitting `output`, since it's the default) with `prerender` set per page as needed; `output: 'server'` is the other valid choice if *most* pages should be on-demand instead.
+</SpotTheBug>
+
+## Mental Model
+
+`output` is a *default*, not a hard partition — every route's actual rendering mode is `prerender`, which always wins, whichever way it's set explicitly or inherited from the project default. An adapter is a translation layer between that per-request rendering and one specific runtime's request/response shape (Node's `http`, a Cloudflare `fetch` handler, and so on) — which is exactly why `context.clientAddress`, `Astro.cookies` writes, and live env reads all need a *route that's actually on-demand*, not just an adapter installed somewhere in the config.
+
+## Trade-offs
+
+| | `output: 'static'` (default) | `output: 'server'` |
+|---|---|---|
+| Per-page override | `prerender = false` opts a page *into* the server | `prerender = true` opts a page *out* to static |
+| Best starting point | Most sites — few pages need the server | An app where *most* routes are on-demand |
+| Adapter still required | Yes, for any on-demand page | Yes, always |
+
+| | Node `standalone` | Node `middleware` |
+|---|---|---|
+| Startup | Self-listening, proven above | No listener — you mount `handler` yourself, proven above |
+| Static assets | Served automatically | You serve `dist/client/` yourself |
+| Best for | Astro is the whole server | Astro lives inside an existing app |
+
+## Common Misconceptions
+
+- **"`output: 'hybrid'` is the mode for mixing static and on-demand pages."** Proven above: that value doesn't exist since v5 — `'static'` with per-page `prerender = false` is that exact mode, under its current name.
+- **"An adapter alone is enough for `Astro.clientAddress`/cookies/live env reads anywhere in the project."** Those still need the *specific route* to be on-demand — a prerendered page with an adapter installed elsewhere in the project still fails, proven in the endpoints lesson.
+- **"`node ./dist/server/entry.mjs` always starts a server."** Only in `standalone` mode — proven above, `middleware` mode exports a handler with no listener at all.
+- **"A secret env var that's just not set becomes `undefined` at runtime, like a normal env var."** Proven above: a schema'd secret with no value throws a real `EnvInvalidVariables` error the moment it's read, not a silent `undefined`.
+
 <Callout title="The one-line takeaway">
-On-demand rendering runs your script per request and needs an **adapter** (Node/Cloudflare/Vercel) in the config. Inside a server route, the `Astro` global exposes the request: **`Astro.request`** (the standard `Request` + body), **`Astro.url`** (pathname & `searchParams`), **`Astro.params`** (dynamic segments), and **`Astro.cookies`** (typed get/set). Shape the reply with **`Astro.response`** (status/headers), `Astro.redirect(...)`, or by returning a `Response` — the standard web platform model, not a custom one.
+`prerender` (per page) always wins over the project's `output` default — `'static'` opts pages *in* to the server with `prerender = false`, `'server'` opts pages *out* to static with `prerender = true`; **`output: 'hybrid'` doesn't exist since v5** (proven above — it's a legacy term for what `'static'` already does). An **adapter** is required for any on-demand route; the Node adapter's **standalone** mode self-listens while **middleware** mode exports a bare `handler` to mount yourself (both proven above by actually running them). **`astro:env`** enforces `context`/`access` at the compiler level — a server secret imported into client code is a hard `ServerOnlyModule` build error, a public client var is inlined as a literal, and a missing required secret throws `EnvInvalidVariables` the moment it's read (all proven above), never a silent `undefined`.
 </Callout>
 
 export const quizSsr = [
@@ -94,36 +273,62 @@ export const quizSsr = [
       'Nothing extra',
     ],
     answer: 1,
+    explain: 'On-demand rendering (any route with prerender = false, or a whole project under output: "server") requires an adapter that knows how to run Astro on the target runtime.',
   },
   {
-    q: 'How do you read the query string in an on-demand page?',
+    q: '`output` is `\'static\'` and a specific page has `export const prerender = false`. What actually happens to that page?',
     options: [
-      'From Astro.props',
-      'From `Astro.url.searchParams`',
-      'From the file name',
-      'You cannot read query params',
+      'It stays static because output: static overrides the page',
+      'It renders on demand — a page\'s own prerender export always wins over the project-wide output default',
+      'It causes a build error',
+      'It is ignored unless output is "server"',
     ],
     answer: 1,
+    explain: 'prerender is decided per page and always wins over the output default in either direction — proven above with both the "opt in" (static project, on-demand page) and "opt out" (server project, static page) examples.',
   },
   {
-    q: 'How do you redirect an unauthenticated user from a server page?',
+    q: 'A config sets `output: \'hybrid\'`. What happens on a current Astro install, proven in this lesson?',
     options: [
-      'Throw an error',
-      'return `Astro.redirect(\'/login\')`',
-      'Set window.location',
-      'Delete the page',
+      'It works exactly like Astro 4 hybrid mode',
+      'It fails — `\'hybrid\'` was merged into `\'static\'` as of Astro v5 and is not a valid output value anymore',
+      'It silently falls back to "server"',
+      'It only affects prerendered pages',
     ],
     answer: 1,
+    explain: '"hybrid" is a legacy term some guides and AI training data still use, but the config value itself was removed in v5 — "static" with per-page prerender = false is the exact same capability under its current name.',
   },
   {
-    q: 'What is `Astro.request`?',
+    q: '```text\n$ node -e "import(\'./dist/server/entry.mjs\').then(m => console.log(Object.keys(m)))"\n[ \'handler\', \'options\', \'startServer\' ]\n```\nThis output is from a Node adapter build in which mode, and what does it mean?',
     options: [
-      'A custom Astro-only object',
-      'The standard web platform `Request` (headers, method, body via formData()/json())',
-      'The database connection',
-      'The build config',
+      'standalone — the server is already listening',
+      'middleware — no listener was created; `handler` must be mounted into a server you run yourself, proven in this lesson by mounting it into a plain http.createServer',
+      'This is an error — the build failed',
+      'It means no adapter was configured',
     ],
     answer: 1,
+    explain: 'middleware mode builds an entrypoint with a raw handler export and no self-starting listener — proven in this lesson by mounting that exact handler into a bare Node http server and confirming a real route still resolves through it.',
+  },
+  {
+    q: 'A schema declares `DB_PASSWORD` as `envField.string({ context: \'server\', access: \'secret\' })` with no default, and the deployed process has no `DB_PASSWORD` set. What is the real, proven behavior when a route imports it?',
+    options: [
+      'It is undefined, same as a normal missing env var',
+      'The route throws EnvInvalidVariables (\"DB_PASSWORD is missing\") the moment the module is imported and used',
+      'Astro substitutes an empty string automatically',
+      'It only fails during `astro build`, never at runtime',
+    ],
+    answer: 1,
+    explain: 'Proven above: hitting a route that imports the missing secret from astro:env/server produces a real EnvInvalidVariables error at that moment, not a quiet undefined — schema-checked env variables fail loudly.',
+  },
+  {
+    q: 'What happens if client-side code tries `import { DB_PASSWORD } from \'astro:env/server\'`?',
+    options: [
+      'It works, but DB_PASSWORD is undefined in the browser',
+      'The build fails outright with ServerOnlyModule — proven above, not a runtime surprise',
+      'Astro automatically moves it to astro:env/client',
+      'It only warns in development mode',
+    ],
+    answer: 1,
+    explain: 'Proven above: importing the server-only env module from client code is a real compiler error (ServerOnlyModule), enforced at build time rather than leaking undefined into the browser.',
   },
 ];
 

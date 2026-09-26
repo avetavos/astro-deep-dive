@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไมต้อง validate content ด้วย
 
@@ -103,9 +104,122 @@ const author = await getEntry(post.data.author);   // pass the reference straigh
 
 วิธีนี้ทำให้ content เป็น normalized ข้อมูล author อยู่ที่เดียว ส่วนแต่ละโพสต์เก็บแค่ลิงก์ที่ validate แล้วและ resolve ได้
 
+## รูปใน schema: helper image()
+
+schema เป็นฟังก์ชันธรรมดาถ้าใช้แค่ `z` แต่พอ field เป็นรูปในเครื่อง Astro จะส่ง helper เพิ่มเข้ามาใน **schema callback**: `({ image }) => z.object({ ... })` เรียก **`image()`** สำหรับ field นั้น แล้ว path ดิบใน frontmatter (`cover: "./cover.png"`) จะกลายเป็น image object ที่ validate แล้วและ optimize แล้วตอน build:
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: ({ image }) => z.object({
+    title: z.string(),
+    author: reference('authors'),
+    cover: image(),          // validates the path AND generates an optimized asset
+    coverAlt: z.string(),
+  }),
+});
+
+export const collections = { blog };
+```
+
+```astro
+---
+// src/pages/index.astro
+import { getCollection } from 'astro:content';
+const posts = await getCollection('blog');
+const post = posts[0];
+---
+{post && (
+  <img src={post.data.cover.src} width={post.data.cover.width} height={post.data.cover.height} alt={post.data.coverAlt} />
+)}
+```
+
+`post.data.cover` ไม่ใช่ string — มันคือ `{ src, width, height, format, ... }` shape เดียวกับที่ `astro:assets` ให้ `<Image>` พิสูจน์แล้วในโพรบ: build ด้วย `cover: "./cover.png"` ใน frontmatter สร้างไฟล์จริงที่ hash แล้วและ optimize แล้ว พร้อมใส่ขนาดจริงลง HTML โดยไม่ต้องใช้ component `<Image>` เอง:
+
+```html
+<!-- real build output -->
+<img src="/_astro/cover.asuJasgv.png" width="1" height="1" alt="A sunset">
+```
+
+`image()` resolve path **เทียบกับไฟล์ของ entry เอง** จึงเป็นเหตุที่มันทำงานได้แค่กับ loader (อย่าง `glob`) ที่ตั้ง `filePath` ให้แต่ละ entry — loader ที่ตั้งแค่ `id`/`data` (แบบ `notesLoader` จากบทก่อน) ไม่มีอะไรให้ `image()` resolve เทียบด้วย
+
+## เมื่อ schema fail: build error จริง
+
+การ validate ไม่ใช่แค่คำเตือน — entry ที่ผิดหยุด build ทันที และข้อความบอกชัดว่า field ไหนของ entry ไหน frontmatter นี้มี `pubDate` ที่ไม่ใช่วันที่จริง:
+
+```md
+---
+title: "Bad Post"
+pubDate: "soon"
+author: ada
+cover: "./cover.png"
+coverAlt: "broken"
+---
+```
+
+...เทียบกับ field `pubDate: z.coerce.date()` จาก schema ของบทนี้ `astro sync` (และ `astro dev`/`astro build` ที่ sync ก่อน) จะ fail ทันที — นี่คือข้อความ error จริงบน Astro 7.3.5:
+
+```text
+[InvalidContentEntryDataError] blog → bad-post data does not match collection schema.
+
+  pubDate**: **pubDate: Expected type "date", received "object"
+
+  Location:
+    src/data/blog/bad-post.md:0:0
+```
+
+`"soon"` ผ่าน `new Date("soon")` แล้วได้ **`Invalid Date`** object ไม่ใช่ string — นี่คือเหตุผลที่ error บอกว่า "received `object`" ไม่ใช่ "received `string`" ข้อความบอกทั้ง collection (`blog`) entry (`bad-post`) และ field (`pubDate`) การแก้ content ที่ผิดจึงเป็นแค่แก้บรรทัดเดียว ไม่ใช่เซสชัน debug
+
 <Callout title="สรุปหนึ่งบรรทัด">
-**Zod schema** (จาก `astro/zod`) validate ทุก entry ที่ content boundary frontmatter ที่ผิดจึงทำให้ build ล้มพร้อมข้อความชัดเจน ไม่ใช่ crash หน้าเพจ และ schema เดียวกันยัง **generate TypeScript type** ให้ `entry.data` เราจึงไม่ต้องเขียน interface เอง ใช้ `.optional()`, `.default()`, `z.coerce.date()`, และ `z.enum()` อธิบาย field และใช้ **`reference()`** เชื่อม collection (resolve ด้วย `getEntry`)
+**Zod schema** (จาก `astro/zod`) validate ทุก entry ที่ content boundary frontmatter ที่ผิดจึงทำให้ build ล้มทันทีพร้อมข้อความที่บอกทั้ง collection, entry, และ field และ schema เดียวกันยัง **generate TypeScript type** ให้ `entry.data` ใช้ `.optional()`, `.default()`, `z.coerce.date()`, และ `z.enum()` อธิบาย field ใช้ **schema callback** (`({ image }) => ...`) กับ `image()` สำหรับรูปในเครื่องที่ต้อง optimize และใช้ **`reference()`** เชื่อม collection (resolve ด้วย `getEntry`)
 </Callout>
+
+## Mental Model
+
+มอง schema เป็นด่านหน้าประตูของ collection ไม่ใช่ type annotation ที่แปะเพิ่มทีหลัง ไม่มีอะไรเข้า content store ได้โดยไม่ผ่านด่านนี้ก่อน — นี่คือเหตุผลที่ entry ผิดจะ fail ตอน `sync` ก่อนที่หน้าไหนจะมีโอกาส render มันเลย และเหตุผลที่ type ที่ generate มาไม่ใช่การเดา — มันสะท้อนตรงจากด่านเดียวกันที่ทุกอย่างผ่านมาแล้ว `image()` ขยายด่านเดียวกันนี้ไปถึง asset ที่เป็นไบนารีด้วย — path ใน frontmatter ก็ "ยังไม่ validate" พอ ๆ กับ field string จนกว่า schema จะ resolve และ optimize มันให้
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+| --- | --- | --- |
+| schema ต่อ collection | content ที่ผิด build ล้มพร้อมข้อความระดับ field ที่แม่นยำ | ต้องอธิบายทุก field ไว้ก่อน field ที่ไม่ได้ประกาศจะหายจาก `entry.data` เงียบ ๆ ไม่ error |
+| `z.coerce.date()` / `.default()` / `.optional()` | โค้ดปลายทางไม่ต้องจัดการ raw string หรือ `undefined` เอง | coercion อาจบังค่าที่ผิดจริง ๆ ให้ดูเหมือน valid-แต่ผิด (`"soon"` กลายเป็น `Invalid Date` ไม่ใช่ string error ที่จับได้ทันที จนกว่าจะอ่านข้อความละเอียด) |
+| `reference()` | ลิงก์ที่ validate แล้วและมี type ระหว่าง collection resolve ด้วย `getEntry` แค่ครั้งเดียว | reference เป็นแค่ id จนกว่าจะ resolve — อ่าน `.data` ตรงจากมันคือ type error ไม่ใช่ `undefined` เงียบ ๆ |
+| `image()` ใน schema callback | รูปในเครื่อง optimize และมี type ให้โดยไม่ต้องเขียน `<Image>` เพิ่ม | ใช้ได้แค่กับ loader ที่ตั้ง `filePath` ต่อ entry (`glob` ทำ ส่วน loader ในหน่วยความจำที่เขียนเองมักไม่ทำ) |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"schema แค่เติม TypeScript type ให้"** — มัน validate ตอน build ก่อน type เป็นแค่ผลพลอยได้จาก validation ที่ผ่าน field หนึ่งอาจมี type ถูกเป๊ะแต่ validation ยังล้มได้ (`z.string().max(80)` มี type เป็น `string` แต่ title 81 ตัวอักษรก็ยัง build ล้ม)
+- **"`z.coerce.date()` parse ผ่านหรือไม่ก็ throw ทันที"** — string ที่ parse ไม่ได้ไม่ throw ข้างใน `z.coerce.date()` — มันได้ `Invalid Date` แล้ว Zod ค่อย report ว่า `Expected type "date", received "object"` error เกิดจริงและ block build จริง แต่ข้อความทำเอาคนที่คาดหวัง `"received string"` แปลกใจ
+- **"`image()` ใช้ได้กับ loader ไหนก็ได้ เพราะมันเป็นแค่ส่วนหนึ่งของ schema"** — มัน resolve path เทียบกับไฟล์ของ entry จึงต้องให้ loader บันทึกไว้ว่าไฟล์นั้นอยู่ไหน (`filePath`) loader ที่ตั้งแค่ `id`/`data` — อย่าง API หรือ database loader ที่เขียนเอง — ไม่มีไฟล์ให้ `image()` resolve เทียบด้วย
+- **"field `reference('authors')` มีข้อมูล author อยู่ในตัวแล้ว"** — มันคือ id ที่ validate แล้ว ไม่ใช่ entry ที่ resolve แล้ว `post.data.author.name` คือ type error เรียก `getEntry(post.data.author)` ก่อนถึงจะได้
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ snippet ที่ generate มาประกาศ schema หรือ reference ให้เช็กสิ่งเหล่านี้ก่อนเชื่อมัน:
+
+- schema เป็น object ธรรมดา (`schema: z.object({...})`) ทั้งที่ใช้ `image()` หรือเปล่า? `image()` มีให้ใช้แค่ใน **callback** form เท่านั้น (`schema: ({ image }) => z.object({...})`) — ใช้มันใน plain object schema คือ reference error เงียบ ๆ ไม่ใช่ type mismatch
+- โค้ดอ่าน `post.data.author.name` ตรงจาก field `reference()` เลยหรือเปล่า แทนที่จะ resolve ก่อนด้วย `await getEntry(post.data.author)`?
+- `.default(...)` อยู่บน field ที่ mark `.optional()` ด้วยหรือเปล่า? สองอย่างนี้ทับซ้อนกันแบบชวนสับสน — แค่ `.default()` ก็ทำให้ field นั้น optional ใน input อยู่แล้ว
+- ถ้า field วันที่ใช้ `z.coerce.date()` โค้ดรอบ ๆ มันสมมติว่า parse ผิดจะ throw ทันทีไหม แทนที่จะรู้ว่ามันได้ `Invalid Date` ที่โผล่เป็น validation error ที่ schema boundary เท่านั้น?
+- schema ลืม `.default([])` บน field array ที่ใน content จริงเป็น optional ไหม — ทำให้ทุกที่ที่ใช้ `entry.data.tags` ต้องเติม `?? []` เอง?
+
+<SpotTheBug code={`---
+title: "Bad Post"
+pubDate: "soon"
+author: ada
+cover: "./cover.png"
+coverAlt: "broken"
+---
+
+This post has a bad pubDate.`}>
+frontmatter `pubDate: "soon"` ไม่ใช่วันที่ที่ parse ได้ แต่ schema ของ collection นี้ประกาศ `pubDate: z.coerce.date()` `z.coerce.date()` ไม่ได้ reject string ที่ parse ไม่ได้ตรง ๆ — มันเอาไปรันผ่าน `new Date("soon")` ซึ่งได้ `Invalid Date` object จริงของ JavaScript แล้ว validator ของ Zod ก็ report object นั้นว่าเป็น type ผิด พิสูจน์แล้วในโพรบบน Astro 7.3.5: `astro sync` fail ทันทีด้วย `[InvalidContentEntryDataError] blog → bad-post data does not match collection schema` พร้อมรายละเอียดระดับ field `pubDate: Expected type "date", received "object"` — น่าอ่านให้ละเอียด เพราะ "received object" (ไม่ใช่ "string") คือลายเซ็นของ coercion ที่ได้ `Invalid Date` ไม่ใช่แค่ type ผิดตรง ๆ ทางแก้คือเขียนวันที่จริงที่ parse ได้ใน frontmatter (`pubDate: 2026-01-03`)
+</SpotTheBug>
 
 export const quizSchemas = [
   {
@@ -117,6 +231,7 @@ export const quizSchemas = [
       'จัด style ให้อัตโนมัติ',
     ],
     answer: 1,
+    explain: 'schema เป็นแหล่งความจริงเดียวทั้งฝั่ง validate ตอน runtime และ TypeScript type ที่ generate ให้ entry.data — ไม่ต้องเขียน interface เองให้ตรงกันเลย',
   },
   {
     q: '.default(false) บน field ของ schema ทำอะไร?',
@@ -127,6 +242,7 @@ export const quizSchemas = [
       'ตั้งเป็น boolean เฉพาะตอน dev',
     ],
     answer: 1,
+    explain: '.default(value) เติมค่า fallback ให้ field ที่หายไป โค้ดที่ใช้ field นี้เลยได้ค่าจริงเสมอแทนที่จะต้องเช็ค undefined',
   },
   {
     q: 'reference() ใช้ทำอะไร?',
@@ -137,6 +253,7 @@ export const quizSchemas = [
       'cache ข้อมูล',
     ],
     answer: 1,
+    explain: 'reference("authors") validate ว่า id ที่เก็บไว้ชี้ไปที่ entry จริงใน collection authors resolve ให้เป็นข้อมูลจริงด้วย getEntry',
   },
   {
     q: 'การ validate content เกิดขึ้นที่ไหน?',
@@ -147,6 +264,29 @@ export const quizSchemas = [
       'ไม่เกิดขึ้นอัตโนมัติเลย',
     ],
     answer: 1,
+    explain: 'validation รันตอน collection โหลด (astro sync หรือขั้น sync ก่อน dev/build/check) — ก่อนที่หน้าไหนจะ query หรือ render entry นั้นซะอีก',
+  },
+  {
+    q: '```ts\nschema: z.object({\n  title: z.string(),\n  cover: image(),\n}),\n```\nschema นี้เขียนเป็น object ธรรมดา ไม่ใช่ callback เกิดอะไรขึ้นตอน Astro โหลดมัน?',
+    options: [
+      'ทำงานเหมือน callback form เป๊ะ',
+      'image() มีให้ใช้แค่ใน schema callback form เท่านั้น (({ image }) => z.object({...})) — object ธรรมดาแบบนี้ไม่มี image ให้ใช้เลย',
+      'Astro แปลงให้เป็น callback form อัตโนมัติ',
+      'มัน skip การ validate รูปเงียบ ๆ',
+    ],
+    answer: 1,
+    explain: 'helper image() ถูก Astro ส่งเข้า schema callback (SchemaContext) เท่านั้น schema ที่เขียนเป็น z.object(...) ตรง ๆ ไม่เคยได้รับมัน การอ้าง image() ตรงนั้นจึงเป็น reference error ธรรมดา ไม่ใช่อะไรที่ Astro แก้ให้เงียบ ๆ',
+  },
+  {
+    q: '```md\n---\ntitle: "Bad Post"\npubDate: "soon"\n---\n```\nถ้า schema field เป็น `pubDate: z.coerce.date()` astro sync จะ report error จริงอะไรบน Astro 7.3.5?',
+    options: [
+      'ไม่มี error — "soon" parse เป็นวันนี้',
+      '[InvalidContentEntryDataError] ... pubDate: Expected type "date", received "object" — เพราะ new Date("soon") ได้ Invalid Date object',
+      'warning เงียบ ๆ แล้ว build เดินต่อโดย pubDate เป็น undefined',
+      'TypeScript compile error ก่อน sync จะรันด้วยซ้ำ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในโพรบ: astro sync fail ทันที บอกทั้ง collection, entry, และ field "received \\"object\\"" คือสัญญาณว่า coercion ได้ Invalid Date ไม่ใช่แค่ reject string ตรง ๆ',
   },
 ];
 

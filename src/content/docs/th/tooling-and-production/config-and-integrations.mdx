@@ -95,6 +95,41 @@ npx astro add tailwind
 
 คำสั่งนั้นติดตั้ง plugin, เพิ่มลง Vite config และสร้าง CSS entry ให้ จากนั้น import CSS ครั้งเดียว (เช่นใน layout) แล้วใช้ Tailwind utility class ใน markup ได้ ถ้าเจอ guide ที่อ้างถึง *integration* `@astrojs/tailwind` นั่นคือวิธีเก่า วิธีปัจจุบันคือ Vite plugin ผ่าน `astro add tailwind`
 
+## Content-Security-Policy (`security.csp`)
+
+เสถียรตั้งแต่ Astro 6.0, `security.csp` generate `Content-Security-Policy` จริงให้ทุกหน้า — hash inline script/style ของ Astro เองอัตโนมัติ จึงไม่ต้องดูแล hash list เองทุกครั้งที่ build output เปลี่ยน:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  security: {
+    csp: true,   // or an object: { algorithm: 'SHA-512', directives: [...], scriptDirective: {...}, styleDirective: {...} }
+  },
+});
+```
+
+Astro ส่ง policy เดียวกันผ่านสองกลไกต่างกันขึ้นอยู่กับว่าหน้านั้น render ยังไง — พิสูจน์กับ build จริงที่มี `security: { csp: true }` หน้าแบบ **on-demand** (`prerender = false` หรือทั้งโปรเจกต์อยู่ใต้ `output: 'server'`) ได้มันเป็น HTTP response header จริง เพราะมี response ที่มีชีวิตให้แนบ:
+
+```text
+$ curl -sD - -o /dev/null http://127.0.0.1:4351/ | grep -i content-security-policy
+content-security-policy: script-src 'self' 'sha256-mzyhaPlEXQku46rgza6MekztMi+pKj5BkQ4z75dLyDw=' 'sha256-BF0290pkb3jxQsE7z00xR8Imp8X34FLC88L0lkMnrGw=' ...; style-src 'self' ;
+```
+
+หน้าแบบ **prerendered** (`prerender = true` หรือ default `'static'`) ไม่มี response ที่มีชีวิตให้แนบ header — directive เดียวกันเป๊ะถูกเขียนลงใน HTML ที่ build แล้วแทน เป็น tag `<meta http-equiv>`:
+
+```text
+$ grep -o '<meta[^>]*content-security-policy[^>]*>' dist/client/static-about/index.html
+<meta http-equiv="content-security-policy" content="script-src 'self' 'sha256-mzyhaPlEXQku46rgza6MekztMi+pKj5BkQ4z75dLyDw=' ...; style-src 'self' ;">
+```
+
+ทั้งสองมาจาก config `security.csp` ตัวเดียวกันเป๊ะและพก script/style hash ที่ generate เหมือนกันเป๊ะ — มีแค่กลไกการส่ง (header vs `<meta>`) ที่ต่างกัน เลือกอัตโนมัติต่อ route ตาม `prerender` ซึ่งเป็น setting เดียวกับที่บท [SSR & adapters](/astro/th/server-side/ssr-and-adapters/) สอนไว้
+
+<Callout title="CSP กับ Shiki ไม่เข้ากันโดย default">
+เปิด `security.csp` บนโปรเจกต์ที่ยังใช้ Shiki สำหรับ syntax highlighting จะเจอ build warning จริง: *"Shiki syntax highlighting uses inline styles that are not compatible with Content Security Policy (CSP)."* Shiki ลงสีโค้ดด้วย inline `style` attribute ต่อ token ซึ่ง `style-src` ที่เข้มงวดจะบล็อกไว้ เว้นแต่จะเพิ่ม hash ของ Shiki เองหรือสลับไปใช้ Prism (`markdown.syntaxHighlight: 'prism'`) ซึ่งใช้ CSS class แทน inline style
+</Callout>
+
 <Callout title="สรุปหนึ่งบรรทัด">
 `astro.config.mjs` ตั้งค่าโปรเจกต์ผ่าน `defineConfig` — field สำคัญคือ `site` (URL ที่ deploy จริง จำเป็นสำหรับ absolute URL), `base` (path prefix), `output`, `adapter` และ `integrations` **integrations** (`@astrojs/*` เพิ่มด้วย `npx astro add`) ขยาย build ด้วย UI framework, MDX, sitemap และ adapter Astro รันบน **Vite** จึงลงไปที่ key `vite` เพื่อใช้ raw plugin ได้ — และ Tailwind ปัจจุบันเป็น Vite plugin ที่เพิ่มด้วย `astro add tailwind` ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า ใน Astro 7 key `cache`, `routeRules` และ `logger` อยู่ระดับบนสุด (flag `experimental` หายไปแล้ว), `compressHTML` default เป็น `'jsx'` และ `@astrojs/db` ถูกถอดออก
 </Callout>

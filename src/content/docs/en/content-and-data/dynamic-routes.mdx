@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Routes with a variable part
 
@@ -19,6 +20,39 @@ You have a collection of 50 blog posts and want a page for each — but you're n
 - `src/pages/docs/[...path].astro` → a **rest** param, matching `/docs/a/b/c` (any depth)
 
 The value in the brackets arrives at runtime on `Astro.params` (`Astro.params.slug`). But for a *static* site, Astro also needs to know **which** slugs exist so it can build a file for each — that's what `getStaticPaths()` is for.
+
+### Rest params in practice
+
+A rest param (`[...path]`) collects everything after it into one string, and — unlike a normal bracket param — it can also match **zero** segments, in which case `Astro.params.path` is `undefined`:
+
+```astro
+---
+// src/pages/docs/[...path].astro
+export async function getStaticPaths() {
+  return [
+    { params: { path: 'guide/intro' } },
+    { params: { path: 'guide/advanced/setup' } },
+    { params: { path: undefined } },   // matches /docs itself
+  ];
+}
+const { path } = Astro.params;
+---
+<p>path: {path ?? '(root)'}</p>
+```
+
+Proven in the probe — one file builds routes at every depth, including the bare `/docs` root:
+
+```text
+generating static routes
+  ├─ /docs/guide/intro/index.html
+  ├─ /docs/guide/advanced/setup/index.html
+  ├─ /docs/index.html
+```
+
+```text
+$ cat dist/docs/index.html | grep -o '<p>.*</p>'
+<p>path: (root)</p>
+```
 
 ## getStaticPaths(): one page per entry
 
@@ -63,9 +97,10 @@ For a long list you want numbered pages — `/blog/1`, `/blog/2`. `getStaticPath
 ```astro
 ---
 // src/pages/blog/[page].astro
+import type { GetStaticPathsOptions } from 'astro';
 import { getCollection } from 'astro:content';
 
-export async function getStaticPaths({ paginate }) {
+export async function getStaticPaths({ paginate }: GetStaticPathsOptions) {
   const posts = await getCollection('blog');
   return paginate(posts, { pageSize: 10 });   // 10 posts per page
 }
@@ -84,6 +119,40 @@ const { page } = Astro.props;   // paginate injects a `page` prop
 
 `paginate` hands each page a `page` prop with `data` (this page's slice), `currentPage`, `lastPage`, and `url.prev`/`url.next` — everything you need for the list and the prev/next links.
 
+Proven in the probe — four posts at `pageSize: 2` build exactly two numbered pages, and the `<nav>` renders the real prev/next links `paginate` computed:
+
+```html
+<!-- real build output: dist/blog/1/index.html -->
+<nav><span>Page 1 of 2</span><a href="/blog/2">Next</a></nav>
+<!-- real build output: dist/blog/2/index.html -->
+<nav><a href="/blog/1">Previous</a><span>Page 2 of 2</span></nav>
+```
+
+## When getStaticPaths() is missing or invalid
+
+Two build-blocking mistakes are common enough to know by their exact message. First, a static dynamic route with **no `getStaticPaths` at all** — Astro doesn't guess; it fails the build with a named error:
+
+```text
+[GetStaticPathsRequired] `getStaticPaths()` function is required for dynamic routes.
+Make sure that you `export` a `getStaticPaths()` function from your dynamic route.
+  Hint:
+    If you meant for this route to be server-rendered, set `export const prerender = false;` in the page.
+```
+
+Second, a `getStaticPaths()` that runs but returns something malformed — here, an object missing the required `params` key:
+
+```ts
+export async function getStaticPaths() {
+  return [{ id: 'one' }];   // missing `params` — invalid
+}
+```
+
+```text
+[GetStaticPathsExpectedParams] Missing or empty required `params` property on `getStaticPaths()` route.
+```
+
+Both are proven in the probe on Astro 7.3.5, and both name the exact contract `getStaticPaths()` must satisfy — the first error's own hint is often the fix: if the route was actually meant to be on-demand, add `prerender = false` and drop `getStaticPaths` entirely rather than trying to satisfy it with a fake list.
+
 ## Static params vs on-demand params
 
 There are two ways a dynamic route learns its params, and they mirror the two rendering modes:
@@ -98,6 +167,7 @@ export const prerender = false;
 import { getEntry, render } from 'astro:content';
 
 const { slug } = Astro.params;
+if (!slug) return Astro.redirect('/404');
 const post = await getEntry('blog', slug);
 if (!post) return Astro.redirect('/404');
 
@@ -109,8 +179,53 @@ const { Content } = await render(post);
 
 Rule of thumb: a **known, finite** set of pages (all your blog posts) → `getStaticPaths()` and stay static. An **open-ended** set (any user profile, arbitrary search) → `prerender = false` and read `Astro.params` per request.
 
+## Mental Model
+
+`getStaticPaths()` isn't a hook Astro calls incidentally — on a static build it's the **entire contract** a dynamic route file must satisfy, checked before a single line of the component script runs. That's why a missing one fails with a named, specific error rather than an empty page: Astro can't build "some" pages for a route it doesn't understand the shape of, so it refuses to build any. Switching to `prerender = false` doesn't relax that contract — it replaces it with a different one (read `Astro.params` per request), which is why the two approaches are mutually exclusive rather than layered.
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+| --- | --- | --- |
+| `getStaticPaths()` (static) | Every page is a plain file — fast, CDN-cacheable, no server needed at request time | The full set of pages must be knowable at build time; adding a page means rebuilding |
+| `paginate()` | Numbered pages, prev/next links, and the slicing logic generated for you | Ties the route's filename to the page param (`[page].astro`) and the data source to one `paginate()` call |
+| `[...path]` rest param | One file handles any depth, including the bare parent route (`path` is `undefined`) | Every consumer of `Astro.params.path` must handle the `undefined` case explicitly |
+| `prerender = false` + `Astro.params` | Handles URLs that don't exist yet at build time | Needs an adapter; every request now costs a server round-trip instead of a CDN hit |
+
+## Common Misconceptions
+
+- **"A dynamic route without getStaticPaths just builds an empty page."** It doesn't build at all — Astro fails the whole build with `GetStaticPathsRequired`, naming the exact file. This is deliberate: a static site cannot have a route with an undefined set of pages.
+- **"getStaticPaths can return anything as long as the page reads Astro.params correctly."** The return shape is validated too — a returned object missing `params` fails with `GetStaticPathsExpectedParams`, independent of whether the page script would have handled it gracefully.
+- **"A rest param `[...path]` always has a value."** It matches zero segments too (the route's own parent path), and `Astro.params.path` is `undefined` in that case — code that assumes a string and calls `.split('/')` on it directly will crash on exactly that route.
+- **"Dropping getStaticPaths and adding prerender = false is enough to fix a 'GetStaticPathsRequired' error."** It's not a patch, it's a different rendering mode entirely — it also requires an adapter configured for on-demand rendering, which a purely static project doesn't have by default.
+
+## Reading AI-generated code
+
+When a generated snippet defines a dynamic route, check for these before trusting it:
+
+- Does a route under `[slug].astro`/`[id].astro` (with the project's default static output) export `getStaticPaths()` at all? Its absence isn't a lint nit — it's a build-breaking error with no fallback.
+- Does every object `getStaticPaths()` returns include a `params` key, and does that key's name match the file's own bracket name?
+- Does code reading a rest param's value (`Astro.params.path`) assume it's always a non-empty string, without handling the route's own parent path where it's `undefined`?
+- If a route sets `prerender = false`, did the same file also keep a stale `getStaticPaths()` around from when it was static? It's simply ignored once the page is on-demand — worth deleting, not leaving as dead code that looks load-bearing.
+- Does `paginate(list, { pageSize })` get called with the full, unfiltered list, or did an earlier `.filter()`/`.slice()` already narrow it in a way that silently changes the page count from what the reader expects?
+
+<SpotTheBug code={`---
+// src/pages/blog/[slug].astro
+import { getCollection, render } from 'astro:content';
+
+const posts = await getCollection('blog');
+const post = posts.find((p) => p.id === Astro.params.slug);
+if (!post) throw new Error('Post not found');
+
+const { Content } = await render(post);
+---
+<h1>{post.data.title}</h1>
+<Content />`}>
+This file has no `getStaticPaths()` export at all, but the project's default output is static and the route has a bracketed segment (`[slug]`). Astro validates that contract before running any component script — it doesn't try the file and fail gracefully; it refuses to build. Proven in the probe on Astro 7.3.5: the build stops immediately with `[GetStaticPathsRequired] getStaticPaths() function is required for dynamic routes`, naming this exact file, and its own hint says exactly what's missing: either add a `getStaticPaths()` that returns `{ params: { slug } }` for every post, or — if the intent was genuinely per-request lookup — add `export const prerender = false;` so the route becomes on-demand and `getStaticPaths` is no longer needed at all.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-A **dynamic route** is a file with a bracketed segment (`[slug].astro`, or `[...path]` for a rest param). In a static build it exports **`getStaticPaths()`** returning `{ params, props }` for each page — one HTML file per collection entry — and `paginate()` slices a long list into numbered pages. For URLs you can't enumerate at build, set **`prerender = false`**, skip `getStaticPaths`, and read **`Astro.params`** live per request.
+A **dynamic route** is a file with a bracketed segment (`[slug].astro`, or `[...path]` for a rest param, which can also match zero segments). In a static build it exports **`getStaticPaths()`** returning `{ params, props }` for each page — missing it, or returning an object without `params`, fails the build with a named error (`GetStaticPathsRequired`/`GetStaticPathsExpectedParams`) rather than a silent gap. `paginate()` slices a long list into numbered pages with `url.prev`/`url.next` generated for you. For URLs you can't enumerate at build, set **`prerender = false`**, drop `getStaticPaths` entirely, and read **`Astro.params`** live per request.
 </Callout>
 
 export const quizRoutes = [
@@ -123,6 +238,7 @@ export const quizRoutes = [
       'A database query',
     ],
     answer: 1,
+    explain: 'Each returned item describes one page to generate: params fills the bracketed segment(s) and props hands data to the page component.',
   },
   {
     q: 'In [slug].astro, what must the params key be named?',
@@ -133,6 +249,7 @@ export const quizRoutes = [
       'It must be "path"',
     ],
     answer: 1,
+    explain: 'Astro matches the returned params object\'s keys against the file\'s own bracket names — a mismatch fails validation with GetStaticPathsExpectedParams.',
   },
   {
     q: 'What does the paginate() helper give each generated page?',
@@ -143,6 +260,7 @@ export const quizRoutes = [
       'Just a page number',
     ],
     answer: 1,
+    explain: 'paginate() slices the list and hands each generated page a page prop carrying its own slice plus the pagination metadata needed for prev/next links.',
   },
   {
     q: 'You need routes for arbitrary user ids you cannot know at build time. What do you do?',
@@ -153,6 +271,29 @@ export const quizRoutes = [
       'It is impossible in Astro',
     ],
     answer: 1,
+    explain: 'An open-ended, unknowable-at-build-time set of params is exactly what on-demand rendering is for — prerender = false plus Astro.params, no getStaticPaths needed.',
+  },
+  {
+    q: '```astro\n---\n// src/pages/blog/[slug].astro — static output, no adapter configured\nconst posts = await getCollection(\'blog\');\nconst post = posts.find((p) => p.id === Astro.params.slug);\n---\n```\nThis file has no getStaticPaths() export. What happens on Astro 7.3.5?',
+    options: [
+      'It builds fine — Astro.params works the same in static and on-demand routes',
+      'The build fails immediately with [GetStaticPathsRequired], naming this exact file',
+      'Astro silently generates zero pages for this route',
+      'It only fails in dev mode, not in a production build',
+    ],
+    answer: 1,
+    explain: 'Proven in the probe: a static dynamic route with no getStaticPaths() stops the build with a named error before the component script ever runs, and the error\'s own hint suggests prerender = false if on-demand was the actual intent.',
+  },
+  {
+    q: '```ts\n// src/pages/docs/[...path].astro\nexport async function getStaticPaths() {\n  return [{ params: { path: \'guide/intro\' } }, { params: { path: undefined } }];\n}\nconst { path } = Astro.params;\n```\nWhat does the second entry (`path: undefined`) build?',
+    options: [
+      'Nothing — undefined params are skipped',
+      'The route\'s own parent path — here, /docs itself — since a rest param can match zero segments',
+      'A build error, since path must be a string',
+      'A page literally at /docs/undefined',
+    ],
+    answer: 1,
+    explain: 'Proven in the probe: params: { path: undefined } builds /docs/index.html, with Astro.params.path reading as undefined inside that one page — a rest param is the one bracket type that can legitimately match nothing.',
   },
 ];
 

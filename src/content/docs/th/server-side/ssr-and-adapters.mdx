@@ -1,6 +1,6 @@
 ---
 title: 'SSR & Adapters'
-description: 'on-demand rendering เชิงลึก — ติดตั้ง adapter, อ่าน request ที่เข้ามาด้วย Astro.request และ Astro.url, cookies และการกำหนดรูปแบบ response'
+description: 'On-demand rendering แบบลึก — output mode และ prerender ต่อหน้า (ทำไม "hybrid" เป็นแค่ศัพท์เก่า), ติดตั้ง adapter, standalone vs middleware mode พิสูจน์ด้วยการรันจริงทั้งคู่, อ่าน request ที่เข้ามา และ astro:env — พิสูจน์ด้วย ServerOnlyModule build error จริงและ missing-secret runtime error จริง'
 sidebar:
   order: 2
 ---
@@ -9,10 +9,11 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## เปิด server
+## เปิดใช้ server
 
-on-demand rendering รัน component script ของคุณ **ต่อ request** คุณจึงอ่าน data ตอน request ได้ การจะรัน server code ต้องติดตั้ง **adapter** สำหรับแพลตฟอร์มปลายทางแล้วเพิ่มลง config:
+On-demand rendering รัน component script ของคุณ**ต่อ request** จึงอ่าน request-time data ได้ จะรัน server code ต้องติดตั้ง **adapter** สำหรับ platform เป้าหมายแล้วเพิ่มเข้า config:
 
 ```js
 // astro.config.mjs
@@ -24,9 +25,9 @@ export default defineConfig({
 });
 ```
 
-พอมี adapter route จะ render on demand ตรงที่ต้องการ (หรือเมื่อคุณตั้ง `export const prerender = false` บน route) ถ้าไม่มี ฟีเจอร์ on-demand จะ build ไม่ผ่านพร้อมข้อความ *"an adapter is required"*
+เมื่อมี adapter route จะ render on demand ตรงที่ต้องการ (หรือเมื่อคุณ set `export const prerender = false` บน route) ถ้าไม่มี ฟีเจอร์ on-demand ใด ๆ จะ build ไม่ผ่านด้วย *"an adapter is required"*
 
-<Mermaid title="request ไหลผ่าน render ไปสู่ response" code={flowDiagram} />
+<Mermaid title="Request ไหลผ่าน render จนถึง response" code={flowDiagram} />
 
 export const flowDiagram = `sequenceDiagram
   participant B as Browser
@@ -38,9 +39,83 @@ export const flowDiagram = `sequenceDiagram
   C-->>S: HTML + response settings
   S-->>B: Response (status, headers, body)`;
 
+## `output` และ `prerender` ต่อหน้า
+
+มีสอง setting ที่ตัดสินต่อ route ว่าจะ build ครั้งเดียวหรือ render ต่อ request: default ระดับโปรเจกต์ **`output`** และ export **`prerender`** ของแต่ละหน้าเอง ซึ่งชนะ default เสมอ:
+
+- `output: 'static'` (default) — ทุก route ถูก prerender เป็น static HTML ตอน build เว้นแต่หน้านั้น opt เข้า on-demand ด้วย `export const prerender = false` (และมี adapter ติดตั้งไว้)
+- `output: 'server'` — ทุก route render on demand เป็น default; หน้าจะ opt *ออก* ไปเป็นไฟล์ static ด้วย `export const prerender = true`
+
+```astro
+---
+// src/pages/about.astro — always static, even under output: 'server'
+export const prerender = true;
+---
+<h1>About</h1>
+```
+
+```astro
+---
+// src/pages/dashboard.astro — always on-demand, even under output: 'static'
+export const prerender = false;
+const user = Astro.locals.user;
+---
+{user && <h1>Hi, {user.name}</h1>}
+```
+
+<Callout title='"Hybrid" เป็นศัพท์เก่า ไม่ใช่ค่า config'>
+คู่มือ Astro เก่า ๆ (และ training data ของ AI จำนวนมาก) อธิบาย mode ที่สามชื่อ **`output: 'hybrid'`** — "static เป็น default โดยมีบางหน้า on-demand" ตั้งแต่ Astro v5 ค่านั้นไม่มีอยู่แล้ว: `'hybrid'` ถูกรวมเข้ากับ `'static'` ซึ่งมีความหมายแบบนั้นเป๊ะ ("static เป็น default, opt in ต่อหน้าด้วย `prerender = false`") มาตลอดตั้งแต่นั้น ถ้าเห็น `output: 'hybrid'` ใน config หรือคู่มือเรียก pattern นี้ว่า "hybrid rendering" ให้ถือว่าเป็นศัพท์เก่าที่ค้างของสิ่งที่ `'static'` (พร้อม `prerender` ต่อหน้า) ทำอยู่แล้ว — ไม่ใช่ค่าที่ยัง set ได้
+</Callout>
+
+## Node adapter สองโหมด: standalone vs middleware พิสูจน์ทั้งคู่
+
+`@astrojs/node` มีสองโหมดที่ต่างกันจริง สร้าง `dist/server/entry.mjs` ที่ต่างกันเป๊ะ:
+
+```js
+// astro.config.mjs
+import node from '@astrojs/node';
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),   // or { mode: 'middleware' }
+});
+```
+
+**Standalone** คือ server ที่สมบูรณ์ รันเองได้ — `node ./dist/server/entry.mjs` เริ่ม listen เองเลย:
+
+```text
+$ node ./dist/server/entry.mjs
+04:47:44 [@astrojs/node] Server listening on http://127.0.0.1:4351
+```
+
+**Middleware** mode ไม่สร้าง listener เลย — entrypoint เดียวกันกลับ export handler ดิบ ๆ ให้เอาไปต่อกับ server ที่คุณมีอยู่แล้ว (Express, Fastify, `http` เปล่า ๆ):
+
+```text
+$ node -e "import('./dist/server/entry.mjs').then(m => console.log(Object.keys(m)))"
+[ 'handler', 'options', 'startServer' ]
+```
+
+พิสูจน์ด้วยการเอา `handler` ตัวนั้นเป๊ะไปต่อกับ Node `http` server เปล่า ๆ แล้วยืนยันว่า route จริงยัง resolve ผ่านมันได้:
+
+```js
+// host.mjs — a minimal example of what "mounting into an existing server" means
+import http from 'node:http';
+import { handler as ssrHandler } from './dist/server/entry.mjs';
+
+const server = http.createServer((req, res) => {
+  ssrHandler(req, res, (err) => { if (err) { res.statusCode = 500; res.end(String(err)); } });
+});
+server.listen(4351);
+```
+
+```text
+$ curl -s http://127.0.0.1:4351/api/health
+{"ok":true,"hasSecret":true}
+```
+
+หยิบ **standalone** มาใช้เมื่อ Astro คือ server ทั้งหมด หยิบ **middleware** มาใช้เมื่อ output ของ Astro ต้องอยู่ในแอปที่มีอยู่แล้ว (Express server เดิมที่มี route อื่นอยู่, custom TLS termination ฯลฯ) — และจำไว้ว่า middleware mode ไม่ serve static file ให้เองเลย `dist/client/` ยังต้อง serve แยกเอง
+
 ## อ่าน request
 
-ภายใน on-demand page หรือ endpoint global `Astro` เปิดให้เข้าถึง request:
+ใน on-demand page หรือ endpoint global object `Astro` เปิดให้เข้าถึง request:
 
 ```astro
 ---
@@ -57,12 +132,12 @@ const { id } = Astro.params;                 // dynamic route params
 
 - **`Astro.request`** คือ `Request` มาตรฐาน — headers, method และ `await Astro.request.formData()` หรือ `.json()` สำหรับ body
 - **`Astro.url`** คือ `URL` ที่ parse แล้ว — pathname และ `searchParams`
-- **`Astro.params`** เก็บ segment แบบ dynamic (`[id]`)
-- **`Astro.cookies`** อ่านและเขียน cookie ด้วย API แบบ typed (`.get`, `.set`, `.delete`, `.has`)
+- **`Astro.params`** เก็บ dynamic segment (`[id]`)
+- **`Astro.cookies`** อ่านและเขียน cookie ด้วย API ที่ typed (`.get`, `.set`, `.delete`, `.has`)
 
 ## กำหนดรูปแบบ response
 
-โดย default หน้าจะ return HTML พร้อม status 200 คุณควบคุม response ผ่าน **`Astro.response`** (ตั้ง status และ headers) หรือ **return `Response`** ตรง ๆ:
+ปกติหน้าจะ return HTML ของมันด้วย status 200 คุณควบคุม response ผ่าน **`Astro.response`** (set status และ header) หรือ**return `Response`** ตรง ๆ:
 
 ```astro
 ---
@@ -78,52 +153,182 @@ Astro.response.headers.set('Cache-Control', 'private, max-age=0');
 <h1>Your dashboard</h1>
 ```
 
-`Astro.redirect('/login')` return redirect `Response`; `Astro.response.headers` แก้ header ที่ส่งออก; และคุณ `return new Response(...)` เพื่อคุมเต็มที่ได้ (หน้า 404, custom status) นี่คือ model `Request`/`Response` เดียวกับที่ทั้ง web platform ใช้ — Astro ไม่ได้คิดของตัวเองขึ้นมาใหม่
+`Astro.redirect('/login')` return `Response` แบบ redirect; `Astro.response.headers` แก้ header ขาออก; และคุณ `return new Response(...)` เพื่อคุมทุกอย่างเองได้ (หน้า 404, status กำหนดเอง) นี่คือ model `Request`/`Response` เดียวกับที่ web platform ทั้งหมดใช้ — Astro ไม่ได้คิดแบบของตัวเองขึ้นมา
+
+## `astro:env`: environment variable ที่ type และเช็คที่ boundary
+
+`import.meta.env.WHATEVER` เปล่า ๆ ไม่มี type และไม่ได้ป้องกัน server secret ไม่ให้ถูกอ่านใน client code **`astro:env`** เช็ค schema ทุกตัวแปร และที่สำคัญกว่านั้นคือบังคับว่าแต่ละตัวอ่านได้จาก*ที่ไหน* — สองแกนที่เป็นอิสระจากกัน:
+
+```js
+// astro.config.mjs
+import { defineConfig, envField } from 'astro/config';
+
+export default defineConfig({
+  env: {
+    schema: {
+      PUBLIC_SITE_NAME: envField.string({ context: 'client', access: 'public', default: 'Probe' }),
+      API_URL: envField.string({ context: 'server', access: 'public', default: 'https://api.example.com' }),
+      DB_PASSWORD: envField.string({ context: 'server', access: 'secret' }),
+    },
+  },
+});
+```
+
+| `context` | `access: 'public'` | `access: 'secret'` |
+|---|---|---|
+| `client` | อ่านได้จาก `astro:env/client` — inline เป็น literal ลงใน client bundle | **ไม่ใช่ combination ที่ valid** — Astro ปฏิเสธไม่ให้ config ไม่มีทางส่ง secret ไปที่ browser อย่างปลอดภัย |
+| `server` | อ่านได้จาก `astro:env/server`, server-only code | อ่านได้จาก `astro:env/server` เท่านั้น ไม่ถูก bundle ไป client เลย |
+
+ตัวแปร `client`/`public` ถูก inline เป็น literal จริง ๆ — พิสูจน์ด้วยการ grep client script ที่ compile แล้วของหน้าที่ import `PUBLIC_SITE_NAME`:
+
+```text
+$ grep -o 'var e=.*Probe.*;' dist/server/chunks/*.mjs
+var e=`Probe`;document.getElementById(`client-side`).textContent=e;
+```
+
+ลอง import module ที่เป็น **server**-only จาก client `<script>` แล้ว build ปฏิเสธตรง ๆ — ไม่ใช่ `undefined` ตอน runtime แต่เป็น compiler error จริง:
+
+```astro
+<script>
+  import { DB_PASSWORD } from 'astro:env/server';
+  console.log(DB_PASSWORD);
+</script>
+```
+
+```text
+[ServerOnlyModule] The "astro:env/server" module is only available server-side.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/server-only-module/
+```
+
+และ **secret** ที่ required แต่ไม่มีค่า set ไว้ก็ไม่ได้กลายเป็น `undefined` เงียบ ๆ เช่นกัน — route ที่ import มันจะ fail ด้วย diagnostic ของ schema เองทันทีที่ถูกใช้จริง:
+
+```text
+$ curl -s http://127.0.0.1:4351/api/health
+(500)
+[ERROR] EnvInvalidVariables: The following environment variables defined in `env.schema` are invalid:
+
+- DB_PASSWORD is missing
+```
+
+(บังคับให้เช็คนี้เกิดกับทุก secret ที่ config ไว้ไม่ว่าจะถูก import หรือไม่ ได้ด้วย `env: { validateSecrets: true }` — มีประโยชน์เมื่อต้องการจับ production secret ที่ขาดหายตั้งแต่ใน CI แทนที่จะรอ request แรกที่ต้องการมันจริง ๆ)
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ review rendering/config/env code ที่ generate มา ให้เช็ค:
+
+- config set `output: 'hybrid'` หรือเปล่า? ค่านั้นไม่มีอยู่แล้วตั้งแต่ Astro v5 (พิสูจน์แล้วข้างบน) — มันคือศัพท์ค้างจาก training data หรือคู่มือเก่า ไม่ใช่สิ่งที่ compiler ยอมรับ
+- หน้าอ่าน `Astro.cookies`, `Astro.clientAddress` หรืออะไรที่เกี่ยวกับ request เฉพาะเจาะจง พร้อมกับมี (หรือสืบทอด) `prerender = true` ด้วยไหม? การอ่านเหล่านั้นต้องการ request จริงที่หน้า prerendered ไม่มีเลย
+- secret ถูกอ่านผ่าน `import.meta.env.SOMETHING` เปล่า ๆ แทน `astro:env/server` หรือเปล่า ซึ่งเสีย schema check และการบังคับ client/server boundary ที่พิสูจน์แล้วข้างบนไปด้วย?
+- client-side code import จาก `astro:env/server` ตรง ๆ โดยคาดว่า "มันแค่จะเป็น undefined" ถ้าใช้ผิด แทนที่จะเป็น build error จริงที่พิสูจน์แล้วข้างบนหรือเปล่า?
+- สมมติว่า `node ./dist/server/entry.mjs` เริ่ม listener เสมอหรือเปล่า? ใน mode `middleware` มันไม่ทำ — พิสูจน์แล้วข้างบนว่ามัน export handler ที่ต้อง mount เอง
+
+<SpotTheBug code={`// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'hybrid',
+  adapter: node({ mode: 'standalone' }),
+});`}>
+`output: 'hybrid'` ถูกลบออกใน Astro v5 — config นี้ fail validation บน Astro ที่ติดตั้งปัจจุบัน มันไม่ใช่ legacy alias ที่ยังยอมรับเงียบ ๆ พฤติกรรมที่ผู้เขียนต้องการ ("static เป็น default โดยมีบางหน้า on-demand") คือสิ่งที่ `output: 'static'` ทำอยู่แล้วเป๊ะ ด้วย `export const prerender = false` ต่อหน้าที่ต้องการ server — พิสูจน์แล้วก่อนหน้าในบทนี้ วิธีแก้คือ `output: 'static'` (หรือไม่ต้องใส่ `output` เลยเพราะเป็น default อยู่แล้ว) พร้อม `prerender` ต่อหน้าตามที่ต้องการ; `output: 'server'` คืออีกทางเลือกที่ valid ถ้า*ส่วนใหญ่*ของหน้าควรเป็น on-demand แทน
+</SpotTheBug>
+
+## Mental Model
+
+`output` คือ *default* ไม่ใช่การแบ่งแยกตายตัว — rendering mode จริงของแต่ละ route คือ `prerender` ซึ่งชนะเสมอไม่ว่าจะ set เองหรือสืบทอดจาก default ของโปรเจกต์ adapter คือชั้นแปลระหว่าง per-request rendering นั้นกับรูปแบบ request/response ของ runtime หนึ่ง ๆ (`http` ของ Node, `fetch` handler ของ Cloudflare ฯลฯ) — นี่คือเหตุผลเป๊ะที่ `context.clientAddress`, การเขียน `Astro.cookies` และการอ่าน env สด ๆ ต้องการ*route ที่ on-demand จริง* ไม่ใช่แค่มี adapter อยู่ที่ไหนสักที่ใน config
+
+## ข้อแลกเปลี่ยน
+
+| | `output: 'static'` (default) | `output: 'server'` |
+|---|---|---|
+| Override ต่อหน้า | `prerender = false` opt หน้าเข้า*สู่* server | `prerender = true` opt หน้าออก*ไป*เป็น static |
+| จุดเริ่มต้นที่ดีที่สุด | เว็บส่วนใหญ่ — มีไม่กี่หน้าที่ต้องการ server | แอปที่*ส่วนใหญ่*ของ route เป็น on-demand |
+| ยังต้องมี adapter | ใช่ สำหรับหน้า on-demand ใด ๆ | ใช่ เสมอ |
+
+| | Node `standalone` | Node `middleware` |
+|---|---|---|
+| Startup | listen เอง พิสูจน์แล้วข้างบน | ไม่มี listener — คุณ mount `handler` เอง พิสูจน์แล้วข้างบน |
+| Static asset | serve ให้อัตโนมัติ | คุณ serve `dist/client/` เอง |
+| เหมาะกับ | Astro คือ server ทั้งหมด | Astro อยู่ในแอปที่มีอยู่แล้ว |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`output: 'hybrid'` คือ mode สำหรับผสม static กับ on-demand page"** พิสูจน์แล้วข้างบน: ค่านั้นไม่มีอยู่แล้วตั้งแต่ v5 — `'static'` พร้อม `prerender = false` ต่อหน้าคือ mode นั้นเป๊ะ ภายใต้ชื่อปัจจุบัน
+- **"มี adapter ตัวเดียวก็พอสำหรับ `Astro.clientAddress`/cookies/env สด ๆ ที่ไหนก็ได้ในโปรเจกต์"** สิ่งเหล่านั้นยังต้องการ*route นั้นเจาะจง*เป็น on-demand — หน้า prerendered ที่มี adapter ติดตั้งอยู่ที่อื่นในโปรเจกต์ก็ยัง fail พิสูจน์แล้วในบท endpoint
+- **"`node ./dist/server/entry.mjs` เริ่ม server เสมอ"** แค่ใน mode `standalone` เท่านั้น — พิสูจน์แล้วข้างบน mode `middleware` export handler ที่ไม่มี listener เลย
+- **"secret env var ที่แค่ไม่ได้ set จะกลายเป็น `undefined` ตอน runtime เหมือน env var ปกติ"** พิสูจน์แล้วข้างบน: secret ที่มี schema แต่ไม่มีค่า throw error `EnvInvalidVariables` จริงทันทีที่ถูกอ่าน ไม่ใช่ `undefined` เงียบ ๆ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-on-demand rendering รัน script ต่อ request และต้องมี **adapter** (Node/Cloudflare/Vercel) ใน config ภายใน server route global `Astro` เปิดให้เข้าถึง request: **`Astro.request`** (`Request` มาตรฐาน + body), **`Astro.url`** (pathname & `searchParams`), **`Astro.params`** (dynamic segment) และ **`Astro.cookies`** (typed get/set) กำหนด reply ด้วย **`Astro.response`** (status/headers), `Astro.redirect(...)` หรือ return `Response` — เป็น model ของ web platform มาตรฐาน ไม่ใช่ของเฉพาะทาง
+`prerender` (ต่อหน้า) ชนะ default `output` ของโปรเจกต์เสมอ — `'static'` opt หน้าเข้า server ด้วย `prerender = false`, `'server'` opt หน้าออกเป็น static ด้วย `prerender = true`; **`output: 'hybrid'` ไม่มีอยู่แล้วตั้งแต่ v5** (พิสูจน์แล้วข้างบน — เป็นศัพท์เก่าของสิ่งที่ `'static'` ทำอยู่แล้ว) ต้องมี **adapter** สำหรับ route on-demand ใด ๆ; mode **standalone** ของ Node adapter listen เอง ส่วน **middleware** export `handler` เปล่า ๆ ให้ mount เอง (พิสูจน์ทั้งคู่ข้างบนด้วยการรันจริง) **`astro:env`** บังคับ `context`/`access` ที่ระดับ compiler — server secret ที่ import เข้า client code คือ build error `ServerOnlyModule` จริง, client var แบบ public ถูก inline เป็น literal, และ secret ที่ required แต่หายไป throw `EnvInvalidVariables` ทันทีที่ถูกอ่าน (พิสูจน์ทั้งหมดข้างบน) ไม่ใช่ `undefined` เงียบ ๆ เลย
 </Callout>
 
 export const quizSsr = [
   {
-    q: 'ต้อง config อะไรเพื่อให้ on-demand rendering ทำงาน?',
+    q: 'ต้อง config อะไรให้ on-demand rendering ทำงาน?',
     options: [
-      'database',
-      'adapter สำหรับแพลตฟอร์มปลายทาง (Node, Cloudflare, Vercel...)',
+      'ฐานข้อมูล',
+      'adapter สำหรับ platform เป้าหมาย (Node, Cloudflare, Vercel...)',
       'service worker',
-      'ไม่ต้องเพิ่มอะไร',
+      'ไม่ต้องมีอะไรเพิ่ม',
     ],
     answer: 1,
+    explain: 'on-demand rendering (route ใดก็ตามที่ prerender = false หรือทั้งโปรเจกต์อยู่ใต้ output: "server") ต้องการ adapter ที่รู้วิธีรัน Astro บน runtime เป้าหมาย',
   },
   {
-    q: 'คุณอ่าน query string ใน on-demand page อย่างไร?',
+    q: '`output` เป็น `\'static\'` และหน้าหนึ่งมี `export const prerender = false` เกิดอะไรขึ้นกับหน้านั้นจริง ๆ?',
     options: [
-      'จาก Astro.props',
-      'จาก `Astro.url.searchParams`',
-      'จากชื่อไฟล์',
-      'อ่าน query params ไม่ได้',
+      'ยังเป็น static เพราะ output: static ชนะหน้า',
+      'render on demand — prerender export ของหน้าเองชนะ default ของ output เสมอ',
+      'ทำให้ build error',
+      'ถูกละเว้นเว้นแต่ output เป็น "server"',
     ],
     answer: 1,
+    explain: 'prerender ถูกตัดสินต่อหน้าและชนะ default ของ output เสมอทั้งสองทิศทาง — พิสูจน์แล้วข้างบนด้วยทั้งตัวอย่าง "opt in" (โปรเจกต์ static, หน้า on-demand) และ "opt out" (โปรเจกต์ server, หน้า static)',
   },
   {
-    q: 'คุณ redirect user ที่ยังไม่ auth จาก server page อย่างไร?',
+    q: 'config set `output: \'hybrid\'` เกิดอะไรขึ้นบน Astro ที่ติดตั้งปัจจุบัน ตามที่พิสูจน์ในบทนี้?',
     options: [
-      'throw error',
-      'return `Astro.redirect(\'/login\')`',
-      'ตั้ง window.location',
-      'ลบหน้าทิ้ง',
+      'ทำงานเหมือน hybrid mode ของ Astro 4 เป๊ะ',
+      'fail — `\'hybrid\'` ถูกรวมเข้ากับ `\'static\'` ตั้งแต่ Astro v5 และไม่ใช่ค่า output ที่ valid อีกต่อไป',
+      'fallback ไปเป็น "server" เงียบ ๆ',
+      'มีผลแค่กับหน้าที่ prerender เท่านั้น',
     ],
     answer: 1,
+    explain: '"hybrid" เป็นศัพท์เก่าที่คู่มือและ training data ของ AI บางส่วนยังใช้อยู่ แต่ค่า config ตัวมันเองถูกลบใน v5 — "static" พร้อม prerender = false ต่อหน้าคือความสามารถเดียวกันเป๊ะภายใต้ชื่อปัจจุบัน',
   },
   {
-    q: '`Astro.request` คืออะไร?',
+    q: '```text\n$ node -e "import(\'./dist/server/entry.mjs\').then(m => console.log(Object.keys(m)))"\n[ \'handler\', \'options\', \'startServer\' ]\n```\nผลลัพธ์นี้มาจาก Node adapter build ใน mode ไหน และหมายความว่าอะไร?',
     options: [
-      'object เฉพาะของ Astro',
-      '`Request` มาตรฐานของ web platform (headers, method, body ผ่าน formData()/json())',
-      'connection ของ database',
-      'build config',
+      'standalone — server เริ่ม listen ไปแล้ว',
+      'middleware — ไม่มีการสร้าง listener; ต้อง mount `handler` เข้ากับ server ที่คุณรันเอง พิสูจน์แล้วในบทนี้ด้วยการ mount เข้า http.createServer เปล่า ๆ',
+      'นี่คือ error — build ล้มเหลว',
+      'หมายความว่าไม่ได้ config adapter ไว้เลย',
     ],
     answer: 1,
+    explain: 'mode middleware สร้าง entrypoint ที่ export handler ดิบและไม่มี listener ที่เริ่มเอง — พิสูจน์แล้วในบทนี้ด้วยการ mount handler ตัวนั้นเป๊ะเข้ากับ Node http server เปล่า ๆ แล้วยืนยันว่า route จริงยัง resolve ผ่านมันได้',
+  },
+  {
+    q: 'schema declare `DB_PASSWORD` เป็น `envField.string({ context: \'server\', access: \'secret\' })` โดยไม่มี default และ process ที่ deploy ไม่มี `DB_PASSWORD` set เลย พฤติกรรมจริงที่พิสูจน์แล้วเมื่อ route import มันคืออะไร?',
+    options: [
+      'เป็น undefined เหมือน env var ที่หายไปปกติ',
+      'route throw EnvInvalidVariables ("DB_PASSWORD is missing") ทันทีที่ module ถูก import และใช้งาน',
+      'Astro แทนที่ด้วย empty string ให้อัตโนมัติ',
+      'fail แค่ตอน `astro build` เท่านั้น ไม่มีทาง fail ตอน runtime',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: การเรียก route ที่ import secret ที่หายไปจาก astro:env/server สร้าง error EnvInvalidVariables จริงตอนนั้นเลย ไม่ใช่ undefined เงียบ ๆ — env variable ที่ schema-check แล้ว fail แบบดัง ๆ',
+  },
+  {
+    q: 'จะเกิดอะไรถ้า client-side code เขียน `import { DB_PASSWORD } from \'astro:env/server\'`?',
+    options: [
+      'ทำงานได้ แต่ DB_PASSWORD เป็น undefined ในเบราว์เซอร์',
+      'build fail ตรง ๆ ด้วย ServerOnlyModule — พิสูจน์แล้วข้างบน ไม่ใช่เรื่องเซอร์ไพรส์ตอน runtime',
+      'Astro ย้ายมันไปยัง astro:env/client ให้อัตโนมัติ',
+      'แค่ warn ตอน development mode เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: การ import server-only env module จาก client code คือ compiler error จริง (ServerOnlyModule) บังคับตอน build time แทนที่จะรั่วเป็น undefined ลงเบราว์เซอร์',
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: 'Endpoints & API Routes'
-description: 'Non-HTML routes — APIRoute handlers that return a Response, reading params and the request body, static vs on-demand endpoints, the Astro 7 src/fetch.ts entrypoint, and how they differ from Actions.'
+description: 'Non-HTML routes — APIRoute handlers that return a Response, reading params and the request body, static vs on-demand endpoints, real streaming with a ReadableStream, context.clientAddress proven adapter/on-demand-only, and how endpoints differ from Actions.'
 sidebar:
   order: 3
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## A route that returns data, not a page
 
@@ -18,6 +19,8 @@ Not every route renders HTML. A file in `src/pages/` with a `.ts` (or `.js`) ext
 // src/pages/api/health.ts
 import type { APIRoute } from 'astro';
 
+export const prerender = false;
+
 export const GET: APIRoute = () => {
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
@@ -26,7 +29,14 @@ export const GET: APIRoute = () => {
 };
 ```
 
-`GET /api/health` now returns JSON. The `APIRoute` type gives you a typed context argument and a `Response` return — the same web-standard shape as everywhere else in Astro.
+`GET /api/health` now returns JSON, proven against a running build:
+
+```text
+$ curl -s http://127.0.0.1:4351/api/health
+{"ok":true}
+```
+
+The `APIRoute` type gives you a typed context argument and a `Response` return — the same web-standard shape as everywhere else in Astro.
 
 ## Reading params and the body
 
@@ -36,6 +46,9 @@ The handler receives a context with the request, params, cookies, and more:
 // src/pages/api/users/[id].ts
 export const prerender = false;   // dynamic + POST needs on-demand (or add getStaticPaths for GET-only)
 import type { APIRoute } from 'astro';
+
+// Stand-in for your real database client — replace with your ORM/query layer.
+const db = { users: { find: async (id: string | undefined) => ({ id, name: 'Ava' }), create: async (data: any) => ({ id: crypto.randomUUID(), ...data }) } };
 
 export const GET: APIRoute = async ({ params }) => {
   const user = await db.users.find(params.id);   // [id] from the path
@@ -69,6 +82,59 @@ Like pages, endpoints can be built once or run per request:
 export const prerender = false;
 ```
 
+## Streaming a response
+
+Because a handler returns a real `Response`, it can stream instead of buffering the whole body in memory — construct it from a `ReadableStream` and Astro (through the adapter) forwards it as chunked output:
+
+```ts
+// src/pages/api/stream.ts
+import type { APIRoute } from 'astro';
+
+export const prerender = false;
+
+export const GET: APIRoute = () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      for (const chunk of ['one\n', 'two\n', 'three\n']) {
+        controller.enqueue(encoder.encode(chunk));
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, { headers: { 'Content-Type': 'text/plain' } });
+};
+```
+
+Proven against a running build — no `Content-Length`, and the server negotiates `Transfer-Encoding: chunked` on its own, exactly like any other streamed web response:
+
+```text
+$ curl -sD - -o /dev/null http://127.0.0.1:4351/api/stream | grep -i "transfer-encoding\|^HTTP"
+HTTP/1.1 200 OK
+Transfer-Encoding: chunked
+```
+
+## `context.clientAddress`: on-demand only
+
+`context.clientAddress` reads the requesting client's IP from the adapter — which means it only exists where there *is* a live request to read it from. Reach for it in a prerendered route (with or without an adapter configured) and the real build failure is immediate:
+
+```astro
+---
+// @expect-error PrerenderClientAddressNotAvailable — Astro.clientAddress read on a prerendered route (src/pages/ip.astro)
+export const prerender = true;
+const ip = Astro.clientAddress;
+---
+```
+
+```text
+[ERROR] PrerenderClientAddressNotAvailable: `Astro.clientAddress` cannot be used inside prerendered route src/pages/ip.astro.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/prerender-client-address-not-available/
+```
+
+Proven twice: identically whether the project has `output: 'static'` with no adapter at all, or `output: 'server'` with a Node adapter installed but that one route marked `prerender = true` — either way, there is no per-request connection for `clientAddress` to come from, because the page was rendered once, at build time. Move the route to on-demand (drop `prerender = true`, keep an adapter configured) and the same read works.
+
 ## Endpoints vs Actions
 
 Both run server code, but they solve different problems:
@@ -88,13 +154,37 @@ Because the filename is now reserved, an unrelated `src/fetch.ts` in an older pr
 
 ```js
 // astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
 export default defineConfig({
+  adapter: node({ mode: 'standalone' }),
   fetchFile: './src/router.ts',   // or null to disable advanced routing
 });
 ```
 
+## Reading AI-generated code
+
+When reviewing a generated endpoint, check for:
+
+- Does a dynamic or `POST`-handling endpoint actually set `export const prerender = false`? Without it (and under `output: 'static'`), only `GET` works and the response is frozen at build time — a `POST` handler that's never actually reachable is a common generated-code mistake.
+- Does the handler read `context.clientAddress` (rate limiting, geolocation, audit logs) on a route that's prerendered? Proven above: that's a hard build failure, not a runtime `undefined`.
+- Is a large or slow-to-produce response buffered into one big string, when a `ReadableStream` (proven above with real chunked output) would start sending bytes immediately?
+- Does the handler assume `request.json()` always succeeds, with no `try/catch` around malformed input?
+- Is business logic that's really "my app calling my own backend" implemented as an endpoint with hand-rolled `fetch()` calls on the client, when an Action (next lesson) would give the same result with automatic validation and no URL to maintain?
+
+<SpotTheBug code={`// src/pages/api/report.ts
+import type { APIRoute } from 'astro';
+
+export const GET: APIRoute = async ({ clientAddress }) => {
+  await logAccess(clientAddress);
+  return Response.json({ ok: true });
+};`}>
+There's no `export const prerender = false` here, and no adapter is guaranteed to be configured for this route either — if this project (or just this route) ends up static, `clientAddress` is read on a route with no live request behind it. The real, proven failure from this exact situation is a build-time crash, not a quietly-undefined value: `PrerenderClientAddressNotAvailable: Astro.clientAddress cannot be used inside prerendered route ...`. The fix is to make the on-demand intent explicit — `export const prerender = false` — and make sure the project has an adapter configured, so the route actually has a live request to read the client's address from.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-An **API endpoint** is a `.ts` file in `src/pages/` that exports HTTP-method functions (`GET`, `POST`, …) typed as `APIRoute`, each returning a standard `Response`; the handler reads `params`, the request body, and cookies from its context. Endpoints are **static** (build-time, `GET`-only) unless you add `prerender = false` for on-demand methods. Use an **endpoint** for public/external HTTP contracts (webhooks, REST, downloads) and an **Action** for your own app's internal, type-safe mutations. When you need to sit in front of the whole pipeline (a Hono app, a proxy), Astro 7's reserved **`src/fetch.ts`** fetch handler is the tool.
+An **API endpoint** is a `.ts` file in `src/pages/` that exports HTTP-method functions (`GET`, `POST`, …) typed as `APIRoute`, each returning a standard `Response` — including a streamed one built from a `ReadableStream` (proven above with real `Transfer-Encoding: chunked` output). Endpoints are **static** (build-time, `GET`-only) unless you add `prerender = false` for on-demand methods. **`context.clientAddress`** only works on an on-demand route with an adapter — on a prerendered one it's a hard build error (`PrerenderClientAddressNotAvailable`, proven above), never a silently-empty value. Use an **endpoint** for public/external HTTP contracts (webhooks, REST, downloads) and an **Action** for your own app's internal, type-safe mutations. When you need to sit in front of the whole pipeline (a Hono app, a proxy), Astro 7's reserved **`src/fetch.ts`** fetch handler is the tool.
 </Callout>
 
 export const quizEndpoints = [
@@ -107,6 +197,7 @@ export const quizEndpoints = [
       'Endpoints are not supported',
     ],
     answer: 1,
+    explain: 'A .ts/.js file in src/pages/ exporting method-named functions (GET, POST, ...), each typed as APIRoute and returning a standard Response, is an API endpoint.',
   },
   {
     q: 'A static (build-time) endpoint supports which method(s)?',
@@ -117,6 +208,29 @@ export const quizEndpoints = [
       'None',
     ],
     answer: 1,
+    explain: 'A static endpoint runs once at build time and writes its GET response to a file — POST/PUT/DELETE need prerender = false and an adapter.',
+  },
+  {
+    q: '```text\n$ curl -sD - -o /dev/null http://127.0.0.1:4351/api/stream | grep -i "transfer-encoding"\nTransfer-Encoding: chunked\n```\nWhat does this prove about the endpoint that produced it?',
+    options: [
+      'The response was buffered fully in memory before sending',
+      'The response is a real stream (built from a ReadableStream) sent as it is produced, not a single buffered body',
+      'The endpoint failed and this is an error header',
+      'The endpoint is static',
+    ],
+    answer: 1,
+    explain: 'chunked transfer encoding with no Content-Length is what a real streamed Response produces — proven above by returning a ReadableStream from the handler.',
+  },
+  {
+    q: 'A route has `export const prerender = true` (or the project has no adapter at all) and its handler reads `context.clientAddress`. What actually happens, proven in this lesson?',
+    options: [
+      'clientAddress is simply undefined, no error',
+      'A build-time error, PrerenderClientAddressNotAvailable — clientAddress requires a live per-request connection that a prerendered route never has',
+      'It falls back to 127.0.0.1',
+      'It works fine — clientAddress does not depend on rendering mode',
+    ],
+    answer: 1,
+    explain: 'Proven above in two separate builds (output: static with no adapter, and output: server with a Node adapter but the specific route prerendered): reading clientAddress on a prerendered route is a hard build failure with this exact error, not a quietly-empty value.',
   },
   {
     q: 'When should you use an Action instead of an endpoint?',
@@ -127,6 +241,7 @@ export const quizEndpoints = [
       'Never — they are identical',
     ],
     answer: 1,
+    explain: 'Actions are the right tool for internal mutations called from your own client code — automatic validation, no URL to design or fetch() to hand-write.',
   },
   {
     q: 'What does an endpoint handler return?',
@@ -137,6 +252,7 @@ export const quizEndpoints = [
       'A string only',
     ],
     answer: 1,
+    explain: 'Endpoints return a standard Response object — the same type used across fetch, middleware, and the rest of the web platform.',
   },
 ];
 

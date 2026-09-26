@@ -95,6 +95,41 @@ npx astro add tailwind
 
 That installs the plugin, adds it to your Vite config, and creates the CSS entry. You then import your CSS once (e.g. in a layout) and use Tailwind utility classes in your markup. If you ever see guides referencing the `@astrojs/tailwind` *integration*, that's the older approach; the current path is the Vite plugin via `astro add tailwind`.
 
+## Content-Security-Policy (`security.csp`)
+
+Stable since Astro 6.0, `security.csp` generates a real `Content-Security-Policy` for every page — hashing Astro's own inline scripts/styles automatically, so you don't hand-maintain a hash list every time the build output changes:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  security: {
+    csp: true,   // or an object: { algorithm: 'SHA-512', directives: [...], scriptDirective: {...}, styleDirective: {...} }
+  },
+});
+```
+
+Astro delivers the same policy through two different mechanisms depending on how the page renders — proven against a real build with `security: { csp: true }`. An **on-demand** page (`prerender = false`, or the whole project under `output: 'server'`) gets it as a real HTTP response header, since there's a live response to attach it to:
+
+```text
+$ curl -sD - -o /dev/null http://127.0.0.1:4351/ | grep -i content-security-policy
+content-security-policy: script-src 'self' 'sha256-mzyhaPlEXQku46rgza6MekztMi+pKj5BkQ4z75dLyDw=' 'sha256-BF0290pkb3jxQsE7z00xR8Imp8X34FLC88L0lkMnrGw=' ...; style-src 'self' ;
+```
+
+A **prerendered** page (`prerender = true`, or the `'static'` default) has no live response to attach a header to — the exact same directives are written into the built HTML instead, as a `<meta http-equiv>` tag:
+
+```text
+$ grep -o '<meta[^>]*content-security-policy[^>]*>' dist/client/static-about/index.html
+<meta http-equiv="content-security-policy" content="script-src 'self' 'sha256-mzyhaPlEXQku46rgza6MekztMi+pKj5BkQ4z75dLyDw=' ...; style-src 'self' ;">
+```
+
+Both come from the exact same `security.csp` config and carry the exact same generated script/style hashes — only the delivery mechanism (header vs. `<meta>`) changes, chosen automatically per route based on `prerender`, the same setting covered in the [SSR & adapters](/astro/en/server-side/ssr-and-adapters/) lesson.
+
+<Callout title="CSP and Shiki don't mix by default">
+Enabling `security.csp` on a project still using Shiki for syntax highlighting produces a real build warning: *"Shiki syntax highlighting uses inline styles that are not compatible with Content Security Policy (CSP)."* Shiki colors code with per-token inline `style` attributes, which a strict `style-src` blocks unless you add Shiki's own hashes or switch to Prism (`markdown.syntaxHighlight: 'prism'`), which uses CSS classes instead of inline styles.
+</Callout>
+
 <Callout title="The one-line takeaway">
 `astro.config.mjs` configures a project via `defineConfig` — key fields are `site` (deployed URL, needed for absolute URLs), `base` (path prefix), `output`, `adapter`, and `integrations`. **Integrations** (`@astrojs/*`, added with `npx astro add`) extend the build with UI frameworks, MDX, sitemaps, and adapters. Astro runs on **Vite**, so you can drop into the `vite` key for raw plugins — and current Tailwind is a Vite plugin added with `astro add tailwind`, not the legacy `@astrojs/tailwind` integration. In Astro 7 the `cache`, `routeRules`, and `logger` keys are top-level (the `experimental` flags are gone), `compressHTML` defaults to `'jsx'`, and `@astrojs/db` has been removed.
 </Callout>

@@ -56,6 +56,15 @@ the point of use in the template). Use the `---` / `// path` form for any
 component with logic; reserve the literal `<!-- path -->` form for
 frontmatter-less fragments only.
 
+### Probe collections (check mode)
+
+Every run writes a fixed `tools/probe/src/content.config.ts` (`blog`,
+`authors`) and `src/live.config.ts` (`products`) so `astro sync` emits real
+types for the collections lessons reference by name — a lesson's own
+config fences are namespaced away in check mode and can't provide them.
+Add a field there when a new lesson reads `entry.data.<field>` on one of
+these; `--build` swaps the lesson's own config in and restores these after.
+
 ### Where fences land
 
 - `src/pages/**` fences land under the probe's REAL

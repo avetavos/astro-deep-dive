@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Why validate content at all
 
@@ -103,9 +104,122 @@ const author = await getEntry(post.data.author);   // pass the reference straigh
 
 This keeps content normalized — author details live in one place — while giving each post a validated, resolvable link.
 
+## Images in schemas: the image() helper
+
+A schema is a plain function when it only needs `z`, but when a field is a local image, Astro passes an extra helper into a **schema callback**: `({ image }) => z.object({ ... })`. Call **`image()`** for that field, and the raw path in frontmatter (`cover: "./cover.png"`) becomes a validated, optimized image object at build time:
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: ({ image }) => z.object({
+    title: z.string(),
+    author: reference('authors'),
+    cover: image(),          // validates the path AND generates an optimized asset
+    coverAlt: z.string(),
+  }),
+});
+
+export const collections = { blog };
+```
+
+```astro
+---
+// src/pages/index.astro
+import { getCollection } from 'astro:content';
+const posts = await getCollection('blog');
+const post = posts[0];
+---
+{post && (
+  <img src={post.data.cover.src} width={post.data.cover.width} height={post.data.cover.height} alt={post.data.coverAlt} />
+)}
+```
+
+`post.data.cover` isn't a string — it's `{ src, width, height, format, ... }`, the same shape `astro:assets` gives `<Image>`. Proven in the probe: building with `cover: "./cover.png"` in frontmatter emits a real, hashed, optimized file and bakes its real dimensions into the HTML, with no manual `<Image>` component needed:
+
+```html
+<!-- real build output -->
+<img src="/_astro/cover.asuJasgv.png" width="1" height="1" alt="A sunset">
+```
+
+`image()` resolves the path **relative to the entry's own file**, which is why it only works for loaders (like `glob`) that set a `filePath` on each entry — a loader that only sets `id`/`data` (like the `notesLoader` from the previous lesson) has nothing for `image()` to resolve against.
+
+## When a schema fails: the real build error
+
+Validation isn't advisory — a bad entry stops the build cold, and the message tells you exactly which field and which entry. Given this frontmatter with a `pubDate` that isn't a real date:
+
+```md
+---
+title: "Bad Post"
+pubDate: "soon"
+author: ada
+cover: "./cover.png"
+coverAlt: "broken"
+---
+```
+
+...against the `pubDate: z.coerce.date()` field from this lesson's schema, `astro sync` (and `astro dev`/`astro build`, which sync first) fails immediately — this is the real error text on Astro 7.3.5:
+
+```text
+[InvalidContentEntryDataError] blog → bad-post data does not match collection schema.
+
+  pubDate**: **pubDate: Expected type "date", received "object"
+
+  Location:
+    src/data/blog/bad-post.md:0:0
+```
+
+`"soon"` coerced through `new Date("soon")` produces an **`Invalid Date`** object, not a string — hence "received `object`", not "received `string`". The error names the collection (`blog`), the entry (`bad-post`), and the field (`pubDate`), so fixing bad content is a one-line diff, not a debugging session.
+
 <Callout title="The one-line takeaway">
-A **Zod schema** (from `astro/zod`) validates every collection entry at the content boundary, so bad frontmatter fails the build with a clear message instead of crashing a page — and the same schema **generates the TypeScript types** for `entry.data`, so you never hand-write interfaces. Use `.optional()`, `.default()`, `z.coerce.date()`, and `z.enum()` to describe fields, and **`reference()`** to link collections (resolve the link with `getEntry`).
+A **Zod schema** (from `astro/zod`) validates every collection entry at the content boundary, so bad frontmatter fails the build immediately with a message naming the collection, entry, and field — and the same schema **generates the TypeScript types** for `entry.data`. Use `.optional()`, `.default()`, `z.coerce.date()`, and `z.enum()` to describe fields; use a **schema callback** (`({ image }) => ...`) and `image()` for local images that need optimizing; and use **`reference()`** to link collections (resolve the link with `getEntry`).
 </Callout>
+
+## Mental Model
+
+Think of the schema as a gate at the collection's front door, not a type annotation bolted on afterward. Nothing gets into the content store without passing through it first — that's why a bad entry fails at `sync` time, before any page has a chance to render it, and why the generated type is never a guess: it's a direct reflection of the one gate everything already passed through. `image()` extends the same gate to binary assets — the path in frontmatter is just as "unvalidated" as a string field until the schema resolves and optimizes it.
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+| --- | --- | --- |
+| A schema per collection | Bad content fails the build with a precise, field-level message | You must describe every field up front; an undeclared field is silently dropped from `entry.data`, not an error |
+| `z.coerce.date()` / `.default()` / `.optional()` | Downstream code never juggles raw strings or `undefined` | Coercion can mask a genuinely malformed value as a valid-but-wrong one (`"soon"` becomes `Invalid Date`, not a caught string error, until you read the message closely) |
+| `reference()` | A validated, typed link between collections, resolved with one `getEntry` call | The reference is just an id until resolved — reading `.data` straight off it is a type error, not a silent `undefined` |
+| `image()` in a schema callback | Local images get optimized and typed with zero extra `<Image>` boilerplate | Only works for loaders that set `filePath` per entry (`glob` does; a hand-written in-memory loader typically doesn't) |
+
+## Common Misconceptions
+
+- **"A schema just adds TypeScript types."** It validates at build time first — the types are a side effect of that validation succeeding, not a separate step. A field can be perfectly typed and still fail validation (`z.string().max(80)` typed as `string`, but an 81-character title still fails the build).
+- **"`z.coerce.date()` either parses correctly or throws immediately."** An unparseable string doesn't throw inside `z.coerce.date()` — it produces `Invalid Date`, which Zod then reports as `Expected type "date", received "object"`. The error is real and build-blocking, but the wording surprises people expecting `"received string"`.
+- **"`image()` works with any loader, since it's just part of the schema."** It resolves paths relative to the entry's file, so it needs the loader to record where that file is (`filePath`). A loader that only sets `id`/`data` — like a hand-written API or database loader — has no file for `image()` to resolve against.
+- **"A `reference('authors')` field already contains the author's data."** It's a validated id, not the resolved entry — `post.data.author.name` is a type error. Call `getEntry(post.data.author)` first.
+
+## Reading AI-generated code
+
+When a generated snippet defines a schema or a reference, check for these before trusting it:
+
+- Is the schema a plain object (`schema: z.object({...})`) when it uses `image()`? `image()` is only available inside the **callback** form (`schema: ({ image }) => z.object({...})`) — using it in a plain object schema is a silent reference error, not a type mismatch.
+- Does code read `post.data.author.name` directly off a `reference()` field, instead of resolving it first with `await getEntry(post.data.author)`?
+- Does a `.default(...)` sit on a field that's also marked `.optional()`? The two overlap in confusing ways — `.default()` alone already makes a field effectively optional in the input.
+- If a date field uses `z.coerce.date()`, does the surrounding code assume any parse failure throws immediately, rather than producing an `Invalid Date` that only surfaces as a validation error at the schema boundary?
+- Does the schema forget `.default([])` on an array field that's genuinely optional in the content — leaving every consumer of `entry.data.tags` to add its own `?? []` fallback?
+
+<SpotTheBug code={`---
+title: "Bad Post"
+pubDate: "soon"
+author: ada
+cover: "./cover.png"
+coverAlt: "broken"
+---
+
+This post has a bad pubDate.`}>
+The frontmatter's `pubDate: "soon"` is not a parseable date, but the schema for this collection declares `pubDate: z.coerce.date()`. `z.coerce.date()` doesn't reject the unparseable string outright — it runs it through `new Date("soon")`, which produces a real JavaScript `Invalid Date` object, and Zod's validator then reports that object as the wrong type. Proven in the probe on Astro 7.3.5: `astro sync` fails immediately with `[InvalidContentEntryDataError] blog → bad-post data does not match collection schema` and the field-level detail `pubDate: Expected type "date", received "object"` — worth reading closely, since "received object" (not "string") is exactly the fingerprint of a coercion producing `Invalid Date` rather than a plain type mismatch. The fix is simply write a real, parseable date in the frontmatter (`pubDate: 2026-01-03`).
+</SpotTheBug>
 
 export const quizSchemas = [
   {
@@ -117,6 +231,7 @@ export const quizSchemas = [
       'Automatic styling',
     ],
     answer: 1,
+    explain: 'The schema is the single source of truth for both runtime validation and the generated TypeScript type for entry.data — you never hand-write a matching interface.',
   },
   {
     q: 'What does .default(false) do on a schema field?',
@@ -127,6 +242,7 @@ export const quizSchemas = [
       'Marks it as a boolean only in dev',
     ],
     answer: 1,
+    explain: '.default(value) supplies a fallback for a missing field, so consuming code always gets a concrete value instead of having to check for undefined.',
   },
   {
     q: 'What is reference() used for?',
@@ -137,6 +253,7 @@ export const quizSchemas = [
       'Caching data',
     ],
     answer: 1,
+    explain: 'reference("authors") validates that the stored id points at a real entry in the authors collection; you resolve it into the actual data with getEntry.',
   },
   {
     q: 'Where does content validation happen?',
@@ -147,6 +264,29 @@ export const quizSchemas = [
       'It never happens automatically',
     ],
     answer: 1,
+    explain: 'Validation runs when the collection loads (astro sync, or the sync step before dev/build/check) — well before any page queries or renders the entry.',
+  },
+  {
+    q: '```ts\nschema: z.object({\n  title: z.string(),\n  cover: image(),\n}),\n```\nThis schema is written as a plain object, not a callback. What happens when Astro loads it?',
+    options: [
+      'It works exactly like the callback form',
+      'image() is only available inside the schema callback form (({ image }) => z.object({...})) — this plain object form has no image in scope',
+      'Astro auto-converts it to the callback form',
+      'It silently skips image validation',
+    ],
+    answer: 1,
+    explain: 'The image() helper is passed into the schema callback by Astro (SchemaContext); a schema written as a bare z.object(...) never receives it, so referencing image() there is a plain reference error, not something Astro quietly works around.',
+  },
+  {
+    q: '```md\n---\ntitle: "Bad Post"\npubDate: "soon"\n---\n```\nWith schema field `pubDate: z.coerce.date()`, what real error does astro sync report on Astro 7.3.5?',
+    options: [
+      'No error — "soon" parses to today\'s date',
+      '[InvalidContentEntryDataError] ... pubDate: Expected type "date", received "object" — because new Date("soon") produces an Invalid Date object',
+      'A silent warning, then the build continues with pubDate as undefined',
+      'A TypeScript compile error before sync even runs',
+    ],
+    answer: 1,
+    explain: 'Proven in the probe: astro sync fails immediately, naming the collection, entry, and field. "received \\"object\\"" is the tell that coercion produced an Invalid Date rather than simply rejecting the string.',
   },
 ];
 

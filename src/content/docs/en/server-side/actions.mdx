@@ -1,6 +1,6 @@
 ---
 title: 'Actions'
-description: 'Astro Actions — type-safe server functions defined with defineAction, called from the client with validated input, wired to forms with progressive enhancement.'
+description: 'Astro Actions — type-safe server functions defined with defineAction, why every action is a public endpoint that must authorize itself, ActionError codes, isInputError/orThrow, progressive enhancement, and calling actions from a client island — proven with a real curl 401.'
 sidebar:
   order: 4
 ---
@@ -9,19 +9,25 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem Actions solve
 
 To call server logic from the client the old way, you write an endpoint, invent a URL, `fetch()` it, stringify the body, guess at the response type, and validate the input by hand on the server. **Actions** collapse all of that into a single typed function: define it on the server, call it from the client with full type-safety and automatic validation.
 
-## Defining an action
+## An Action is a public endpoint
 
-Actions live in `src/actions/index.ts`, exported as a `server` object. Each is a `defineAction` with an **`input`** schema (Zod) and a **`handler`**:
+Before any syntax: **calling `actions.createComment(...)` from your own client code and `curl`ing the action's URL directly are the same request as far as the server is concerned.** Astro compiles every action into a real HTTP endpoint under `/_actions/<name>` — reachable by anyone who knows (or guesses) the name, whether or not they ever loaded your page. An action is not a private channel between your UI and your server; it's a public POST endpoint that happens to have generated TypeScript bindings.
+
+That means **authorization is not optional polish, it's the first line of the handler** — check who's calling before you touch the database, on every single action, starting with the first one you write:
 
 ```ts
 // src/actions/index.ts
-import { defineAction } from 'astro:actions';
+import { defineAction, ActionError } from 'astro:actions';
 import { z } from 'astro/zod';
+
+// Stand-in for your real database client — replace with your ORM/query layer.
+const db = { comments: { create: async (data: { postId: string; body: string; userId: string }) => ({ id: crypto.randomUUID(), ...data }) } };
 
 export const server = {
   createComment: defineAction({
@@ -30,11 +36,21 @@ export const server = {
       body: z.string().min(1).max(2000),
     }),
     handler: async (input, context) => {
+      // Reject first — before anything else runs. `locals.user` is set by
+      // middleware (see the middleware & sessions lesson); it is `null` for
+      // anyone without a valid session, curl included.
+      if (!context.locals.user) {
+        throw new ActionError({
+          code: 'UNAUTHORIZED',
+          message: 'You must be signed in to comment.',
+        });
+      }
+
       // input is fully typed and already validated against the schema.
       const comment = await db.comments.create({
         postId: input.postId,
         body: input.body,
-        userId: context.locals.user?.id,   // per-request data from middleware
+        userId: context.locals.user.id,
       });
       return comment;                       // the return type flows to the client
     },
@@ -42,29 +58,72 @@ export const server = {
 };
 ```
 
-Two things are automatic: the input is **validated** against the Zod schema before your handler runs, and the handler's return type is **inferred all the way to the caller** — no manual typing of the response.
+Proven against a running build of this exact handler — a POST with no session cookie at all:
 
-## Calling an action from the client
+```text
+$ curl -s -X POST http://127.0.0.1:4351/_actions/createComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":"hi"}' \
+    -w "\nHTTP %{http_code}\n"
+{"type":"AstroActionError","code":"UNAUTHORIZED","status":401,"message":"You must be signed in to comment."}
+HTTP 401
+```
 
-Import `actions` from `astro:actions` and call it. Every call returns `{ data, error }` — Astro never throws across the boundary:
+Two things are still automatic even with the auth check added: the input is **validated** against the Zod schema before your handler runs, and the handler's return type is **inferred all the way to the caller** — no manual typing of the response.
+
+## `ActionError`: codes, not raw status numbers
+
+`ActionError` takes a human-readable **code** (from a fixed set mapped to real HTTP status codes) instead of a bare number — the same list actions and endpoints agree on:
+
+| Code | Status | Typical use |
+|---|---|---|
+| `BAD_REQUEST` | 400 | Malformed request outside what the input schema checks |
+| `UNAUTHORIZED` | 401 | No valid session — proven above |
+| `FORBIDDEN` | 403 | A valid session, but not allowed to do *this* |
+| `NOT_FOUND` | 404 | The row being mutated doesn't exist (or isn't this user's) |
+| `CONFLICT` | 409 | A duplicate or out-of-date write |
+| `TOO_MANY_REQUESTS` | 429 | Rate limiting |
+| `INTERNAL_SERVER_ERROR` | 500 | The default if you throw a plain `Error` |
+
+Input validation failures are a *different*, automatic error shape — `isInputError` narrows to it:
 
 ```ts
 import { actions, isInputError } from 'astro:actions';
 
-const { data, error } = await actions.createComment({
-  postId: '42',
-  body: 'Nice post!',
-});
+const { data, error } = await actions.createComment({ postId: '42', body: '' });
 
 if (isInputError(error)) {
-  // Validation failed — error.fields has per-field messages.
-  console.log(error.fields.body);
-} else if (data) {
-  console.log('Created comment', data.id);   // data is typed
+  // error.fields is keyed by input field name, each an array of messages.
+  console.log(error.fields.body);   // ["Too small: expected string to have >=1 characters"]
+} else if (error) {
+  // Any other ActionError — check error.code.
+  console.log(error.code);
 }
 ```
 
-<Mermaid title="A client call runs the validated handler" code={actionDiagram} />
+Proven with the same handler, this time with an empty `body` (fails the `.min(1)` rule) — the real shape returned when calling the `/_actions/createComment` endpoint directly:
+
+```text
+$ curl -s -X POST http://127.0.0.1:4351/_actions/createComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":""}'
+{"type":"AstroActionInputError","issues":[{"origin":"string","code":"too_small","minimum":1,"inclusive":true,"path":["body"],"message":"Too small: expected string to have >=1 characters"}],"fields":{"body":["Too small: expected string to have >=1 characters"]}}
+```
+
+<Callout title="curl sees devalue, not plain JSON">
+That last response is what the raw `/_actions/<name>` endpoint returns — and note it's **not** the same shape `actions.createComment(...)` hands back in your client code. The client helper decodes a richer wire format (`devalue`, which can carry `Date`, `Map`, `undefined`, and more) into the plain `{ data, error }` object shown throughout this lesson. Call the action through `actions.name(...)` (or `.orThrow()`) — don't hand-roll a `fetch()` to the action path and expect ordinary JSON.
+</Callout>
+
+When you don't want to branch on `{ data, error }` at all — for example inside code that already has its own try/catch — call `.orThrow()` instead. It returns `data` directly and throws the `ActionError` (or a generic error) on failure:
+
+```ts
+try {
+  const comment = await actions.createComment.orThrow({ postId: '42', body: 'Nice post!' });
+  console.log('Created comment', comment.id);
+} catch (e) {
+  // e is the ActionError instance when the server threw one.
+}
+```
+
+<Mermaid title="A client call runs the validated, authorized handler" code={actionDiagram} />
 
 export const actionDiagram = `sequenceDiagram
   participant C as Client
@@ -73,28 +132,112 @@ export const actionDiagram = `sequenceDiagram
   C->>A: actions.createComment(input)
   A->>A: validate input against Zod schema
   A->>H: run handler(input, context)
+  H->>H: reject if !locals.user (ActionError UNAUTHORIZED)
   H-->>A: return value (typed)
   A-->>C: { data, error }`;
 
-## Forms and progressive enhancement
+## Forms, progressive enhancement, and `Astro.getActionResult`
 
-An action can be wired directly to an HTML `<form>` by passing `action.name` — it works as a normal form POST even before JavaScript loads, then upgrades to a client call once hydrated. This is **progressive enhancement**: the form submits either way.
+An action can be wired directly to an HTML `<form>` by passing it as the `action` prop — it works as a normal form POST even before JavaScript loads, then upgrades to a client call once hydrated. This is **progressive enhancement**: the form submits either way. Read the outcome of that POST-and-redirect-back cycle with `Astro.getActionResult`:
 
 ```astro
 ---
+// src/pages/index.astro
 import { actions } from 'astro:actions';
+
+const result = Astro.getActionResult(actions.createComment);
 ---
 <form method="POST" action={actions.createComment}>
   <input type="hidden" name="postId" value="42" />
   <textarea name="body"></textarea>
   <button type="submit">Comment</button>
 </form>
+{result?.error && <p class="error">{result.error.code}: {result.error.message}</p>}
 ```
 
-You can also invoke an action from a component script with `Astro.callAction(actions.createComment, input)` when you need its result during server render. The same validated handler runs in every case.
+`getActionResult` reads the result of whichever action just submitted to this page (Astro parcels it up after the redirect) — `undefined` on a normal page load, populated right after a POST.
+
+## Calling from a client island, and `getActionPath`
+
+The exact same `actions` import works from a hydrated framework component — Astro turns the call into a `fetch()` for you:
+
+```tsx
+// src/components/LikeButton.tsx (a Preact island, client:visible)
+import { actions } from 'astro:actions';
+
+export default function LikeButton({ postId }: { postId: string }) {
+  return (
+    <button onClick={() => actions.likePost({ postId })}>
+      Like
+    </button>
+  );
+}
+```
+
+For cases where you can't `await` a normal `fetch` — dispatching on `unload` or a background "mark as read" ping — `getActionPath` gives you the raw URL so you can use `navigator.sendBeacon`, which fires the request without waiting for (or blocking on) a response:
+
+```astro
+<script>
+  import { actions, getActionPath } from 'astro:actions';
+
+  navigator.sendBeacon(
+    getActionPath(actions.likePost),
+    new Blob([JSON.stringify({ postId: '42' })], { type: 'application/json' }),
+  );
+</script>
+```
+
+## Reading AI-generated code
+
+When a generated snippet defines an action, check for these before trusting it:
+
+- Does the handler check `context.locals.user` (or an equivalent auth check) as the *first* line, or does it assume the caller is authenticated because a form only renders behind a login? Rendering the form for signed-in users only gates the UI, not the endpoint — the action itself is still reachable by direct POST.
+- If the action updates or deletes a row, does the query filter by the current user's id as well as the row's id — or could any signed-in user act on someone else's data?
+- Is every field read through the Zod `input` schema, or does the handler reach into `context.request` and parse the body by hand, bypassing validation?
+- Does a raw `fetch()` to `/_actions/<name>` get treated as if it returns plain JSON? It returns `devalue`-encoded data — only `actions.name(...)` (or `.orThrow()`) decodes it, as proven above.
+- Is `ActionError` thrown with a real `code` from the table above, or a made-up string that won't map to a sensible HTTP status?
+
+<SpotTheBug code={`// src/actions/index.ts
+import { defineAction } from 'astro:actions';
+import { z } from 'astro/zod';
+
+export const server = {
+  deletePost: defineAction({
+    input: z.object({ postId: z.string() }),
+    handler: async (input, context) => {
+      // "the delete button only shows for the post's author, so this is safe"
+      await db.posts.delete({ where: { id: input.postId } });
+      return { ok: true };
+    },
+  }),
+};`}>
+The comment explains the actual bug: hiding the delete button in the UI controls what a signed-in author *sees*, not what the `/_actions/deletePost` endpoint will *accept*. Nothing here checks `context.locals.user` at all, so any authenticated caller — or an anonymous curl request, since there isn't even an `UNAUTHORIZED` check — can delete any post by guessing or enumerating `postId`. The fix mirrors `createComment` above: reject when `!context.locals.user` with `ActionError({ code: 'UNAUTHORIZED' })`, and filter the delete by `userId: context.locals.user.id` too, so a signed-in user can only delete their *own* posts (an `ActionError({ code: 'FORBIDDEN' })` or a `where` clause that simply matches nothing works — a `NOT_FOUND` for rows you don't own also avoids leaking that the id exists at all).
+</SpotTheBug>
+
+## Mental Model
+
+An action is a button that happens to compile into an HTTP endpoint, not an HTTP endpoint that happens to have a button. The function signature you write is the same function signature a stranger's `curl` command calls — proven above with the real 401. If you would not accept a field from an anonymous POST body, do not accept it from the validated `input` object either; validation proves the *shape* is right, not that the *caller* is allowed to do this.
+
+## Trade-offs
+
+| | Action | API endpoint |
+|---|---|---|
+| **You write** | A function, called directly from a form or client code | A URL, wired up and `fetch`-ed by hand |
+| **Validation** | Automatic, from the Zod `input` schema | Manual, in the handler body |
+| **Response shape** | Inferred `{ data, error }`, devalue-encoded over the wire | Whatever `Response` you construct |
+| **Progressive enhancement** | Built in via `<form action={actions.x}>` | None — requires JavaScript to `fetch` |
+| **Best for** | Mutations and forms inside your own app | A public API, webhook, or non-form client |
+| **Public reachability** | Yes, via `/_actions/<name>` — proven above | Yes, via its path |
+
+## Common Misconceptions
+
+- **"Only my form calls this action, so it's safe."** Proven above: the exact same request reaches the handler from `curl`, with no form and no session — the action ID is the whole contract.
+- **"Hiding the button for non-owners is enough."** Render-time gating controls what UI shows up, not what requests the server accepts — see the `deletePost` bug above.
+- **"`isInputError` and a thrown `ActionError` look the same to the client."** They're two different shapes (`AstroActionInputError` vs `AstroActionError`, proven above) — `isInputError` narrows specifically to the validation-failure case, with per-field `fields`.
+- **"I can `fetch()` the action path and read normal JSON."** Proven above: the raw endpoint returns `devalue`-encoded data; use `actions.name(...)` or `.orThrow()`, which decode it for you.
 
 <Callout title="The one-line takeaway">
-**Actions** are type-safe server functions: define them in `src/actions/index.ts` with `defineAction({ input: zodSchema, handler })`, exported on the `server` object. Call `actions.name(input)` from the client — input is **auto-validated** against the schema, the return type is **inferred to the caller**, and every call returns `{ data, error }` (check `isInputError(error)` for `error.fields`). Wire one to a `<form action={actions.name}>` for **progressive enhancement**, or run it during render with `Astro.callAction`.
+Every **Action** is a public POST endpoint at `/_actions/<name>` — proven above with a real 401 — so authorize inside the handler (`ActionError({ code: 'UNAUTHORIZED' })` when `!context.locals.user`) before you touch the database, on every action, not just the ones that look sensitive. Input is auto-validated against the Zod schema (`isInputError` narrows validation failures, with per-field `error.fields`); call `actions.name(input)` from client code or an island, or `.orThrow()` to skip the `{ data, error }` branch; wire one to `<form action={actions.name}>` for progressive enhancement and read the outcome with `Astro.getActionResult`; use `getActionPath` when you need the raw URL (`sendBeacon`).
 </Callout>
 
 export const quizActions = [
@@ -107,6 +250,7 @@ export const quizActions = [
       'In a .astro component only',
     ],
     answer: 1,
+    explain: 'Actions live in src/actions/index.ts, exported as the `server` object — each one a defineAction with a Zod `input` schema and a `handler`.',
   },
   {
     q: 'What happens to an action’s input before the handler runs?',
@@ -117,26 +261,51 @@ export const quizActions = [
       'It is discarded',
     ],
     answer: 1,
+    explain: 'Astro validates the input against the schema before your handler code runs at all — a failed validation never reaches the handler.',
   },
   {
-    q: 'What does a client action call return?',
+    q: '```ts\nhandler: async (input, context) => {\n  const comment = await db.comments.create({ body: input.body });\n  return comment;\n}\n```\nProven with a real curl POST to `/_actions/createComment` with no session cookie — what is the actual response?',
     options: [
-      'The data directly, throwing on error',
-      'An object `{ data, error }` — Astro does not throw across the boundary (check isInputError(error))',
-      'A Promise that never resolves',
-      'An HTML string',
+      'HTTP 401 with an ActionError, because Astro rejects unauthenticated calls automatically',
+      'HTTP 200 — the handler never checks `context.locals.user`, so it runs for anyone',
+      'A compile-time error',
+      'HTTP 500, always',
     ],
     answer: 1,
+    explain: 'Astro does not add authorization for you. Proven earlier in this lesson: an action with no auth check inside the handler runs successfully for an anonymous curl request, exactly like it would for your own form — the fix is the UNAUTHORIZED check shown in createComment.',
   },
   {
-    q: 'What do you gain by wiring an action to a `<form action={actions.name}>`?',
+    q: 'What does calling the raw `/_actions/<name>` endpoint directly with curl return, compared to calling `actions.name(...)` from client code?',
     options: [
-      'Nothing',
-      'Progressive enhancement — the form submits as a normal POST without JS, then upgrades to a client call once hydrated',
+      'The exact same plain JSON either way',
+      'devalue-encoded data from curl — `actions.name(...)` decodes that into the plain `{ data, error }` shape',
+      'curl gets HTML, the client call gets JSON',
+      'They hit different routes entirely',
+    ],
+    answer: 1,
+    explain: 'Proven above: curling the action path directly returns devalue-encoded output (e.g. an array-shaped payload for a returned number), not plain JSON — only the actions.name(...) client helper (or .orThrow()) decodes it.',
+  },
+  {
+    q: 'What distinguishes `isInputError(error)` from a thrown `ActionError({ code: \'UNAUTHORIZED\' })`?',
+    options: [
+      'Nothing, they are identical',
+      'isInputError narrows to the automatic Zod-validation failure shape (AstroActionInputError, with per-field error.fields); a thrown ActionError is a different shape (AstroActionError) with a single `code`',
+      'isInputError only exists on the server',
+      'ActionError cannot be thrown for validation',
+    ],
+    answer: 1,
+    explain: 'Proven above with two different real response bodies: AstroActionInputError carries `issues`/`fields` from schema validation, while an ActionError you throw yourself carries a single `code`/`status`/`message`.',
+  },
+  {
+    q: 'What does wiring an action to `<form action={actions.name}>` give you, and how do you read the result after the POST?',
+    options: [
+      'Nothing extra; you must fetch manually',
+      'Progressive enhancement — the form works as a real POST before JS loads — and you read the outcome with `Astro.getActionResult(actions.name)`',
       'It disables validation',
-      'It makes the form static',
+      'It only works once the page is hydrated',
     ],
     answer: 1,
+    explain: 'The form submits as a normal POST even before hydration (progressive enhancement); Astro.getActionResult(actions.name) reads the result Astro attaches after that POST-and-redirect cycle.',
   },
 ];
 

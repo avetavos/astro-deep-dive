@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Defining a collection
 
@@ -46,6 +47,80 @@ Astro ships two built-in loaders from `astro/loaders`:
 The pattern `**/[^_]*.{md,mdx}` is worth reading: it matches `.md` and `.mdx` files in any subfolder, but the `[^_]` excludes files starting with an underscore — a handy convention for drafts.
 
 Beyond these, the loader is a documented interface, so the ecosystem provides loaders for CMSs and APIs; you can also write your own to pull from any source.
+
+### Writing a custom loader
+
+A loader is just an object with a `name` and a `load()` function — `glob` and `file` are built with the same contract you can use yourself. `load()` receives a `LoaderContext` with the pieces you need to fill the content store by hand: **`store`** (write entries into the collection), **`parseData`** (validate raw data against the schema before storing it), **`meta`** (a small key-value store, scoped to the collection, that survives across builds — good for sync tokens or last-modified timestamps), and **`generateDigest`** (hash an entry's data so you can tell whether it changed).
+
+```ts
+// src/lib/notes-loader.ts
+import type { Loader } from 'astro/loaders';
+import { z } from 'astro/zod';
+
+// A tiny custom loader: no filesystem, no network — just the loader
+// contract (store, meta, parseData, generateDigest) against a fixed feed.
+const FEED = [
+  { id: 'note-1', title: 'First note', body: 'Hand-written note one.' },
+  { id: 'note-2', title: 'Second note', body: 'Hand-written note two.' },
+];
+
+export function notesLoader(): Loader {
+  return {
+    name: 'notes-loader',
+    schema: z.object({ title: z.string(), body: z.string() }),
+    load: async ({ store, meta, parseData, generateDigest, logger }) => {
+      const lastRun = meta.get('lastRun');
+      logger.info(`notes-loader: lastRun=${lastRun ?? 'never'}`);
+
+      store.clear();
+      for (const item of FEED) {
+        const data = await parseData({ id: item.id, data: item });
+        const digest = generateDigest(data);
+        store.set({ id: item.id, data, digest });
+      }
+      meta.set('lastRun', new Date().toISOString());
+    },
+  };
+}
+```
+
+```ts
+// src/content.config.ts — the same file, extended with a third collection
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+import { notesLoader } from './lib/notes-loader';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string(),
+    pubDate: z.coerce.date(),
+    draft: z.boolean().default(false),
+  }),
+});
+
+const notes = defineCollection({ loader: notesLoader() });
+
+export const collections = { blog, notes };
+```
+
+Running `astro sync` (or `astro dev`/`astro build`, which sync first) calls `load()` for real. Proven in the probe — the loader's own `logger.info` line shows up in the sync output, and a second run shows `meta` survived from the first:
+
+```text
+$ npx astro sync
+04:54:09 [content] Syncing content
+04:54:09 [notes-loader] notes-loader: lastRun=never
+04:54:09 [content] Synced content
+04:54:09 [types] Generated 1.16s
+
+$ npx astro sync
+04:54:19 [content] Syncing content
+04:54:19 [notes-loader] notes-loader: lastRun=2026-09-25T21:54:09.825Z
+04:54:19 [content] Synced content
+```
+
+Almost every project reaches for `glob` or `file` first — write a custom loader only when content really comes from somewhere neither can reach (an API with pagination, a database, a feed that needs incremental sync via `meta`).
 
 <Mermaid title="The content collection pipeline" code={diagram} />
 
@@ -105,8 +180,92 @@ const { Content } = await render(post);
 
 `render` compiles the entry's Markdown/MDX to a component, so `<Content />` outputs the finished HTML — headings, code blocks, and any components used in MDX all rendered.
 
+**`render(entry)` is the standalone function form — the old `entry.render()` method is gone.** Entries returned by `getCollection`/`getEntry` are plain serializable objects (so they can, for example, be passed as page `props` from `getStaticPaths`); a method would not survive that. `entry.render()` was deprecated starting in Astro 5 and Astro 6 removed it outright. Proven in the probe — swapping `render(post)` for `post.render()` on Astro 7.3.5 fails the build with a real runtime error, not a warning:
+
+```text
+[ERROR] TypeError: post.render is not a function
+    at .../chunks/index_*.mjs:699:33
+    at async renderToString (.../chunks/server_*.mjs:1861:25)
+[ERROR] [build] Caught error rendering /: TypeError: post.render is not a function
+```
+
+## astro sync and generated types
+
+Every collection you define gets its own generated TypeScript type, written to `.astro/content.d.ts` by `astro sync` (Astro also runs this automatically before `dev`/`build`/`check`). Query results are typed through **`CollectionEntry<'blog'>`**, imported from `astro:content` — useful anywhere you want to type a prop or a helper function without repeating the shape by hand:
+
+```ts
+// src/lib/format-post.ts
+import type { CollectionEntry } from 'astro:content';
+
+export function formatPost(post: CollectionEntry<'blog'>) {
+  return `${post.data.title} — ${post.data.pubDate.toDateString()}`;
+}
+```
+
+This isn't a hand-written interface — it's generated straight from your `content.config.ts`. Proven in the probe: after `astro sync`, `.astro/content.d.ts` contains a `DataEntryMap` with one entry per collection, and `CollectionEntry<C>` is defined as `Flatten<DataEntryMap[C]>`:
+
+```ts
+// .astro/content.d.ts (generated — real output for the `blog` collection above)
+"blog": Record<string, {
+  id: string;
+  body?: string;
+  collection: "blog";
+  data: InferEntrySchema<"blog">;
+  rendered?: RenderedContent;
+  filePath?: string;
+  digest?: string | number;
+}>;
+```
+
+`InferEntrySchema<'blog'>` is itself generated from the Zod schema (`import('astro/zod').infer<...>`) — so the schema is the one source of truth for both runtime validation and the type your editor shows you. If `content.config.ts` changes and you don't see the new fields autocomplete, run `astro sync` (or restart `astro dev`, which does it for you).
+
+## Mental Model
+
+A collection is not "a folder of Markdown" — it's a small typed database with exactly one write path (the `loader`, run by `astro sync`) and one read path (`getCollection`/`getEntry`, resolved with `render`). Nothing reads collection files directly at request time; by the time a page runs, the loader has already turned raw content into validated entries sitting in a content store, and querying is just reading from that store. That's why a custom loader can pull from a database or an API with the exact same `getCollection('blog')` call a Markdown-backed collection uses — the *query* side never needs to know what the *loader* side did.
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+| --- | --- | --- |
+| A `loader` in front of every collection | Same query API for local files, a data file, or a remote source | One more concept to learn before your first collection works — no more "just drop a file in `src/content/`" |
+| A custom loader (`store`/`parseData`/`generateDigest`) | Full control — pagination, incremental sync via `meta`, any data shape | You own the load logic; `glob`/`file` cover the common cases with zero code |
+| `render(entry)` as a standalone function | Entries stay plain, serializable objects you can pass as `props` | One more import, and old tutorials/AI output showing `entry.render()` are wrong on Astro 6+ |
+| Generated types (`CollectionEntry<'blog'>`) | Autocomplete and type-checking with zero hand-written interfaces | Types lag behind `content.config.ts` until `astro sync` runs |
+
+## Common Misconceptions
+
+- **"Collections only work for local Markdown files."** The `loader` is the whole point — `glob`/`file` happen to read local files, but a loader can call an API, query a database, or generate entries in memory (like the `notesLoader` above). The query API (`getCollection`, `getEntry`, `render`) is identical either way.
+- **"`entry.render()` still works, it's just old-fashioned."** It was deprecated in Astro 5 and is gone in Astro 6/7 — calling it throws `TypeError: post.render is not a function` at runtime, proven above. Use the imported `render(entry)` function.
+- **"I need to hand-write a `Post` interface for `entry.data`."** You don't — `astro sync` generates `CollectionEntry<'blog'>` (and the `InferEntrySchema` it's built from) directly from the Zod schema. A hand-written interface is one more place for the shape to drift out of sync.
+- **"`getCollection` reads the filesystem every time you call it."** It reads from the in-memory content store that the loader already populated during `sync`. Calling `getCollection` ten times in one build does not re-run `glob` or hit the network ten times.
+
+## Reading AI-generated code
+
+When a generated snippet defines or queries a content collection, check for these before trusting it:
+
+- Does every `defineCollection` call include a `loader`? Code that drops Markdown files into `src/content/<name>/` with no `loader` at all is Astro 5-and-earlier syntax that Astro 6/7 rejects.
+- Does it call `entry.render()` as a method, instead of importing `render` from `astro:content` and calling `render(entry)`? The method form throws at runtime — it isn't just a style preference.
+- If a custom loader is hand-written, does it call `store.clear()` before repopulating on every `load()` run, or will stale entries from a previous run stick around?
+- Is `z` imported from `astro/zod` (the current, correct source) rather than from `astro:content` (the old, now-removed re-export)?
+- Does a `reference()` field get resolved with `getEntry(...)` before its data is used, or does the code try to read `.data.name` straight off the reference (which is just an id, not the resolved entry)?
+
+<SpotTheBug code={`---
+import { getEntry, render } from 'astro:content';
+
+const post = await getEntry('blog', 'hello-world');
+if (!post) throw new Error('Post not found');
+
+const { Content } = await post.render();
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <Content />
+</article>`}>
+`post.render()` is called as a method on the entry object. Entries returned by `getEntry`/`getCollection` are plain data — `render` only exists as a standalone function imported from `astro:content`, since Astro 5 deprecated the method form and Astro 6 removed it. Proven in the probe on Astro 7.3.5: swapping the fixed version's `render(post)` for `post.render()` fails the build with `TypeError: post.render is not a function` thrown from inside the rendered page, not a type error caught ahead of time. The fix is `import { getEntry, render } from 'astro:content'` and `const { Content } = await render(post);`.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-A collection is `defineCollection({ loader, schema })` in **`src/content.config.ts`** — the `loader` (`glob` for many files, `file` for a data file) says where content lives, the `schema` validates it. Query with `getCollection` (many) and `getEntry` (one); each entry has an `id` and typed `data`. To output the body, call `render(entry)` and drop the returned `<Content />` into your template. In Astro 6, every collection must have a loader.
+A collection is `defineCollection({ loader, schema })` in **`src/content.config.ts`** — the `loader` (`glob` for many files, `file` for a data file, or a hand-written one using `store`/`parseData`/`generateDigest`) says where content lives, the `schema` validates it. Query with `getCollection` (many) and `getEntry` (one); each entry has an `id` and typed `data`, generated by `astro sync` as `CollectionEntry<'blog'>`. To output the body, call the standalone **`render(entry)`** function and drop the returned `<Content />` into your template — the old `entry.render()` method is gone since Astro 6.
 </Callout>
 
 export const quizCollections = [
@@ -119,6 +278,7 @@ export const quizCollections = [
       'In package.json',
     ],
     answer: 1,
+    explain: 'Every collection is declared in src/content.config.ts with defineCollection({ loader, schema }) — there is no per-page or config-file declaration.',
   },
   {
     q: 'What is the difference between the glob and file loaders?',
@@ -129,6 +289,7 @@ export const quizCollections = [
       'They are identical',
     ],
     answer: 1,
+    explain: 'glob matches many files and turns each into one entry; file reads one data file (JSON/YAML array) and turns each item in it into an entry.',
   },
   {
     q: 'How do you render a collection entry\'s Markdown body to HTML?',
@@ -139,6 +300,7 @@ export const quizCollections = [
       'It renders automatically',
     ],
     answer: 1,
+    explain: 'render(entry), imported from astro:content, compiles the Markdown/MDX body into a <Content /> component you place in the template.',
   },
   {
     q: 'After a schema validates, what type is a z.coerce.date() frontmatter field on entry.data?',
@@ -149,6 +311,29 @@ export const quizCollections = [
       'undefined',
     ],
     answer: 1,
+    explain: 'z.coerce.date() parses the raw frontmatter value into a real JavaScript Date, and the generated type reflects that.',
+  },
+  {
+    q: '```ts\nconst post = await getEntry(\'blog\', \'hello-world\');\nif (!post) throw new Error(\'Post not found\');\n\nconst { Content } = await post.render();\n```\nDoes this compile and run on Astro 7?',
+    options: [
+      'Yes — .render() is just an older alias for render(entry)',
+      'No — entries are plain data; render only exists as a standalone function imported from astro:content, and post.render() throws at runtime',
+      'Yes, but only for MDX entries',
+      'No — getEntry itself is removed in Astro 7',
+    ],
+    answer: 1,
+    explain: 'Proven in the probe: TypeError: post.render is not a function is thrown at build/render time on Astro 7.3.5. The method form was deprecated in Astro 5 and removed in Astro 6.',
+  },
+  {
+    q: 'Where does a custom loader\'s generateDigest() get used, and why?',
+    options: [
+      'To encrypt entry data at rest',
+      'To hash an entry\'s data so the loader (or a future run) can tell whether it changed',
+      'To generate the entry\'s id',
+      'It is only used by the glob loader',
+    ],
+    answer: 1,
+    explain: 'generateDigest(data) returns a content hash you store alongside the entry (store.set({ id, data, digest })) — a way to detect changes across loader runs without re-comparing full objects.',
   },
 ];
 

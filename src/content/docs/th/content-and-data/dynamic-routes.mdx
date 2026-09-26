@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## route ที่มีส่วนแปรผัน
 
@@ -19,6 +20,39 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 - `src/pages/docs/[...path].astro` → **rest** param ตรงกับ `/docs/a/b/c` (ลึกเท่าไรก็ได้)
 
 ค่าในวงเล็บมาถึงตอน runtime บน `Astro.params` (`Astro.params.slug`) แต่สำหรับเว็บ *static* Astro ต้องรู้ด้วยว่า **มี** slug ไหนบ้าง เพื่อ build ไฟล์ให้แต่ละอัน นั่นคือหน้าที่ของ `getStaticPaths()`
+
+### rest param ใช้งานจริง
+
+rest param (`[...path]`) รวบทุกอย่างหลังจากมันเป็น string เดียว และ — ต่างจาก param วงเล็บธรรมดา — มันจับคู่กับ **ศูนย์** segment ก็ได้ ซึ่งกรณีนั้น `Astro.params.path` จะเป็น `undefined`:
+
+```astro
+---
+// src/pages/docs/[...path].astro
+export async function getStaticPaths() {
+  return [
+    { params: { path: 'guide/intro' } },
+    { params: { path: 'guide/advanced/setup' } },
+    { params: { path: undefined } },   // matches /docs itself
+  ];
+}
+const { path } = Astro.params;
+---
+<p>path: {path ?? '(root)'}</p>
+```
+
+พิสูจน์แล้วในโพรบ — ไฟล์เดียว build route ได้ทุกความลึก รวมถึง root `/docs` เปลือย ๆ:
+
+```text
+generating static routes
+  ├─ /docs/guide/intro/index.html
+  ├─ /docs/guide/advanced/setup/index.html
+  ├─ /docs/index.html
+```
+
+```text
+$ cat dist/docs/index.html | grep -o '<p>.*</p>'
+<p>path: (root)</p>
+```
 
 ## getStaticPaths(): หนึ่งหน้าต่อหนึ่ง entry
 
@@ -63,9 +97,10 @@ export const diagram = `flowchart LR
 ```astro
 ---
 // src/pages/blog/[page].astro
+import type { GetStaticPathsOptions } from 'astro';
 import { getCollection } from 'astro:content';
 
-export async function getStaticPaths({ paginate }) {
+export async function getStaticPaths({ paginate }: GetStaticPathsOptions) {
   const posts = await getCollection('blog');
   return paginate(posts, { pageSize: 10 });   // 10 posts per page
 }
@@ -84,6 +119,40 @@ const { page } = Astro.props;   // paginate injects a `page` prop
 
 `paginate` ส่ง prop `page` ให้แต่ละหน้า มีทั้ง `data` (slice ของหน้านี้), `currentPage`, `lastPage`, และ `url.prev`/`url.next` ครบทุกอย่างที่ต้องใช้ทั้ง list และลิงก์ prev/next
 
+พิสูจน์แล้วในโพรบ — โพสต์สี่อันที่ `pageSize: 2` build ได้พอดีสองหน้าแบบมีเลข และ `<nav>` render ลิงก์ prev/next จริงที่ `paginate` คำนวณให้:
+
+```html
+<!-- real build output: dist/blog/1/index.html -->
+<nav><span>Page 1 of 2</span><a href="/blog/2">Next</a></nav>
+<!-- real build output: dist/blog/2/index.html -->
+<nav><a href="/blog/1">Previous</a><span>Page 2 of 2</span></nav>
+```
+
+## เมื่อ getStaticPaths() หายไปหรือคืนค่าผิด
+
+มีข้อผิดพลาดที่ block build สองแบบที่พบบ่อยพอจะจำข้อความจริงของมันได้เลย แบบแรก dynamic route แบบ static ที่**ไม่มี `getStaticPaths` เลย** — Astro ไม่เดาให้ มัน fail build ด้วย error ที่มีชื่อชัดเจน:
+
+```text
+[GetStaticPathsRequired] `getStaticPaths()` function is required for dynamic routes.
+Make sure that you `export` a `getStaticPaths()` function from your dynamic route.
+  Hint:
+    If you meant for this route to be server-rendered, set `export const prerender = false;` in the page.
+```
+
+แบบที่สอง `getStaticPaths()` ที่รันแต่คืนค่าที่ผิดรูปแบบ — ตรงนี้คือ object ที่ขาด key `params` ที่จำเป็น:
+
+```ts
+export async function getStaticPaths() {
+  return [{ id: 'one' }];   // missing `params` — invalid
+}
+```
+
+```text
+[GetStaticPathsExpectedParams] Missing or empty required `params` property on `getStaticPaths()` route.
+```
+
+ทั้งสองพิสูจน์แล้วในโพรบบน Astro 7.3.5 และทั้งคู่ระบุ contract ที่ `getStaticPaths()` ต้องทำตามชัดเจน — hint ของ error แรกมักเป็นทางแก้อยู่แล้ว: ถ้า route นั้นตั้งใจให้เป็น on-demand จริง ๆ ให้เติม `prerender = false` แล้วเอา `getStaticPaths` ออกไปเลย แทนที่จะพยายามทำให้มันผ่านด้วย list ปลอม ๆ
+
 ## static param vs on-demand param
 
 dynamic route รู้ param ของตัวเองได้สองทาง และสะท้อน rendering mode สองแบบ:
@@ -98,6 +167,7 @@ export const prerender = false;
 import { getEntry, render } from 'astro:content';
 
 const { slug } = Astro.params;
+if (!slug) return Astro.redirect('/404');
 const post = await getEntry('blog', slug);
 if (!post) return Astro.redirect('/404');
 
@@ -109,8 +179,53 @@ const { Content } = await render(post);
 
 หลักคิด: ชุดหน้าที่ **รู้แน่และจำกัด** (โพสต์บล็อกทั้งหมด) → `getStaticPaths()` แล้วอยู่แบบ static ส่วนชุดที่ **เปิดกว้าง** (profile ของใครก็ได้, ค้นหาอะไรก็ได้) → `prerender = false` แล้วอ่าน `Astro.params` ต่อ request
 
+## Mental Model
+
+`getStaticPaths()` ไม่ใช่ hook ที่ Astro บังเอิญเรียก — บน static build มันคือ **contract ทั้งหมด** ที่ไฟล์ dynamic route ต้องทำตาม และถูกตรวจก่อน component script จะรันสักบรรทัด นั่นคือเหตุผลที่ถ้าไม่มีมัน build จะ fail ด้วย error ที่มีชื่อชัดเจน ไม่ใช่ได้หน้าว่าง ๆ: Astro build "บางหน้า" ของ route ที่มันไม่รู้รูปร่างไม่ได้ จึงปฏิเสธที่จะ build เลย การสลับไป `prerender = false` ไม่ได้ผ่อน contract นั้น — มันแทนที่ด้วย contract อีกแบบ (อ่าน `Astro.params` ต่อ request) นี่คือเหตุผลที่สองวิธีนี้ใช้แทนกัน ไม่ใช่ซ้อนกัน
+
+## ข้อแลกเปลี่ยน
+
+| สิ่งที่ได้ | ประโยชน์ | ต้นทุน |
+| --- | --- | --- |
+| `getStaticPaths()` (static) | ทุกหน้าเป็นไฟล์ธรรมดา — เร็ว, cache บน CDN ได้, ไม่ต้องมี server ตอน request | ชุดหน้าทั้งหมดต้องรู้ได้ตอน build; เพิ่มหน้าใหม่ = build ใหม่ |
+| `paginate()` | หน้าแบบมีเลข, ลิงก์ prev/next และ logic การหั่นถูก generate ให้ | ผูกชื่อไฟล์ route กับ param ของหน้า (`[page].astro`) และผูกแหล่งข้อมูลกับการเรียก `paginate()` ครั้งเดียว |
+| rest param `[...path]` | ไฟล์เดียวรับได้ทุกความลึก รวมถึง route แม่เปล่า ๆ (`path` เป็น `undefined`) | ทุกจุดที่ใช้ `Astro.params.path` ต้องรับมือกรณี `undefined` เอง |
+| `prerender = false` + `Astro.params` | รองรับ URL ที่ยังไม่มีตอน build | ต้องมี adapter; ทุก request กลายเป็น server round-trip แทนที่จะโดน CDN |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"dynamic route ที่ไม่มี getStaticPaths ก็แค่ build ได้หน้าว่าง"** มันไม่ build เลย — Astro ทำให้ทั้ง build fail ด้วย `GetStaticPathsRequired` พร้อมระบุชื่อไฟล์ นี่ตั้งใจ: เว็บ static มี route ที่ชุดหน้าไม่นิยามไม่ได้
+- **"getStaticPaths คืนอะไรก็ได้ ขอแค่หน้าอ่าน Astro.params ถูก"** รูปแบบค่าที่คืนถูกตรวจด้วย — object ที่คืนมาโดยไม่มี `params` fail ด้วย `GetStaticPathsExpectedParams` ไม่ว่า script ของหน้าจะรับมือได้หรือไม่ก็ตาม
+- **"rest param `[...path]` มีค่าเสมอ"** มันจับคู่ศูนย์ segment ได้ด้วย (path แม่ของ route เอง) และ `Astro.params.path` เป็น `undefined` ในกรณีนั้น — โค้ดที่คิดว่าเป็น string แล้วเรียก `.split('/')` ตรง ๆ จะพังที่ route นั้นพอดี
+- **"เอา getStaticPaths ออกแล้วใส่ prerender = false ก็พอสำหรับแก้ error 'GetStaticPathsRequired'"** มันไม่ใช่ patch แต่เป็น rendering mode คนละแบบเลย — ต้องมี adapter ที่ตั้งค่าไว้สำหรับ on-demand rendering ด้วย ซึ่งโปรเจกต์ static ล้วนไม่มีมาให้
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ snippet ที่ generate มานิยาม dynamic route ให้ตรวจสิ่งเหล่านี้ก่อนเชื่อ:
+
+- route ใต้ `[slug].astro`/`[id].astro` (ที่โปรเจกต์ใช้ static output ตามค่าเริ่มต้น) export `getStaticPaths()` หรือเปล่า? การไม่มีมันไม่ใช่เรื่องจุกจิกของ lint — มันคือ error ที่ทำให้ build พังโดยไม่มี fallback
+- ทุก object ที่ `getStaticPaths()` คืนมามี key `params` และชื่อ key นั้นตรงกับชื่อในวงเล็บของไฟล์หรือไม่?
+- โค้ดที่อ่านค่า rest param (`Astro.params.path`) คิดว่ามันเป็น string ที่ไม่ว่างเสมอ โดยไม่รับมือ path แม่ของ route ที่ค่าเป็น `undefined` หรือเปล่า?
+- ถ้า route ตั้ง `prerender = false` ไฟล์เดียวกันยังเก็บ `getStaticPaths()` เก่าจากตอนที่เป็น static ไว้ไหม? มันถูกเมินเฉยเมื่อหน้าเป็น on-demand แล้ว — ควรลบทิ้ง ไม่ใช่ปล่อยเป็น dead code ที่ดูเหมือนสำคัญ
+- `paginate(list, { pageSize })` ถูกเรียกด้วย list เต็มที่ยังไม่กรอง หรือมี `.filter()`/`.slice()` ก่อนหน้าที่ตัด list ไปแล้วจนจำนวนหน้าเปลี่ยนจากที่ผู้อ่านคาดโดยไม่รู้ตัว?
+
+<SpotTheBug code={`---
+// src/pages/blog/[slug].astro
+import { getCollection, render } from 'astro:content';
+
+const posts = await getCollection('blog');
+const post = posts.find((p) => p.id === Astro.params.slug);
+if (!post) throw new Error('Post not found');
+
+const { Content } = await render(post);
+---
+<h1>{post.data.title}</h1>
+<Content />`}>
+ไฟล์นี้ไม่มี export `getStaticPaths()` เลย แต่ output ของโปรเจกต์คือ static ตามค่าเริ่มต้น และ route มี segment ในวงเล็บ (`[slug]`) Astro ตรวจ contract นี้ก่อนรัน component script ใด ๆ — มันไม่ลองไฟล์แล้ว fail แบบนุ่มนวล แต่ปฏิเสธที่จะ build พิสูจน์แล้วในโพรบบน Astro 7.3.5: build หยุดทันทีด้วย `[GetStaticPathsRequired] getStaticPaths() function is required for dynamic routes` พร้อมระบุไฟล์นี้ และ hint ของมันบอกสิ่งที่ขาดตรง ๆ: เพิ่ม `getStaticPaths()` ที่คืน `{ params: { slug } }` สำหรับทุกโพสต์ หรือ — ถ้าตั้งใจให้ค้นหาต่อ request จริง ๆ — เพิ่ม `export const prerender = false;` ให้ route เป็น on-demand แล้วไม่ต้องมี `getStaticPaths` อีกเลย
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-**dynamic route** คือไฟล์ที่มีส่วนในวงเล็บ (`[slug].astro` หรือ `[...path]` สำหรับ rest param) ใน static build ไฟล์นี้ต้อง export **`getStaticPaths()`** ที่คืน `{ params, props }` ต่อหน้า หนึ่งไฟล์ HTML ต่อหนึ่ง entry ของ collection และ `paginate()` หั่น list ยาวเป็นหน้าแบบมีเลข สำหรับ URL ที่ระบุล่วงหน้าไม่ได้ ให้ตั้ง **`prerender = false`** ข้าม `getStaticPaths` แล้วอ่าน **`Astro.params`** สดต่อ request
+**dynamic route** คือไฟล์ที่มี segment ในวงเล็บ (`[slug].astro` หรือ `[...path]` สำหรับ rest param ซึ่งจับคู่ศูนย์ segment ได้ด้วย) ใน static build ไฟล์นี้ export **`getStaticPaths()`** ที่คืน `{ params, props }` ต่อหน้า — ถ้าไม่มี หรือคืน object ที่ไม่มี `params` build จะ fail ด้วย error ที่มีชื่อ (`GetStaticPathsRequired`/`GetStaticPathsExpectedParams`) ไม่ใช่หายไปเงียบ ๆ `paginate()` หั่น list ยาวเป็นหน้าแบบมีเลขพร้อม `url.prev`/`url.next` ที่ generate ให้ สำหรับ URL ที่ระบุล่วงหน้าตอน build ไม่ได้ ให้ตั้ง **`prerender = false`** เอา `getStaticPaths` ออกทั้งหมด แล้วอ่าน **`Astro.params`** สดต่อ request
 </Callout>
 
 export const quizRoutes = [
@@ -123,6 +238,7 @@ export const quizRoutes = [
       'database query',
     ],
     answer: 1,
+    explain: 'แต่ละรายการที่คืนมาอธิบายหน้าที่ต้อง generate หนึ่งหน้า: params เติม segment ในวงเล็บ และ props ส่งข้อมูลให้ page component',
   },
   {
     q: 'ใน [slug].astro key params ต้องชื่ออะไร?',
@@ -133,6 +249,7 @@ export const quizRoutes = [
       'ต้องเป็น "path"',
     ],
     answer: 1,
+    explain: 'Astro จับคู่ key ของ object params ที่คืนมากับชื่อในวงเล็บของไฟล์ — ถ้าไม่ตรงจะ fail การตรวจด้วย GetStaticPathsExpectedParams',
   },
   {
     q: 'helper paginate() ให้อะไรกับแต่ละหน้าที่ generate?',
@@ -143,6 +260,7 @@ export const quizRoutes = [
       'แค่เลขหน้า',
     ],
     answer: 1,
+    explain: 'paginate() หั่น list แล้วส่ง prop page ให้แต่ละหน้าที่ generate พร้อม slice ของตัวเองและ metadata ของ pagination ที่ต้องใช้ทำลิงก์ prev/next',
   },
   {
     q: 'ต้องการ route สำหรับ user id ใด ๆ ที่รู้ไม่ได้ตอน build ทำยังไง?',
@@ -153,6 +271,29 @@ export const quizRoutes = [
       'ทำไม่ได้ใน Astro',
     ],
     answer: 1,
+    explain: 'ชุด param ที่เปิดกว้างและรู้ตอน build ไม่ได้คือสิ่งที่ on-demand rendering มีไว้เพื่อสิ่งนี้พอดี — prerender = false บวก Astro.params ไม่ต้องมี getStaticPaths',
+  },
+  {
+    q: '```astro\n---\n// src/pages/blog/[slug].astro — static output, no adapter configured\nconst posts = await getCollection(\'blog\');\nconst post = posts.find((p) => p.id === Astro.params.slug);\n---\n```\nไฟล์นี้ไม่มี export getStaticPaths() บน Astro 7.3.5 จะเกิดอะไรขึ้น?',
+    options: [
+      'build ผ่านปกติ — Astro.params ทำงานเหมือนกันทั้ง route แบบ static และ on-demand',
+      'build fail ทันทีด้วย [GetStaticPathsRequired] พร้อมระบุชื่อไฟล์นี้',
+      'Astro generate ศูนย์หน้าสำหรับ route นี้เงียบ ๆ',
+      'fail เฉพาะใน dev mode ไม่ fail ตอน production build',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในโพรบ: static dynamic route ที่ไม่มี getStaticPaths() หยุด build ด้วย error ที่มีชื่อก่อน component script จะรันเลย และ hint ของ error เองแนะนำ prerender = false ถ้าตั้งใจให้เป็น on-demand',
+  },
+  {
+    q: '```ts\n// src/pages/docs/[...path].astro\nexport async function getStaticPaths() {\n  return [{ params: { path: \'guide/intro\' } }, { params: { path: undefined } }];\n}\nconst { path } = Astro.params;\n```\nรายการที่สอง (`path: undefined`) build อะไร?',
+    options: [
+      'ไม่มีอะไร — params ที่เป็น undefined ถูกข้าม',
+      'path แม่ของ route เอง — ตรงนี้คือ /docs — เพราะ rest param จับคู่ศูนย์ segment ได้',
+      'build error เพราะ path ต้องเป็น string',
+      'หน้าที่ /docs/undefined ตรง ๆ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในโพรบ: params: { path: undefined } build ได้ /docs/index.html โดย Astro.params.path อ่านได้เป็น undefined ในหน้านั้นหน้าเดียว — rest param เป็นวงเล็บชนิดเดียวที่จับคู่กับความว่างได้อย่างถูกต้อง',
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: 'Endpoints & API Routes'
-description: 'route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint, entrypoint src/fetch.ts ของ Astro 7 และต่างจาก Actions อย่างไร'
+description: 'Route ที่ไม่ใช่ HTML — APIRoute handler ที่ return Response, อ่าน params และ request body, static vs on-demand endpoint, streaming จริงด้วย ReadableStream, context.clientAddress ที่พิสูจน์แล้วว่าต้อง on-demand/adapter เท่านั้น และ endpoint ต่างจาก Action ยังไง'
 sidebar:
   order: 3
 ---
@@ -9,14 +9,17 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## route ที่ return data ไม่ใช่หน้า
+## Route ที่ return ข้อมูล ไม่ใช่หน้าเว็บ
 
-ไม่ใช่ทุก route ที่ render HTML ไฟล์ใน `src/pages/` ที่นามสกุล `.ts` (หรือ `.js`) คือ **API endpoint**: แทนที่จะมี template จะ export function ที่ตั้งชื่อตาม HTTP method (`GET`, `POST`, `PUT`, `DELETE`) ซึ่งแต่ละตัว return `Response` มาตรฐาน
+ไม่ใช่ทุก route ที่ render HTML ไฟล์ใน `src/pages/` ที่มีนามสกุล `.ts` (หรือ `.js`) คือ **API endpoint**: แทนที่จะเป็น template มัน export function ที่ตั้งชื่อตาม HTTP method (`GET`, `POST`, `PUT`, `DELETE`) แต่ละตัว return `Response` มาตรฐาน
 
 ```ts
 // src/pages/api/health.ts
 import type { APIRoute } from 'astro';
+
+export const prerender = false;
 
 export const GET: APIRoute = () => {
   return new Response(JSON.stringify({ ok: true }), {
@@ -26,7 +29,14 @@ export const GET: APIRoute = () => {
 };
 ```
 
-ตอนนี้ `GET /api/health` return JSON แล้ว type `APIRoute` ให้ context argument แบบ typed และ return เป็น `Response` — รูปแบบ web-standard เดียวกับที่อื่นใน Astro
+`GET /api/health` ตอนนี้ return JSON แล้ว พิสูจน์กับ build ที่รันจริง:
+
+```text
+$ curl -s http://127.0.0.1:4351/api/health
+{"ok":true}
+```
+
+type `APIRoute` ให้ context argument ที่ typed และ return `Response` — shape มาตรฐานเดียวกับที่ใช้ทั่วทั้ง Astro
 
 ## อ่าน params และ body
 
@@ -36,6 +46,9 @@ handler รับ context ที่มี request, params, cookies และอ�
 // src/pages/api/users/[id].ts
 export const prerender = false;   // dynamic + POST needs on-demand (or add getStaticPaths for GET-only)
 import type { APIRoute } from 'astro';
+
+// Stand-in for your real database client — replace with your ORM/query layer.
+const db = { users: { find: async (id: string | undefined) => ({ id, name: 'Ava' }), create: async (data: any) => ({ id: crypto.randomUUID(), ...data }) } };
 
 export const GET: APIRoute = async ({ params }) => {
   const user = await db.users.find(params.id);   // [id] from the path
@@ -50,83 +63,185 @@ export const POST: APIRoute = async ({ request }) => {
 };
 ```
 
-<Mermaid title="endpoint map method ไปสู่ Response" code={endpointDiagram} />
+<Mermaid title="Endpoint map method ไปยัง Response" code={endpointDiagram} />
 
 export const endpointDiagram = `flowchart LR
   req["GET or POST /api/..."] --> handler["exported handler\n(GET / POST / ...)"]
   handler --> read["read params, request body, cookies"]
   read --> resp["return a Response\n(JSON, file, status)"]`;
 
-## static vs on-demand endpoint
+## Static vs on-demand endpoint
 
-เหมือนหน้า endpoint จะ build ครั้งเดียวหรือรันต่อ request ก็ได้:
+เหมือน page endpoint ก็ build ครั้งเดียวหรือรันต่อ request ได้:
 
-- **static** — เมื่อ `output: 'static'` `GET` endpoint จะรันตอน **build** แล้วเขียน body ของ `Response` ลงไฟล์ เหมาะกับการ generate `rss.xml`, `sitemap`, หรือ static JSON API ที่ไม่เปลี่ยนต่อ request (static endpoint รองรับแค่ `GET`)
-- **on-demand** — เพิ่ม `export const prerender = false` (และ adapter) เพื่อรัน endpoint **ต่อ request** เปิดใช้ `POST`/`PUT`/`DELETE`, request body และ live data
+- **Static** — ด้วย `output: 'static'` endpoint `GET` รันตอน **build time** และ body ของ `Response` ถูกเขียนลงไฟล์ เหมาะกับการ generate `rss.xml`, sitemap หรือ static JSON API ที่ไม่เปลี่ยนต่อ request (static endpoint รองรับแค่ `GET`)
+- **On-demand** — เพิ่ม `export const prerender = false` (และ adapter) เพื่อให้ endpoint รัน**ต่อ request** เปิดใช้ `POST`/`PUT`/`DELETE`, request body และ live data
 
 ```ts
 // A dynamic endpoint that handles form posts:
 export const prerender = false;
 ```
 
-## endpoint vs Actions
+## Streaming response
 
-ทั้งคู่รัน server code แต่แก้คนละปัญหา:
+เพราะ handler return `Response` จริง มัน stream ได้แทนที่จะ buffer body ทั้งก้อนไว้ใน memory — สร้างจาก `ReadableStream` แล้ว Astro (ผ่าน adapter) ส่งต่อเป็น chunked output ให้:
 
-- **endpoint** คือ HTTP route ดิบที่คุณออกแบบเอง — คุณเป็นเจ้าของ URL, method, status code และรูปแบบ response หยิบมาใช้กับ webhook, integration กับ third-party, การดาวน์โหลดไฟล์ หรือ REST/JSON API สาธารณะ
-- **Action** (บทถัดไป) คือ **type-safe function** ที่คุณเรียกจาก client code ของตัวเองพร้อม input validation อัตโนมัติ — ไม่มี URL หรือ `Response` plumbing หยิบมาใช้กับ mutation และ form ของแอปตัวเอง
+```ts
+// src/pages/api/stream.ts
+import type { APIRoute } from 'astro';
 
-หลักจำง่าย ๆ: **สัญญาแบบ public/external → endpoint; internal app logic ที่เรียกจาก frontend ตัวเอง → Action**
+export const prerender = false;
 
-## ไกลกว่า endpoint: `src/fetch.ts` (Astro 7)
+export const GET: APIRoute = () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      for (const chunk of ['one\n', 'two\n', 'three\n']) {
+        controller.enqueue(encoder.encode(chunk));
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, { headers: { 'Content-Type': 'text/plain' } });
+};
+```
 
-endpoint ให้คุณทีละ route Astro 7 ทำให้ **advanced routing** stable: ไฟล์ที่ถูกจองชื่อไว้คือ `src/fetch.ts` ซึ่งอยู่หน้าสุดของ request pipeline ทั้งหมด มัน export **fetch handler** มาตรฐาน — รูปทรง `(request) => Response` แบบเดียวกับที่ Cloudflare Workers, Deno และ Bun ใช้ — คุณจึงรัน logic ก่อน router ของ Astro, mount app **Hono** พร้อม middleware ของมัน หรือเขียน routing เองสำหรับบางส่วนของ URL แล้วปล่อยที่เหลือให้ Astro จัดการต่อ
+พิสูจน์กับ build ที่รันจริง — ไม่มี `Content-Length` และ server เจรจา `Transfer-Encoding: chunked` เอง เหมือน streamed web response ทั่วไป:
 
-หยิบมาใช้เมื่อ middleware ไม่พอ: proxy API เก่าไว้ใต้ origin เดียวกัน, ต่อ app Hono/Web-standard ที่มีอยู่แล้วเข้ากับเว็บ Astro หรือจัดรูป request แบบที่ file-based router ทำไม่ได้ ส่วน JSON route เดี่ยว ๆ endpoint ธรรมดายังเป็นเครื่องมือที่ถูกต้อง
+```text
+$ curl -sD - -o /dev/null http://127.0.0.1:4351/api/stream | grep -i "transfer-encoding\|^HTTP"
+HTTP/1.1 200 OK
+Transfer-Encoding: chunked
+```
 
-เพราะชื่อไฟล์นี้ถูกจองแล้ว `src/fetch.ts` ที่ไม่เกี่ยวกันในโปรเจกต์เก่าต้องเปลี่ยนชื่อ — หรือชี้ให้ Astro ไปที่อื่น:
+## `context.clientAddress`: on-demand เท่านั้น
+
+`context.clientAddress` อ่าน IP ของ client ที่ request มาจาก adapter — แปลว่ามันมีอยู่ก็ต่อเมื่อ*มี*request จริงให้อ่านค่า เรียกมันบน route ที่ prerender (ไม่ว่าจะมีหรือไม่มี adapter config) จะเจอ build failure จริงทันที:
+
+```astro
+---
+// @expect-error PrerenderClientAddressNotAvailable — Astro.clientAddress read on a prerendered route (src/pages/ip.astro)
+export const prerender = true;
+const ip = Astro.clientAddress;
+---
+```
+
+```text
+[ERROR] PrerenderClientAddressNotAvailable: `Astro.clientAddress` cannot be used inside prerendered route src/pages/ip.astro.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/prerender-client-address-not-available/
+```
+
+พิสูจน์สองครั้งเหมือนกันเป๊ะ ไม่ว่าโปรเจกต์จะเป็น `output: 'static'` แบบไม่มี adapter เลย หรือ `output: 'server'` ที่มี Node adapter ติดตั้งอยู่แต่ route นั้นตัวเดียว mark `prerender = true` — ทั้งสองแบบไม่มี per-request connection ให้ `clientAddress` มาจากเลย เพราะหน้านั้นถูก render ครั้งเดียวตอน build ย้าย route ไปเป็น on-demand (เอา `prerender = true` ออก คง adapter ไว้) แล้วการอ่านแบบเดียวกันก็ทำงาน
+
+## Endpoint vs Action
+
+ทั้งคู่รัน server code แต่แก้ปัญหาคนละแบบ:
+
+- **endpoint** คือ raw HTTP route ที่คุณออกแบบเอง — คุณเป็นเจ้าของ URL, method, status code และรูปแบบ response หยิบมันมาใช้กับ webhook, third-party integration, file download หรือ public REST/JSON API
+- **Action** (บทถัดไป) คือ **type-safe function** ที่คุณเรียกจาก client code ของตัวเองพร้อม input validation อัตโนมัติ — ไม่ต้องมี URL หรือจัดการ `Response` เอง หยิบมันมาใช้กับ mutation และ form ของแอปตัวเอง
+
+กฎง่าย ๆ: **สัญญาสาธารณะ/ภายนอก → endpoint; app logic ภายในที่เรียกจาก frontend ตัวเอง → Action**
+
+## เหนือกว่า endpoint: `src/fetch.ts` (Astro 7)
+
+Endpoint ให้คุณจัดการทีละ route Astro 7 ทำให้ **advanced routing** เสถียร: ไฟล์สงวนชื่อ `src/fetch.ts` ที่อยู่หน้า pipeline ของ request ทั้งหมด มัน export **fetch handler** มาตรฐาน — shape `(request) => Response` เดียวกับที่ Cloudflare Workers, Deno และ Bun ใช้ — จึงรัน logic ก่อน router ของ Astro ได้, mount แอป **Hono** พร้อม middleware ของมันได้ หรือเขียน routing เองสำหรับ URL บางส่วน แล้วปล่อยที่เหลือให้ Astro จัดการ
+
+หยิบมันมาใช้เมื่อ middleware ไม่พอ: proxy API เก่าใต้ origin เดียวกัน, ต่อแอป Hono/Web-standard ที่มีอยู่แล้วเข้ากับ Astro site หรือจัด request ในแบบที่ file-based router ทำไม่ได้ สำหรับ JSON route เดียว endpoint ปกติก็ยังเป็นเครื่องมือที่ถูกต้อง
+
+เพราะชื่อไฟล์นี้ถูกสงวนแล้ว `src/fetch.ts` ที่ไม่เกี่ยวข้องในโปรเจกต์เก่าต้อง rename — หรือชี้ Astro ไปที่อื่น:
 
 ```js
 // astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
 export default defineConfig({
+  adapter: node({ mode: 'standalone' }),
   fetchFile: './src/router.ts',   // or null to disable advanced routing
 });
 ```
 
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ review endpoint ที่ generate มา ให้เช็ค:
+
+- endpoint ที่ dynamic หรือจัดการ `POST` set `export const prerender = false` จริงไหม? ถ้าไม่ (และอยู่ใต้ `output: 'static'`) จะมีแค่ `GET` ที่ทำงาน และ response จะแข็งตัวตอน build — handler `POST` ที่ไม่เคยเข้าถึงได้จริงเป็นความผิดพลาดที่ AI generate บ่อย
+- handler อ่าน `context.clientAddress` (rate limiting, geolocation, audit log) บน route ที่ prerender หรือเปล่า? พิสูจน์แล้วข้างบน: นั่นคือ build failure จริง ไม่ใช่ `undefined` ตอน runtime
+- response ที่ใหญ่หรือสร้างช้าถูก buffer เป็น string ก้อนเดียวไหม ทั้งที่ `ReadableStream` (พิสูจน์แล้วข้างบนด้วย chunked output จริง) จะเริ่มส่ง byte ได้ทันที?
+- handler สมมติว่า `request.json()` สำเร็จเสมอ โดยไม่มี `try/catch` รอบ input ที่ผิดรูปแบบหรือเปล่า?
+- business logic ที่จริง ๆ คือ "แอปของฉันเรียก backend ของตัวเอง" ถูก implement เป็น endpoint พร้อม `fetch()` ที่เขียนเองบน client ทั้งที่ Action (บทถัดไป) ให้ผลเดียวกันพร้อม validation อัตโนมัติโดยไม่ต้องดูแล URL?
+
+<SpotTheBug code={`// src/pages/api/report.ts
+import type { APIRoute } from 'astro';
+
+export const GET: APIRoute = async ({ clientAddress }) => {
+  await logAccess(clientAddress);
+  return Response.json({ ok: true });
+};`}>
+ที่นี่ไม่มี `export const prerender = false` เลย และไม่มีอะไรรับประกันว่า route นี้จะมี adapter config ไว้ด้วย — ถ้าโปรเจกต์นี้ (หรือแค่ route นี้) จบเป็น static `clientAddress` จะถูกอ่านบน route ที่ไม่มี request จริงอยู่เบื้องหลัง ความล้มเหลวจริงที่พิสูจน์แล้วจากสถานการณ์แบบนี้เป๊ะคือ build ล่มตอน build-time ไม่ใช่ค่าที่เป็น undefined เงียบ ๆ: `PrerenderClientAddressNotAvailable: Astro.clientAddress cannot be used inside prerendered route ...` วิธีแก้คือทำให้ intent ว่า on-demand ชัดเจน — `export const prerender = false` — และให้แน่ใจว่าโปรเจกต์มี adapter config ไว้ เพื่อให้ route นี้มี request จริงให้อ่าน client address ได้
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) แบบ typed เป็น `APIRoute` ซึ่งแต่ละตัว return `Response` มาตรฐาน; handler อ่าน `params`, request body และ cookies จาก context ของตัวเอง endpoint เป็น **static** (build-time, `GET` เท่านั้น) ถ้าไม่เพิ่ม `prerender = false` เพื่อ method แบบ on-demand ใช้ **endpoint** สำหรับสัญญา HTTP แบบ public/external (webhook, REST, download) และใช้ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe เมื่อต้องอยู่หน้า pipeline ทั้งหมด (app Hono, proxy) fetch handler ใน **`src/fetch.ts`** ที่ Astro 7 จองชื่อไว้คือเครื่องมือที่ใช่
+**API endpoint** คือไฟล์ `.ts` ใน `src/pages/` ที่ export function ตาม HTTP method (`GET`, `POST`, …) typed เป็น `APIRoute` แต่ละตัว return `Response` มาตรฐาน — รวมถึงแบบ stream ที่สร้างจาก `ReadableStream` (พิสูจน์แล้วข้างบนด้วย `Transfer-Encoding: chunked` จริง) Endpoint เป็น **static** (build-time, `GET`-only) จนกว่าจะเพิ่ม `prerender = false` สำหรับ method แบบ on-demand **`context.clientAddress`** ทำงานเฉพาะบน route ที่ on-demand และมี adapter — บน route ที่ prerender มันคือ build error จริง (`PrerenderClientAddressNotAvailable`, พิสูจน์แล้วข้างบน) ไม่ใช่ค่าว่างเงียบ ๆ ใช้ **endpoint** สำหรับสัญญา HTTP สาธารณะ/ภายนอก (webhook, REST, download) และ **Action** สำหรับ mutation ภายในแอปตัวเองแบบ type-safe เมื่อต้องอยู่หน้า pipeline ทั้งหมด (แอป Hono, proxy) **`src/fetch.ts`** ของ Astro 7 ที่สงวนไว้คือเครื่องมือที่ใช่
 </Callout>
 
 export const quizEndpoints = [
   {
-    q: 'คุณ define API endpoint ใน Astro อย่างไร?',
+    q: 'define API endpoint ใน Astro ยังไง?',
     options: [
       'register route ใน config',
-      'ไฟล์ .ts/.js ใน src/pages/ ที่ export function ตามชื่อ HTTP method (GET, POST...) ซึ่ง return Response',
+      'ไฟล์ .ts/.js ใน src/pages/ ที่ export function ตั้งชื่อตาม HTTP method (GET, POST...) return Response',
       'ไฟล์ .api.astro พิเศษ',
-      'ไม่รองรับ endpoint',
+      'Astro ไม่รองรับ endpoint',
     ],
     answer: 1,
+    explain: 'ไฟล์ .ts/.js ใน src/pages/ ที่ export function ตั้งชื่อตาม method (GET, POST, ...) typed เป็น APIRoute และ return Response มาตรฐาน คือ API endpoint',
   },
   {
     q: 'static (build-time) endpoint รองรับ method อะไรบ้าง?',
     options: [
       'ทุก method',
-      'แค่ GET (Response ถูกเขียนลงไฟล์ตอน build)',
+      'แค่ GET เท่านั้น (Response ของมันถูกเขียนลงไฟล์ตอน build time)',
       'แค่ POST',
-      'ไม่มีเลย',
+      'ไม่รองรับเลย',
     ],
     answer: 1,
+    explain: 'static endpoint รันครั้งเดียวตอน build time และเขียน GET response ลงไฟล์ — POST/PUT/DELETE ต้องการ prerender = false และ adapter',
   },
   {
-    q: 'เมื่อไรควรใช้ Action แทน endpoint?',
+    q: '```text\n$ curl -sD - -o /dev/null http://127.0.0.1:4351/api/stream | grep -i "transfer-encoding"\nTransfer-Encoding: chunked\n```\nนี่พิสูจน์อะไรเกี่ยวกับ endpoint ที่สร้างมัน?',
     options: [
-      'สำหรับ webhook สาธารณะ',
-      'สำหรับ mutation ภายในแอปตัวเองแบบ type-safe ที่เรียกจาก frontend (พร้อม input validation อัตโนมัติ)',
-      'สำหรับ serve static file',
-      'ไม่มีเลย — ทั้งสองอย่างเหมือนกัน',
+      'response ถูก buffer เต็มก้อนใน memory ก่อนส่ง',
+      'response เป็น stream จริง (สร้างจาก ReadableStream) ส่งขณะที่สร้างขึ้น ไม่ใช่ body ก้อนเดียวที่ buffer',
+      'endpoint fail และนี่คือ error header',
+      'endpoint เป็น static',
     ],
     answer: 1,
+    explain: 'chunked transfer encoding โดยไม่มี Content-Length คือสิ่งที่ Response แบบ stream จริงสร้างขึ้น — พิสูจน์แล้วข้างบนด้วยการ return ReadableStream จาก handler',
+  },
+  {
+    q: 'route มี `export const prerender = true` (หรือโปรเจกต์ไม่มี adapter เลย) และ handler อ่าน `context.clientAddress` เกิดอะไรขึ้นจริง ตามที่พิสูจน์ในบทนี้?',
+    options: [
+      'clientAddress เป็น undefined เฉย ๆ ไม่มี error',
+      'build-time error, PrerenderClientAddressNotAvailable — clientAddress ต้องการ per-request connection ที่มีชีวิตจริง ซึ่ง route ที่ prerender ไม่มีเลย',
+      'มัน fallback ไปเป็น 127.0.0.1',
+      'ทำงานได้ปกติ — clientAddress ไม่ขึ้นกับ rendering mode',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย build สองแบบแยกกัน (output: static ไม่มี adapter, และ output: server ที่มี Node adapter แต่ route นั้นถูก prerender): การอ่าน clientAddress บน route ที่ prerender คือ build failure จริงด้วย error นี้เป๊ะ ไม่ใช่ค่าว่างเงียบ ๆ',
+  },
+  {
+    q: 'ควรใช้ Action แทน endpoint เมื่อไร?',
+    options: [
+      'สำหรับ public webhook',
+      'สำหรับ mutation ภายในแอปตัวเองแบบ type-safe ที่เรียกจาก frontend (พร้อม input validation อัตโนมัติ)',
+      'สำหรับ serve static file',
+      'ไม่ต้องเลย — เหมือนกันทุกอย่าง',
+    ],
+    answer: 1,
+    explain: 'Action คือเครื่องมือที่ใช่สำหรับ mutation ภายในที่เรียกจาก client code ของตัวเอง — validate อัตโนมัติ ไม่ต้องออกแบบ URL หรือเขียน fetch() เอง',
   },
   {
     q: 'endpoint handler return อะไร?',
@@ -137,6 +252,7 @@ export const quizEndpoints = [
       'string เท่านั้น',
     ],
     answer: 1,
+    explain: 'endpoint return object Response มาตรฐาน — type เดียวกับที่ใช้ทั่ว fetch, middleware และส่วนที่เหลือของ web platform',
   },
 ];
 

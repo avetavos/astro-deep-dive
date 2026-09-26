@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Fetching data is just top-level await
 
@@ -19,7 +20,7 @@ An `.astro` component script runs on the server, so you fetch external data the 
 // src/pages/products.astro
 const res = await fetch('https://api.example.com/products');
 if (!res.ok) throw new Error(`API returned ${res.status}`);
-const products = await res.json();
+const products: { id: string; name: string; price: number }[] = await res.json();
 ---
 <ul>
   {products.map((p) => <li>{p.name} — ${p.price}</li>)}
@@ -57,6 +58,91 @@ export const diagram = `flowchart TB
   static --> cdn["served from CDN, same for everyone"]
   ondemand --> server["rendered on the server per visitor"]`;
 
+## A third option: live content collections
+
+Static-vs-on-demand isn't quite the whole picture. **Live content collections** (added in Astro 7.0) give request-time data the same typed, validated shape a regular collection gives build-time content — a middle path between "raw `fetch` on-demand" and "collection baked at build."
+
+They live in a separate config file, **`src/live.config.ts`**, defined with **`defineLiveCollection()`** instead of `defineCollection()`:
+
+```ts
+// src/live.config.ts
+import { defineLiveCollection } from 'astro:content';
+import { productsLoader } from './lib/products-loader';
+
+const products = defineLiveCollection({ loader: productsLoader() });
+
+export const collections = { products };
+```
+
+A **live loader** is a different shape from a regular loader — instead of one `load()` that fills a store once, it implements **`loadCollection`** and **`loadEntry`**, each called fresh on every request:
+
+```ts
+// src/lib/products-loader.ts
+import type { LiveLoader } from 'astro/loaders';
+
+interface Product { id: string; name: string; price: number }
+
+const CATALOG: Product[] = [
+  { id: 'sku-1', name: 'Sticker Pack', price: 5 },
+  { id: 'sku-2', name: 'Mug', price: 12 },
+];
+
+// A tiny in-memory live loader: proves loadCollection/loadEntry run per request,
+// not at build time (no filesystem/network involved).
+export function productsLoader(): LiveLoader<Product, { id: string }> {
+  return {
+    name: 'products-loader',
+    loadCollection: async () => {
+      return { entries: CATALOG.map((p) => ({ id: p.id, data: p })) };
+    },
+    loadEntry: async ({ filter }) => {
+      const product = CATALOG.find((p) => p.id === filter.id);
+      if (!product) return { error: new Error(`Product ${filter.id} not found`) };
+      return { id: product.id, data: product };
+    },
+  };
+}
+```
+
+You query with **`getLiveCollection`**/**`getLiveEntry`** (from `astro:content`, alongside the build-time `getCollection`/`getEntry`) — the result is a `{ data, error }` shape instead of a thrown exception, so a failed fetch is something you handle, not something that crashes the page:
+
+```astro
+---
+// src/pages/shop/[id].astro — requires an adapter (on-demand rendering)
+export const prerender = false; // not needed if the whole project is output: 'server'
+import { getLiveEntry } from 'astro:content';
+
+if (!Astro.params.id) return Astro.redirect('/404');
+
+const { entry, error } = await getLiveEntry('products', Astro.params.id);
+if (error || !entry) return new Response(error?.message ?? 'Not found', { status: 404 });
+---
+<p>{entry.data.name}: ${entry.data.price}</p>
+```
+
+Proven end-to-end in the probe — built with the Node adapter and hit with real `curl` requests, `getLiveCollection`/`getLiveEntry` return live data and the loader's own "not found" error on a bad id:
+
+```text
+$ curl http://127.0.0.1:4501/shop/
+<!DOCTYPE html><ul><li>Sticker Pack — $5</li><li>Mug — $12</li></ul>
+$ curl http://127.0.0.1:4501/shop/sku-1
+<!DOCTYPE html><p>Sticker Pack: $5</p>
+$ curl -w " [status %{http_code}]" http://127.0.0.1:4501/shop/nope
+Product nope not found [status 404]
+```
+
+Beyond your own loader's errors, `getLiveCollection`/`getLiveEntry` can also return a `LiveEntryNotFoundError` (no matching entry), a `LiveCollectionValidationError` (data failed an optional schema on the live collection), or a `LiveCollectionCacheHintError` — check with `instanceof` when you need to branch on which one happened.
+
+**Live collections need an adapter**, the same as any on-demand rendering — they run `loadCollection`/`loadEntry` at request time, so a purely static (`output: 'static'`, no adapter) build has nowhere to run them per request. That said, Astro does **not** refuse to build a page that calls `getLiveCollection` if that page itself ends up prerendered (either the whole project is static, or the page sets `prerender = true`): it just runs the loader once, at build time, like any other data source — silently giving up the "live" guarantee with no warning. Proven in the probe: an otherwise-identical `src/pages/shop/prerendered.astro` with `export const prerender = true` built cleanly and baked the catalog into static HTML at build time, not per request. A live collection only stays live on a route that actually renders on demand.
+
+## Fetch vs. a live collection vs. a regular collection
+
+Three tools now answer "where does this data come from," and they're easy to reach for out of habit rather than fit:
+
+- **`fetch` directly** — the least structure. No schema, no typed entries; you parse and validate the response yourself. Fine for a one-off call you don't reuse.
+- **A content collection (`getCollection`/`getEntry`)** — build-time, schema-validated, typed. The right choice for content that changes on a deploy cadence.
+- **A live collection (`getLiveCollection`/`getLiveEntry`)** — request-time, same typed/validated shape as a collection, explicit `{ data, error }` handling. The right choice for per-visitor or frequently-changing data you still want collection-like structure and validation for, not just a raw `fetch`.
+
 ## Headless CMS
 
 A headless CMS (Contentful, Sanity, Storyblok, a WordPress API) is just another data source. Fetch it in the component script — often via the CMS's SDK — and map the response into your template. For content you own and edit as files, prefer a **content collection** with a loader; for content managed in an external system, fetch it (or use a community loader that wraps the CMS behind the collections API). Either way the page code looks the same: get data on the server, render HTML.
@@ -65,8 +151,58 @@ A headless CMS (Contentful, Sanity, Storyblok, a WordPress API) is just another 
 
 Older Astro code used **`Astro.glob()`** to pull in many local files (all Markdown in a folder) at once. Astro 6 **removed it entirely** (source: [Astro v6 upgrade guide](https://docs.astro.build/en/guides/upgrade-to/v6/)) — its replacement is **content collections**, which give you the same "load many files" power *plus* schema validation and generated types (for a non-content use case that still needs raw file globbing, use Vite's `import.meta.glob()` instead). For local content, define a collection with a `glob` loader; reserve raw `fetch` for genuinely external data.
 
+Proven in the probe on Astro 7.3.5 — `Astro.glob` doesn't exist on the global at all anymore, so `astro check` catches it at the type level, before a build ever runs:
+
+```text
+error ts(2339): Property 'glob' does not exist on type
+'Readonly<AstroGlobal<Record<string, any>, AstroComponentFactory, Record<string, string | undefined>>>'.
+
+const posts = await Astro.glob('../../data/blog/*.md');
+                          ~~~~
+```
+
+## Mental Model
+
+Three different rendering timelines answer three different questions, and mixing them up is the most common data-fetching mistake in Astro. A plain `fetch` and a content collection both resolve **once**, ahead of the response — the collection just does it with validation and types on top. A live collection resolves **fresh on every request** — but that only happens if the route it's called from actually renders on demand; call it from a route that gets prerendered anyway (by project config or a page-level `prerender = true`) and it quietly collapses into "resolved once," same as the other two, with no error to tell you your "live" data went stale at build time.
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+| --- | --- | --- |
+| Raw `fetch` | No schema to write, works anywhere | You validate and type the response yourself; no reuse across pages without your own helper |
+| A content collection | Schema-validated, typed, generated at build | Snapshot only — never fresher than the last build, whatever the visitor needs |
+| A live collection | Same typed/validated shape as a collection, but resolved per request | Needs an adapter and an actually on-demand route — silently degrades to build-time if the route is prerendered |
+| `{ data, error }` from `getLiveCollection`/`getLiveEntry` | Failure is a value you branch on, not an exception that crashes the page | Every call site must remember to check `error` — forgetting reads `undefined` data instead of failing loudly |
+
+## Common Misconceptions
+
+- **"Live collections are just fetch with extra steps."** A live collection gives you the same schema validation and typed `data` a build-time collection gives you — `fetch` gives you neither unless you add it yourself. The "live" part is *when* it runs, not *whether* it's validated.
+- **"A live collection is always fresh, wherever I call it from."** It's only fresh on a route that renders on demand. On a prerendered route (project-wide `output: 'static'`, or a page with `prerender = true`), Astro runs the loader once at build time with no warning — the page still works, it just isn't live anymore.
+- **"`getLiveEntry` throws like a normal async function when the entry is missing."** It returns `{ error }` instead of throwing — code that only checks `if (entry)` without checking `error` first will read `undefined` off a successful-looking call.
+- **"`Astro.glob()` still works, it's just discouraged."** It was deprecated in Astro 5 and is fully removed in Astro 6/7 — calling it isn't a style choice, it's a type error (`Property 'glob' does not exist`) that `astro check` catches before you even build.
+
+## Reading AI-generated code
+
+When a generated snippet fetches data — with `fetch`, a collection, or a live collection — check for these before trusting it:
+
+- Does it call `Astro.glob(...)`? Training data from before Astro 6 still produces this constantly — it no longer exists; replace it with a content collection (or `import.meta.glob` for a non-content use case).
+- Does a call to `getLiveCollection`/`getLiveEntry` check the returned `error` before using `data`/`entries`, or does it assume success the way a `fetch().then()` chain might?
+- Is a live collection's loader (or the page calling it) missing an adapter/on-demand setup? It won't error — it'll just quietly resolve once at build time, defeating the purpose with no warning.
+- Does a page that genuinely needs per-visitor freshness rely on a plain build-time `getCollection` call, when the data actually changes faster than the deploy cadence?
+- Does a secret (an API key, a token) used in a top-level `fetch` ever get passed into a client-side script or component prop, instead of staying inside the server-only component script?
+
+<SpotTheBug code={`---
+// src/pages/blog.astro
+const posts = await Astro.glob('../data/blog/*.md');
+---
+<ul>
+  {posts.map((p) => <li>{p.frontmatter.title}</li>)}
+</ul>`}>
+`Astro.glob()` was deprecated in Astro 5 and **removed entirely** in Astro 6 — it no longer exists on the `Astro` global at all. Proven in the probe on Astro 7.3.5: `astro check` fails at the type level with `Property 'glob' does not exist on type 'Readonly<AstroGlobal<...>>'`, so this never even reaches a build — it's a compile-time error, not a runtime surprise. The fix is a content collection: define one with a `glob` loader in `src/content.config.ts` and query it with `getCollection('blog')`, which additionally validates and types every entry instead of handing back untyped `frontmatter`.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Fetch data with plain **top-level `await fetch()`** in the component script — it runs on the server, so secrets stay safe and there's no client round-trip. The key question is *when* it runs: on a **static** page the fetch happens **once at build** and is baked in; on an **on-demand** page (`prerender = false`) it runs **per request** for fresh, per-visitor data. Default to static unless the data must be live. For loading many local files, use a content collection — `Astro.glob()` was removed in Astro 6.
+Three tools, three timelines: plain **top-level `await fetch()`** for a one-off external call; a **content collection** (`getCollection`/`getEntry`) for build-time, schema-validated, typed content; and a **live collection** (`src/live.config.ts`, `defineLiveCollection`, `getLiveCollection`/`getLiveEntry`) for the same typed shape resolved **per request** — which needs an adapter and an actually on-demand route, or it silently degrades to build-time. Default to static unless the data must be live, and check `{ data, error }` on every live call. `Astro.glob()` is gone since Astro 6 — use a collection instead.
 </Callout>
 
 export const quizFetching = [
@@ -79,6 +215,7 @@ export const quizFetching = [
       'You cannot fetch in Astro',
     ],
     answer: 1,
+    explain: 'The component script runs on the server, so a plain top-level await fetch() resolves before the HTML exists — no client round-trip, no loading state.',
   },
   {
     q: 'On a static (default) page, when does a top-level fetch run?',
@@ -89,6 +226,7 @@ export const quizFetching = [
       'Never',
     ],
     answer: 1,
+    explain: 'A static page resolves its fetch once, at build time; the response is baked into the generated HTML and served identically to every visitor until the next build.',
   },
   {
     q: 'You need per-visitor live data on a page. What do you set?',
@@ -99,6 +237,7 @@ export const quizFetching = [
       'client:load on the page',
     ],
     answer: 1,
+    explain: 'prerender = false (with an adapter configured) opts the route into on-demand rendering, so the fetch runs fresh on every request instead of once at build.',
   },
   {
     q: 'Astro.glob() was removed in Astro 6. What replaces it for loading many local Markdown files?',
@@ -109,6 +248,29 @@ export const quizFetching = [
       'Nothing, Astro.glob() still works',
     ],
     answer: 0,
+    explain: 'Proven in the probe: astro check rejects Astro.glob() with a type error on Astro 7.3.5 — it is fully removed, not just deprecated. A glob-loader content collection is the direct replacement.',
+  },
+  {
+    q: 'What makes a live content collection different from a plain content collection?',
+    options: [
+      'Live collections are faster to build',
+      'Live collections resolve on every request (defineLiveCollection, getLiveCollection/getLiveEntry) instead of once at build time, but keep the same typed/validated shape',
+      'Live collections cannot use a schema',
+      'There is no difference — the names are aliases',
+    ],
+    answer: 1,
+    explain: 'A live collection uses a different config file (src/live.config.ts) and a loader with loadCollection/loadEntry that run at request time, while still giving you validated, typed entries the way a build-time collection does.',
+  },
+  {
+    q: '```astro\n---\nimport { getLiveCollection } from "astro:content";\nexport const prerender = true;\n\nconst { entries, error } = await getLiveCollection("products");\nif (error) throw error;\n---\n```\nThis page sets `prerender = true` and calls `getLiveCollection`. What actually happens on Astro 7.3.5?',
+    options: [
+      'The build fails — live collections require prerender = false',
+      'It builds successfully, but the loader runs once at build time, not per request — the "live" data is silently baked into static HTML',
+      'Astro automatically overrides prerender to false for this page',
+      'getLiveCollection throws immediately because no adapter can serve it',
+    ],
+    answer: 1,
+    explain: 'Proven in the probe: an otherwise-identical page with prerender = true built cleanly and baked the catalog into static HTML at build time — no error, no warning. Live collections only stay live on a route that actually renders on demand.',
   },
 ];
 
