@@ -93,14 +93,11 @@ these; `--build` swaps the lesson's own config in and restores these after.
 
 ### Known, accepted gaps
 
-- Default (check) mode type-checks lesson files as plain modules; it does
-  NOT register a lesson's own `content.config.ts` as the real project
-  config, so `getCollection('blog')` etc. elsewhere in the SAME lesson
-  type-checks against an empty `DataEntryMap` (reports `Property 'data'
-  does not exist on type 'never'` rather than confirming the real schema
-  shape). Full, schema-accurate validation of a lesson's own content
-  collection is only available via `--build`, which puts the real
-  `content.config.ts` at the real project root for one real `astro build`.
+- Default (check) mode type-checks a lesson's own `content.config.ts` /
+  `live.config.ts` as plain modules; collection NAMES/fields come from the
+  fixed probe configs above, not from the lesson's own schema. Full,
+  schema-accurate validation of a lesson's own collection is only available
+  via `--build`.
 - A relative import to a file type this harness doesn't collect (e.g. a
   `.jsx` framework component — only `astro`/`ts`/`js`/`mjs` fences are
   collected, per spec) correctly surfaces as an unresolved module — a real,
