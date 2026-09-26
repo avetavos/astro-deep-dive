@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
 
 ## Expression: `{ }` หย่อนเข้าไปใน JavaScript
 
@@ -285,6 +286,19 @@ const obj = { a: 1, b: 2 };
 ```
 
 ถ้า template เก่าขนาดใหญ่พึ่ง behavior เดิม ตั้ง `compressHTML: true` ใน `astro.config.mjs` เพื่อคงมันไว้ระหว่าง migrate โปรเจกต์ใหม่ควรเขียน `{" "}` ตรงที่ต้องการช่องว่างเลย
+
+**ลองเลย: compile โค้ดที่ผิดจริงในเบราว์เซอร์** ความผิดพลาดสี่แบบข้างบนพิสูจน์ด้วย Rust compiler จริงผ่าน `astro check` — แต่ compiler ตัวนั้นรันในเบราว์เซอร์ไม่ได้ (WASM build ตัวเดียวของมัน link ไม่ผ่านเมื่อโหลดจาก CDN: `LinkError: ... "napi_create_async_work": function import requires a callable`) playground นี้เลยโหลด `@astrojs/compiler` รุ่นคลาสสิกที่ทำมาให้รันในเบราว์เซอร์ได้แทน — เป็น Go compiler รุ่นก่อน 7.0 ที่ยังเผยแพร่ไว้เพื่อจุดประสงค์นี้โดยเฉพาะ มันปล่อยผ่านง่ายกว่ามาก (แท็กที่ไม่ปิดหรือปิดผิดลำดับข้างบน compile ผ่านโดยไม่มี diagnostic เลย) แต่มันยังจับความผิดพลาดจริงของ Astro ที่ไม่ขึ้นกับเวอร์ชันได้อยู่ — `set:html` บน element ที่ยังมี child node เหลืออยู่:
+
+<AstroPlayground code={setHtmlChildrenCode} id="playground-set-html" title="set:html ที่ยังมี children เหลืออยู่" />
+
+export const setHtmlChildrenCode = `---
+---
+<div set:html={"<b>Overwritten</b>"}>
+  This text is ignored -- set:html replaces all children.
+</div>
+`;
+
+กด Compile: แผง diagnostics จะโชว์ `WARNING_SET_WITH_CHILDREN` จริง — "set:html directive will overwrite child nodes" — และแผง output จะโชว์ JS ที่ compile แล้ว ให้เห็นเองว่าข้อความไม่ได้ไปโผล่ใน output ที่ render ออกมาเลย (พิสูจน์ตอนสร้าง playground นี้: diagnostic ตัวนี้ขึ้นเฉพาะตอน child เป็น **text node** แบบข้างบนเท่านั้น — ถ้าเปลี่ยนเป็น element ซ้อนอย่าง `<p>...</p>` ใน compiler build นี้ warning จะหายไปเงียบ ๆ เป็นช่องโหว่จริงที่ค่อนข้างเซอร์ไพรส์ — ไม่ใช่ทุกกรณี "ยังมี children" จะถูกจับได้หมด)
 
 ## ชื่อ attribute แบบ HTML ไม่ใช่ชื่อแบบ JSX
 

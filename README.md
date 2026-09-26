@@ -6,9 +6,19 @@ Bilingual (EN/TH) Astro 7 + Starlight course.
 
 `tools/verify-snippets.mjs` proves lesson code snippets actually compile
 (and, where a `*.test.ts` fence exists, actually run) against a real Astro 7
-project — this course has no in-browser playground, so a real probe project
-plus `astro check` / `astro build` / `vitest` is the only way to catch a
-snippet that's subtly wrong.
+project — a real probe project plus `astro check` / `astro build` / `vitest`
+is the primary way to catch a snippet that's subtly wrong.
+
+The `components/astro-syntax-deep` and `components/styles-and-scripts`
+lessons also embed `<AstroPlayground>`, an in-browser compile-only playground
+(loads the classic `@astrojs/compiler` WASM package from esm.sh — see
+`src/components/astro-playground-runtime.ts`'s doc comment for why it isn't
+this course's own Rust compiler). Check it with a real browser:
+
+```sh
+npx astro build --outDir <scratch>/dist && npx astro preview --outDir <scratch>/dist --port 4951
+npx -p playwright node tools/astro-playground.spec.mjs http://127.0.0.1:4951
+```
 
 ```sh
 npm run verify                       # astro check every collected fence

@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
 
 ## scoped style เป็น default พิสูจน์จริง
 
@@ -38,6 +39,25 @@ const { accent = '#883AEA' } = Astro.props;
 พิสูจน์สองอย่างพร้อมกัน: selector `.card` ใน source กลายเป็น `.card[data-astro-cid-aoqubwov]` ใน CSS ที่ build ออกมา และทุก instance ที่ render มี attribute `data-astro-cid-aoqubwov` ตรงกัน — นั่นคือกลไก scoping เป็น attribute selector บวก attribute ที่ตรงกัน ไม่ใช่การเปลี่ยนชื่อ class และแม้ component ถูกใช้**สองครั้ง** CSS text ของ `<style>` block ของมันก็โผล่ใน stylesheet ของหน้า**ครั้งเดียว** — Astro dedupe style ของ component ที่เหมือนกันข้าม instance ไม่ซ้ำ rule ต่อการใช้งาน
 
 คุณเขียน selector ธรรมดาตรงไปตรงมา แล้วได้ CSS เฉพาะ component — ไม่ต้องมี naming convention ไม่ต้อง CSS-in-JS นี่คือ default ที่คุณจะใช้แทบทุกที่
+
+**ลองเลย: ดู hash ถูกเติมสดในเบราว์เซอร์** playground นี้โหลด `@astrojs/compiler` รุ่นคลาสสิกที่ทำมาให้รันในเบราว์เซอร์ได้ (ดู caveat ที่บทเรียน components/astro-syntax-deep — Rust compiler จริงที่ `astro check`/`astro build` ของคอร์สนี้รันอยู่ โหลดในเบราว์เซอร์ไม่ได้เลย) เมื่อสั่งให้ใช้ scoping strategy แบบ `attribute` มันให้ผลลัพธ์ตรงกับที่พิสูจน์ไว้ข้างบนเป๊ะ — attribute selector `data-astro-cid-*` ไม่ใช่การเปลี่ยนชื่อ class:
+
+<AstroPlayground code={scopedCardCode} id="playground-scoped-style" title="scoped style ของ .card compile สดให้ดู" />
+
+export const scopedCardCode = `---
+---
+<style>
+  .card {
+    border: 2px solid var(--accent);
+  }
+  h1 {
+    color: red;
+  }
+</style>
+<div class="card">Scoped card</div>
+`;
+
+กด Compile: JS ที่ compile แล้วในแผง output จะมี attribute `data-astro-cid-` ติดอยู่บน `<div>` และ suffix เดียวกันก็โผล่ใน CSS selector ด้วย — กลไกเดียวกับที่อธิบายไว้ข้างบนเป๊ะ แค่ผลิตสดแทนที่จะ paste จาก build ครั้งก่อน
 
 ## opt out ด้วย `is:global` กับ `:global()` พิสูจน์จริง
 

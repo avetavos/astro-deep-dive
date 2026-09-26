@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
 
 ## Expressions: `{ }` drops into JavaScript
 
@@ -285,6 +286,19 @@ That renders as **"helloworld"**, no space — confirmed against the real output
 ```
 
 If a large existing template depends on the old behaviour, set `compressHTML: true` in `astro.config.mjs` to keep it while you migrate. New projects should just write `{" "}` where a space matters.
+
+**Try it: compile a real mistake in the browser.** The four failures above are proven against the real Rust compiler via `astro check` — but that compiler can't run in a browser (its only WASM build fails to even link when loaded from a CDN: `LinkError: ... "napi_create_async_work": function import requires a callable`). This playground instead loads the classic, browser-embeddable `@astrojs/compiler` package — the pre-7.0 Go compiler, still published for exactly this use case. It's far more lenient (the unclosed/mis-nested tags above compile with zero diagnostics through it), but it still catches this real, version-independent Astro mistake — `set:html` on an element that still has child nodes:
+
+<AstroPlayground code={setHtmlChildrenCode} id="playground-set-html" title="set:html with leftover children" />
+
+export const setHtmlChildrenCode = `---
+---
+<div set:html={"<b>Overwritten</b>"}>
+  This text is ignored -- set:html replaces all children.
+</div>
+`;
+
+Click Compile: the diagnostics panel shows a real `WARNING_SET_WITH_CHILDREN` — "set:html directive will overwrite child nodes" — and the output panel shows the compiled JS, so you can see for yourself that the text never makes it into the rendered output. (Proven while building this playground: this diagnostic only fires for a **text-node** child like the one above — swap it for a nested element like `<p>...</p>` and, in this compiler build, the warning silently disappears. A real, if surprising, gap — not every "still has children" case is actually caught.)
 
 ## HTML attribute names, not JSX names
 

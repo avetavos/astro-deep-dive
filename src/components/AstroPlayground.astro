@@ -1,0 +1,145 @@
+---
+// AstroPlayground: renders a real `.astro` source (read-only, syntax
+// highlighted) plus a Compile button that lazily loads the classic
+// `@astrojs/compiler` WASM package from esm.sh and runs `transform()` in the
+// browser — compile-check only, no Run stage (this course's own review
+// decided a real runtime sandbox is out of scope for Astro output, which is
+// a server-rendering module, not a mountable component like Svelte's). See
+// astro-playground-runtime.ts for the full architecture note and the
+// version-mismatch caveat (this loads the pre-7.0 Go compiler, NOT the
+// Rust compiler this course's `astro check`/`astro build` actually run —
+// proven, not assumed: see that file's module doc comment).
+import { Code } from 'astro-expressive-code/components';
+
+interface Props {
+  code: string;
+  id?: string;
+  title?: string;
+}
+
+const { code, id, title } = Astro.props;
+---
+
+<div class="ap not-content" data-code={code} id={id}>
+  {title && <p class="ap__title">{title}</p>}
+  <Code code={code} lang="astro" />
+  <div class="ap__bar">
+    <button class="ap__compile" data-compile type="button">Compile</button>
+    <span class="ap__badge" data-badge></span>
+  </div>
+  <p class="ap__hint" data-hint hidden></p>
+  <pre class="ap__err" data-err hidden><code></code></pre>
+  <div class="ap__diag" data-diag hidden></div>
+  <div class="ap__out" data-out hidden>
+    <div class="ap__out-bar">
+      <span data-out-label></span>
+      <button class="ap__copy" data-copy type="button"></button>
+    </div>
+    <pre><code></code></pre>
+  </div>
+</div>
+
+<script>
+  import { loadAstroCompiler, compileAstro, copyFor, VERSION_BADGE, ASTRO_CDN_VERSION } from './astro-playground-runtime';
+  import type { DiagnosticLine } from './astro-playground-runtime';
+
+  const lang = document.documentElement.lang;
+  const T = copyFor(lang);
+  const th = lang?.startsWith('th');
+
+  document.querySelectorAll<HTMLElement>('.ap').forEach((ap) => {
+    if (ap.dataset.wired) return;
+    ap.dataset.wired = '1';
+
+    const code = ap.dataset.code || '';
+    const compileBtn = ap.querySelector<HTMLButtonElement>('[data-compile]');
+    const badge = ap.querySelector<HTMLElement>('[data-badge]');
+    const hint = ap.querySelector<HTMLElement>('[data-hint]');
+    const errBox = ap.querySelector<HTMLElement>('[data-err]');
+    const diagBox = ap.querySelector<HTMLElement>('[data-diag]');
+    const outBox = ap.querySelector<HTMLElement>('[data-out]');
+    const outLabel = ap.querySelector<HTMLElement>('[data-out-label]');
+    const copyBtn = ap.querySelector<HTMLButtonElement>('[data-copy]');
+
+    if (compileBtn) compileBtn.textContent = T.compile;
+    if (copyBtn) copyBtn.textContent = T.copy;
+    if (outLabel) outLabel.textContent = T.output;
+    if (badge) {
+      badge.textContent = VERSION_BADGE[th ? 'th' : 'en']();
+      badge.title = `Loaded from esm.sh, pinned to ${ASTRO_CDN_VERSION}`;
+    }
+
+    function showHint(text: string) {
+      if (!hint) return;
+      hint.textContent = text;
+      hint.hidden = false;
+    }
+    function hideHint() {
+      if (hint) hint.hidden = true;
+    }
+    function showError(text: string) {
+      if (!errBox) return;
+      errBox.querySelector('code')!.textContent = text;
+      errBox.hidden = false;
+    }
+    function showDiagnostics(lines: DiagnosticLine[]) {
+      if (!diagBox) return;
+      if (!lines.length) {
+        diagBox.textContent = T.noDiagnostics;
+      } else {
+        diagBox.textContent = '';
+        for (const d of lines) {
+          const row = document.createElement('p');
+          row.className = `ap__diag-row ap__diag-row--${d.severity}`;
+          row.textContent = `[${d.severity}] ${d.location ? d.location + ' ' : ''}${d.text}${d.hint ? ' — ' + d.hint : ''}`;
+          diagBox.appendChild(row);
+        }
+      }
+      diagBox.hidden = false;
+    }
+    function showOutput(text: string) {
+      if (!outBox) return;
+      outBox.querySelector('code')!.textContent = text;
+      outBox.hidden = false;
+    }
+    function resetPanels() {
+      if (errBox) errBox.hidden = true;
+      if (diagBox) diagBox.hidden = true;
+      if (outBox) outBox.hidden = true;
+    }
+
+    compileBtn?.addEventListener('click', async () => {
+      compileBtn.disabled = true;
+      resetPanels();
+      showHint(T.loading);
+      try {
+        const compiler = await loadAstroCompiler();
+        hideHint();
+        const result = await compileAstro(compiler, code);
+        if (result.ok) {
+          showOutput(result.js);
+          showDiagnostics(result.diagnostics);
+        } else {
+          showError(result.error);
+        }
+      } catch (e) {
+        hideHint();
+        showError(`${T.loadFailed}\n\n(${(e as Error)?.message ?? String(e)})`);
+      } finally {
+        compileBtn.disabled = false;
+      }
+    });
+
+    copyBtn?.addEventListener('click', async () => {
+      const text = outBox?.querySelector('code')?.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = T.copied;
+        setTimeout(() => (copyBtn.textContent = original), 1200);
+      } catch {
+        // clipboard API unavailable (e.g. insecure context) — no-op, output is still selectable.
+      }
+    });
+  });
+</script>

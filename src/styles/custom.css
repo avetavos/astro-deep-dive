@@ -151,4 +151,23 @@ html.read-mode .readmode-toggle {
 
 /* ---- Paper read mode: keep content clear of the sticky header ---- */
 html.read-mode .main-frame { padding-top: var(--sl-nav-height, 3.5rem) !important; }
+
+/* ---- AstroPlayground ---- */
+.ap { margin:1rem 0; }
+.ap__title { font-weight:600; margin:0 0 .25rem; }
+.ap__bar { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; margin:.35rem 0 .25rem; }
+.ap__compile { cursor:pointer; font-size:.78rem; border:1px solid var(--sl-color-accent); border-radius:4px; padding:.15rem .6rem; background:var(--sl-color-accent); color:#fff; }
+.ap__compile:disabled { opacity:.5; cursor:default; }
+.ap__badge { margin-left:auto; font-size:.72rem; opacity:.7; }
+.ap__hint { font-size:.8rem; opacity:.7; margin:.25rem 0; }
+.ap pre { white-space:pre; overflow:auto; }
+.ap__err { border-left:3px solid var(--sl-color-red); color:var(--sl-color-red-high); padding:.4rem .6rem; margin:.35rem 0; white-space:pre-wrap; }
+.ap__diag { border-left:3px solid #d9a441; padding:.4rem .6rem; margin:.35rem 0; font-size:.82rem; white-space:pre-wrap; }
+.ap__diag-row { margin:.15rem 0; }
+.ap__diag-row--error { color:var(--sl-color-red-high); }
+.ap__diag-row--warning { color:#d9a441; }
+.ap__out { margin:.35rem 0; border:1px solid var(--sl-color-gray-5); border-radius:6px; overflow:hidden; }
+.ap__out-bar { display:flex; justify-content:space-between; align-items:center; padding:.25rem .5rem; background:var(--sl-color-gray-6); font-size:.75rem; font-weight:600; }
+.ap__copy { cursor:pointer; font-size:.72rem; border:1px solid var(--sl-color-gray-5); border-radius:4px; padding:.1rem .5rem; background:var(--sl-color-bg); color:inherit; }
+.ap__out pre { margin:0; border-left:3px solid #339933; }
 .quiz__explain { margin:.4rem .25rem .5rem; padding-left:.6rem; border-left:3px solid var(--sl-color-gray-5); font-size:.9em; color:var(--sl-color-gray-2); }

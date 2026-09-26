@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
 
 ## Scoped styles are the default, proven
 
@@ -38,6 +39,25 @@ Used **twice** on the same page with different props (`<ScopedCard accent="#ff00
 Two things proven at once: the selector `.card` in the source becomes `.card[data-astro-cid-aoqubwov]` in the built CSS, and every rendered instance carries the matching `data-astro-cid-aoqubwov` attribute — that's the scoping mechanism, an attribute selector plus a matching attribute, not a class rename. And even though the component was used **twice**, its `<style>` block's CSS text appears in the page's stylesheet **once** — Astro deduplicates identical component styles across instances, it does not repeat the rule per usage.
 
 You write plain, obvious selectors and get component-local CSS — no naming conventions, no CSS-in-JS. This is the default you will use almost everywhere.
+
+**Try it: watch the hash get added in the browser.** This playground loads the classic, browser-embeddable `@astrojs/compiler` package (see the caveat on the components/astro-syntax-deep lesson — the real Rust compiler this course's `astro check`/`astro build` run cannot load in a browser at all). Told to use the `attribute` scoping strategy, it produces exactly the shape proven above — a `data-astro-cid-*` attribute selector, not a class rename:
+
+<AstroPlayground code={scopedCardCode} id="playground-scoped-style" title="A scoped .card style, compiled live" />
+
+export const scopedCardCode = `---
+---
+<style>
+  .card {
+    border: 2px solid var(--accent);
+  }
+  h1 {
+    color: red;
+  }
+</style>
+<div class="card">Scoped card</div>
+`;
+
+Click Compile: the output panel's compiled JS carries a `data-astro-cid-` attribute on the `<div>`, and the same suffix appears in the CSS selector — the exact mechanism explained above, just produced live instead of pasted from a previous build.
 
 ## Opting out with `is:global`, and `:global()`, proven
 
