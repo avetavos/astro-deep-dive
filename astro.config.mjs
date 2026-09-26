@@ -40,6 +40,8 @@ export default defineConfig({
         { label: 'Server-Side Astro', items: [{ autogenerate: { directory: 'server-side' } }] },
         { label: 'Rendering, Performance & UX', items: [{ autogenerate: { directory: 'rendering-and-performance' } }] },
         { label: 'Tooling, Integrations & Production', items: [{ autogenerate: { directory: 'tooling-and-production' } }] },
+        { label: 'How Astro Works', translations: { th: 'Astro ทำงานอย่างไรข้างใน' }, items: [{ autogenerate: { directory: 'astro-internals' } }] },
+        { label: 'Reading AI-generated Astro', translations: { th: 'อ่านโค้ด Astro ที่ AI เขียน' }, items: [{ autogenerate: { directory: 'reading-astro' } }] },
         { label: 'Glossary', translations: { th: 'อภิธานศัพท์' }, link: 'glossary' },
       ],
       }), preact()],
