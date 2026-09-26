@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## production build
 
@@ -41,6 +42,32 @@ export const deployDiagram = `flowchart TB
   static --> cdn["any CDN / static host"]
   ssr --> runtime["adapter runtime: Workers, Node, serverless"]`;
 
+## adapter ปัจจุบัน และสองโหมดของ Cloudflare
+
+version ล่าสุดของ adapter ทางการทุกตัว verify ด้วย `npm view <pkg> version` กับ npm registry จริง (ไม่ใช่จำจาก changelog):
+
+| Adapter | Package | Version ล่าสุด |
+|---|---|---|
+| Node | `@astrojs/node` | `11.1.6` |
+| Cloudflare | `@astrojs/cloudflare` | `14.3.3` |
+| Vercel | `@astrojs/vercel` | `11.0.11` |
+| Netlify | `@astrojs/netlify` | `8.2.6` |
+
+Cloudflare น่าสนใจเป็นพิเศษเพราะครอบคลุมเป้าหมาย deploy **ทั้งสอง**แบบที่บทนี้พูดถึง จาก package เดียว: เว็บ Astro ที่ static ล้วนสามารถ deploy ไป **Cloudflare Pages/Workers เป็น static asset** โดยไม่ต้องมี adapter เลย (แค่ไฟล์ serve จาก CDN ของ Cloudflare); พอมี route ไหนต้องการ on-demand rendering `adapter: cloudflare()` เปลี่ยนโปรเจกต์ *เดียวกันนั้นเอง* ให้กลายเป็น Cloudflare Worker ที่รัน server code ต่อ request — adapter คือสิ่งที่เพิ่ม "assets" binding กับ worker entry (`dist/_worker.js/index.js`) เข้าไปใน Cloudflare deploy config ไม่ใช่สิ่งที่ static-only deploy ต้องการ
+
+## ข้อจำกัดจริงของ `astro preview`
+
+`astro preview` เปิด local server ให้ **build output** ของคุณ — แต่มันจะรัน route แบบ on-demand ได้จริงหรือเปล่าขึ้นกับว่า adapter ที่คุณใช้ ship preview server ของตัวเองหรือเปล่า อ้างตรง ๆ จาก reference ของ Astro เอง: *"If an adapter is set in the configuration, the preview server is provided by the adapter. Adapters are not required to provide a preview server, so this feature may not be available depending on your adapter of choice."* verify ตรง ๆ จาก `exports` map ของแต่ละ adapter ที่ publish จริง:
+
+| Adapter | Ship preview entrypoint ไหม? |
+|---|---|
+| `@astrojs/node` | มี (`./preview.js`) |
+| `@astrojs/cloudflare` | มี (`./entrypoints/preview`) |
+| `@astrojs/vercel` | ไม่มี |
+| `@astrojs/netlify` | ไม่มี |
+
+บน Vercel หรือ Netlify `astro preview` ยังรันได้ แต่ serve ได้แค่ส่วน static ของ build — ไม่มี preview local ของ route on-demand สำหรับสองตัวนี้ โดยการออกแบบ ต้อง preview ด้วย local dev tool ของ platform เอง (`vercel dev`, `netlify dev`) แทน `astro preview` ยังบอกตรง ๆ ด้วยว่า "is not designed to be run in production" ไม่ว่า adapter ไหน
+
 ## ตั้ง site และ base ให้ถูก
 
 สอง config value ที่มักทำคนสะดุดตอน deploy:
@@ -53,8 +80,13 @@ export const deployDiagram = `flowchart TB
 Astro เป็น content-first และ ecosystem ของตัวเองสะท้อนสิ่งนั้น:
 
 - **Starlight** — documentation-site framework ทางการที่สร้างบน Astro (คอร์สนี้ก็สร้างด้วย Starlight): sidebar, search, i18n และ dark mode มาในตัว
-- **Integrations directory** — catalog ขนาดใหญ่ของ integration ทางการและ community: UI framework, CMS connector, image service, analytics และ adapter สำหรับ host หลักทุกตัว (มี package ทางการหนึ่งตัวที่หายไปใน Astro 7: `@astrojs/db` ไม่ได้ดูแลต่อแล้ว — ใช้ `node:sqlite`, Drizzle หรือ database แบบ hosted แทน)
-- **content-focused patterns** — เมื่อรวมกับ content collection Astro เป็นตัวเลือกที่เหมาะสำหรับ blog, docs, marketing site และ headless-CMS front-end ที่คุณได้เว็บ static (หรือ hybrid) ที่เร็วพร้อม content ที่มี type
+- **Integrations directory** — catalog ขนาดใหญ่ของ integration ทางการและ community: UI framework, CMS connector, image service, analytics และ adapter สำหรับ host หลักทุกตัว
+- **content-focused patterns** — เมื่อรวมกับ content collection Astro เป็นตัวเลือกที่เหมาะสำหรับ blog, docs, marketing site และ headless-CMS front-end ที่คุณได้เว็บ static (หรือ on-demand) ที่เร็วพร้อม content ที่มี type
+
+มี package สองตัวที่ควรระวังเป็นพิเศษ ทั้งคู่ verify ตรง ๆ จาก npm metadata จริง ไม่ใช่ความจำจาก blog post:
+
+- **`@astrojs/db`** — `npm view @astrojs/db deprecated` คืนค่า: *"This package is deprecated. Use a database client (Drizzle, Kysely, etc.) directly instead."* ใช้ `node:sqlite`, Drizzle หรือ database แบบ hosted (Turso, Neon, PlanetScale) แทน
+- **`astro-integration-kit`** — ก็ npm deprecate เหมือนกัน (`npm view astro-integration-kit deprecated` ชี้ไปที่ migration guide ของตัวเอง) ถ้า snippet ที่ AI generate มาใช้มันเพื่อสร้าง integration เอง เช็คก่อนว่า helper ที่มันใช้ย้ายเข้า Astro core แล้วหรือยัง ก่อนจะเพิ่ม dependency ใหม่
 
 หยิบ framework อย่าง **Starlight** เมื่อตรงกับ use case ของคุณ แทนที่จะสร้าง docs infrastructure ใหม่ด้วยมือ — สัญชาตญาณ "compose อย่าสร้างใหม่" เดียวกันที่ไหลผ่าน Astro
 
@@ -69,12 +101,53 @@ Astro เป็น content-first และ ecosystem ของตัวเอง
 5. **Markdown plugin**: ถ้าใช้ remark/rehype plugin ให้ติดตั้ง `@astrojs/markdown-remark` และตั้ง `markdown: { processor: unified() }` ถ้าไม่ใช้ก็รับความเร็วของ Sätteri ไปเลย
 6. **Vite 8**: ทบทวน migration note ของ Vite 8 สำหรับ plugin เฉพาะของ Vite ที่ตั้งไว้ใต้ key `vite`
 7. **เปลี่ยนชื่อ `src/fetch.ts`** ถ้าคุณมีไฟล์ชื่อนี้ที่ไม่เกี่ยวกัน (หรือตั้ง `fetchFile`)
-8. **API ที่ถูกถอด**: `@astrojs/db` (เปลี่ยนไป `node:sqlite`, Drizzle หรือ DB แบบ hosted), ค่าคงที่ event ของ `astro:transitions` (ใช้ชื่อ event แบบ string เช่น `'astro:before-preparation'`) และ `getContainerRenderer` ตอนนี้ import จาก `@astrojs/react/container-renderer`
+8. **API ที่ถูกถอด**: `@astrojs/db` (เปลี่ยนไป `node:sqlite`, Drizzle หรือ DB แบบ hosted), ค่าคงที่ event ของ `astro:transitions` (ใช้ชื่อ event แบบ string เช่น `'astro:before-preparation'`) และ `getContainerRenderer` ตอนนี้ import จาก subpath ที่เจาะจงกับ framework (`@astrojs/preact/container-renderer` ถ้าใช้ Preact — subpath ตรงกับ package `@astrojs/<framework>` ที่โปรเจกต์ติดตั้งจริง verify แล้วในบท testing)
 
 จากนั้น `astro check && astro build` — build เร็วขึ้นอย่างเห็นได้ชัด ซึ่งคือรางวัล
 
+## อ่านโค้ดที่ AI เขียน
+
+คำตอบ "นี่คือวิธี deploy Astro" ที่ AI generate มา ควรเช็คกับสิ่งที่เป็นจริงจริง ๆ บน 7.3.5:
+
+- มันบอกว่า adapter เป็น optional สำหรับ server island หรือ Actions บนเว็บที่ static ล้วนหรือเปล่า? พิสูจน์แล้วข้างบน (และในบท rendering-modes): feature พวกนั้นต้องมี on-demand rendering ถึงจะรันได้เลย ซึ่งต้องมี adapter แม้ว่าทุก *page* route จะ prerender ก็ตาม
+- มันแนะนำ `@astrojs/db` หรือ `astro-integration-kit` โดยไม่มีคำเตือนหรือเปล่า? ทั้งคู่ npm deprecate แล้ว — พิสูจน์แล้วข้างบนด้วยประกาศ deprecation จริง ไม่ใช่การเดาว่าไม่ค่อยมีคนใช้
+- มันอ้างว่า `astro preview` เป็น production server แบบเบา ๆ ที่ใช้ได้จริงหรือเปล่า? พิสูจน์แล้วข้างบนด้วยคำพูดของ CLI เอง: *"not designed to be run in production"*
+- มันสมมติว่า `astro preview` ทดสอบ route on-demand ได้เหมือนกันหมดไม่ว่า adapter ไหนหรือเปล่า? พิสูจน์แล้วข้างบน: มีแค่ Node กับ Cloudflare ที่ ship preview entrypoint; Vercel กับ Netlify ไม่มี ดังนั้น `astro preview` serve ได้แค่ static output บนสองตัวนั้น
+- มันแนะนำว่า Cloudflare *ต้อง* มี `adapter: cloudflare()` เสมอถึงจะ deploy ได้หรือเปล่า? เว็บ static ล้วน deploy ไป Cloudflare Pages/Workers เป็น static asset ได้โดยไม่ต้องมี adapter เลย — adapter มีไว้เฉพาะ on-demand rendering พิสูจน์แล้วข้างบน
+
+<SpotTheBug code={`// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel';
+
+export default defineConfig({
+  adapter: vercel(),
+});
+`} lang="js">
+ตรงนี้ไม่มี config error เลย — แต่ทีมที่พึ่งพา `astro preview` ในการ verify route on-demand ด้วยมือก่อน deploy ไป Vercel กำลังเชื่อ step ที่ พิสูจน์แล้วข้างบน ไม่ได้รัน route นั้นจริง ๆ: `exports` ของ package `@astrojs/vercel` ไม่มี preview entrypoint เลย ดังนั้น `astro preview` บน config นี้ serve ได้แค่ส่วน static ของ build เท่านั้น วิธีแก้ไม่ใช่การแก้โค้ดในไฟล์นี้ — แต่เป็นเรื่อง process: ใช้ `vercel dev` (หรือ deploy ไป Vercel preview environment จริง) เพื่อทดสอบ route on-demand จริง ๆ ก่อน ship เพราะ `astro preview` ทำไม่ได้เงียบ ๆ
+</SpotTheBug>
+
+## Mental Model
+
+deploy target จริง ๆ คือสองคำถามแยกกันที่ Astro ตอบเป็นอิสระจากกัน: "ไฟล์ไปอยู่ที่ไหน" (static host อะไรก็ได้ สำหรับ HTML/CSS/JS ที่ `dist/client` ผลิต) กับ "ใครรัน server code" (adapter ที่แปล on-demand rendering ของ Astro เป็น runtime shape ของ platform นั้นเจาะจง) Cloudflare ที่ตอบทั้งสองคำถาม — static asset ล้วน ๆ *หรือ* Worker จาก package เดียวกัน — คือภาพที่ชัดที่สุดว่านี่เป็นสองแกนที่แยกกันจริง ๆ ไม่ใช่การตัดสินใจ "hosting provider" เดียวรวมกัน
+
+## ข้อแลกเปลี่ยน
+
+| | Deploy แบบ static | Deploy แบบ on-demand |
+|---|---|---|
+| **ต้องมี adapter ไหม** | ไม่ต้อง | ต้อง |
+| **Host** | CDN/static host อะไรก็ได้ รวมถึง Cloudflare Pages โดยไม่ต้องมี adapter | Cloudflare Workers, Node, Vercel, Netlify Functions |
+| **`astro preview` ทดสอบได้จริง local ไหม** | ได้เสมอ | เฉพาะ adapter ที่ ship preview entrypoint (Node, Cloudflare — พิสูจน์แล้วข้างบน; ไม่ใช่ Vercel/Netlify) |
+| **เหมาะกับ** | content ที่เหมือนกันสำหรับทุกคน | auth, form, ข้อมูล live/request-time |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`astro preview` เป็นวิธี smoke-test production build ก่อน deploy ที่ใช้ได้ดี ไม่ว่า adapter ไหน"** พิสูจน์แล้วข้างบน: บน Vercel กับ Netlify โดยเฉพาะ มันรัน route on-demand ไม่ได้เลย — ได้แค่ส่วน static เท่านั้น มันยังบอกตรง ๆ ด้วยว่าไม่ได้ตั้งใจให้รับ production traffic ไม่ว่า adapter ไหน
+- **"deploy ไป Cloudflare ต้องมี `adapter: cloudflare()` เสมอ"** เว็บ static ล้วน deploy ไป Cloudflare เป็น static asset ธรรมดาโดยไม่ต้องมี adapter เลย — adapter มีไว้แค่สำหรับ on-demand rendering บน platform เดียวกันนั้น
+- **"`@astrojs/db` แค่ไม่ค่อยมีคนใช้เท่า Drizzle ไม่ได้ deprecate จริง"** พิสูจน์แล้วข้างบนด้วยประกาศ deprecation จริงบนตัว package เอง
+- **"อัปเกรด Astro 6 → 7 ส่วนใหญ่คือแก้โค้ดของตัวเอง"** ส่วนใหญ่ของ checklist ข้างบนคือการลบสิ่งที่ไม่มีอยู่แล้ว (`experimental` flag, ค่าคงที่ `astro:transitions`) มากกว่าจะเป็นการแก้ bug ในโค้ดของคุณเอง
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`astro build` เขียน `dist/`: เป็นแค่ **ไฟล์ HTML** สำหรับเว็บ static (deploy ไป CDN อะไรก็ได้ — Cloudflare Pages, Netlify, S3) หรือ **server entry + assets** สำหรับ on-demand ซึ่งต้องมี **adapter** ที่ตรงกันและ runtime ตั้ง **`site`** เป็น URL ที่ deploy จริง (absolute URL ทั้งหมดอิงจากค่านี้) และ **`base`** เป็น subpath ที่ถูก serve (ไม่ตรงแล้ว asset 404) ecosystem เป็น content-first: **Starlight** สำหรับ docs พร้อม integrations directory ขนาดใหญ่ — compose กับของที่มีอยู่แทนที่จะสร้างใหม่ การอัปเกรด 6 → 7 ส่วนใหญ่คือ `npx @astrojs/upgrade`, ลบ flag `experimental` ที่ stable แล้ว และแก้สิ่งที่ compiler ที่เข้มงวดกับ whitespace แบบ JSX ชี้ให้เห็น
+`astro build` เขียน `dist/`: เป็นแค่ **ไฟล์ HTML** สำหรับเว็บ static (deploy ไป CDN อะไรก็ได้ — Cloudflare Pages, Netlify, S3 หรือโหมด static-assets ของ Cloudflare เองโดยไม่ต้องมี adapter เลย พิสูจน์แล้วข้างบน) หรือ **server entry + assets** สำหรับ on-demand ซึ่งต้องมี **adapter** ที่ตรงกันและ runtime ตั้ง **`site`** เป็น URL ที่ deploy จริง (absolute URL ทั้งหมดอิงจากค่านี้) และ **`base`** เป็น subpath ที่ถูก serve (ไม่ตรงแล้ว asset 404) `astro preview` ทดสอบ route on-demand ได้จริงเฉพาะ adapter ที่ ship preview entrypoint (Node, Cloudflare — พิสูจน์แล้วข้างบน; ไม่ใช่ Vercel/Netlify) และไม่เคยตั้งใจให้รับ production traffic บนตัวไหนเลย ecosystem เป็น content-first: **Starlight** สำหรับ docs พร้อม integrations directory ขนาดใหญ่ — แต่ `@astrojs/db` กับ `astro-integration-kit` ทั้งคู่ npm deprecate แล้ว พิสูจน์แล้วข้างบน การอัปเกรด 6 → 7 ส่วนใหญ่คือ `npx @astrojs/upgrade`, ลบ flag `experimental` ที่ stable แล้วและ API ที่ถูกถอด และแก้สิ่งที่ compiler ที่เข้มงวดกับ whitespace แบบ JSX ชี้ให้เห็น
 </Callout>
 
 export const quizDeploy = [
@@ -87,6 +160,7 @@ export const quizDeploy = [
       'เฉพาะเมื่อมี adapter',
     ],
     answer: 1,
+    explain: 'build แบบ static ล้วนคือแค่ไฟล์ (HTML/CSS/JS) — deploy ได้ทุกที่ที่ serve ไฟล์ ไม่ต้องมี runtime หรือ adapter เลย',
   },
   {
     q: 'adapter จำเป็นสำหรับ deploy เมื่อไร?',
@@ -97,6 +171,7 @@ export const quizDeploy = [
       'ไม่เคย',
     ],
     answer: 1,
+    explain: 'on-demand rendering, server island และ Actions ล้วนต้องมี runtime ที่มีชีวิตเพื่อรัน server code ต่อ request — runtime นั้นคือสิ่งที่ adapter ให้',
   },
   {
     q: 'เว็บที่ deploy ใต้ example.com/docs/ มี CSS และ link คืน 404 หมด สาเหตุที่น่าจะเป็นคือ?',
@@ -107,6 +182,7 @@ export const quizDeploy = [
       'build ล้มเหลวแบบเงียบ ๆ',
     ],
     answer: 1,
+    explain: 'base ที่ไม่ตรงคือสาเหตุคลาสสิกของ asset ที่ 404 ตอน deploy ใต้ subpath — HTML ที่ build แล้วอ้าง path ที่สมมติ base ผิดตัว',
   },
   {
     q: 'Starlight คืออะไร?',
@@ -117,6 +193,7 @@ export const quizDeploy = [
       'Astro adapter',
     ],
     answer: 1,
+    explain: 'Starlight คือ docs framework ทางการที่สร้างบน Astro — sidebar, search, i18n และ dark mode มาในตัว และคอร์สนี้เองก็สร้างด้วย Starlight',
   },
   {
     q: 'ข้อไหนเป็นส่วนหนึ่งของการอัปเกรด Astro 6 → 7 ตามปกติ?',
@@ -127,6 +204,29 @@ export const quizDeploy = [
       'แทนที่ content collection ด้วย `Astro.glob()`',
     ],
     answer: 1,
+    explain: 'การอัปเกรด 6 → 7 ส่วนใหญ่คือลบ flag experimental ที่ stable แล้ว, แก้สิ่งที่ Rust compiler ที่เข้มงวดปฏิเสธ, และทบทวน default whitespace แบบ JSX ใหม่ของ compressHTML',
+  },
+  {
+    q: 'โปรเจกต์ deploy ไป Vercel ด้วย `adapter: vercel()` เพื่อนร่วมทีมบอกว่า "ฉันรัน `astro preview` แล้ว route on-demand ทำงาน เลยพร้อม ship" อะไรคือความจริง พิสูจน์แล้วข้างบน?',
+    options: [
+      'เขาพูดถูก — astro preview ทดสอบ route on-demand ได้เสมอ',
+      '`@astrojs/vercel` ไม่ ship preview entrypoint เลย ดังนั้น astro preview ทำได้แค่ serve ส่วน static เท่านั้น — route on-demand ไม่เคยถูกทดสอบจริงเลย',
+      'astro preview ล้มเหลวทั้งหมดเสมอสำหรับ adapter แบบ on-demand',
+      'astro preview เหมือนกับ Vercel deploy จริงทุกอย่าง',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย exports map จริงของ @astrojs/vercel: ไม่มี preview entrypoint เลย ดังนั้น astro preview รัน route on-demand ให้ไม่ได้ — ใช้ vercel dev หรือ preview deployment จริงเพื่อ verify แทน',
+  },
+  {
+    q: 'deployment guide ที่ AI generate มาแนะนำ `@astrojs/db` ว่าเป็น "embedded database แบบเบา ๆ" npm registry จริงพูดว่าอะไร?',
+    options: [
+      'ยังดูแลอยู่และแนะนำ',
+      'deprecate แล้ว: "Use a database client (Drizzle, Kysely, etc.) directly instead."',
+      'เปลี่ยนชื่อเป็น @astrojs/database',
+      'ต้องมี Astro Studio account แบบเสียเงิน',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนผ่าน npm view @astrojs/db deprecated: ตัว package เองมีประกาศ deprecation จริงที่ชี้ออกจากมัน',
   },
 ];
 

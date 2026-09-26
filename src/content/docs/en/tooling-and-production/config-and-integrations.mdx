@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The config file
 
@@ -48,6 +49,77 @@ npx astro add mdx sitemap
 
 Common official integrations (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework islands), `mdx` (components in Markdown), `sitemap`, and the platform adapters (`cloudflare`, `node`, `vercel`, `netlify`). Note that `@astrojs/rss` is *not* an integration — it's a helper package you import inside an endpoint to generate a feed, so there's no `astro add rss` and it never goes in the `integrations` array.
 
+`astro add` isn't a generic "add any npm package" command — it only knows the integrations it ships a recipe for, listed by the real CLI help on the installed 7.3.5:
+
+```text
+$ npx astro add --help
+  astro add [...integrations] [...adapters]
+   UI Frameworks 
+       react  astro add react
+      preact  astro add preact
+         vue  astro add vue
+      svelte  astro add svelte
+    solid-js  astro add solid-js
+         lit  astro add lit
+    alpinejs  astro add alpinejs
+   Documentation Frameworks 
+   starlight  astro add starlight
+   SSR Adapters 
+     netlify  astro add netlify
+      vercel  astro add vercel
+        deno  astro add deno
+  cloudflare  astro add cloudflare
+        node  astro add node
+   Others 
+    tailwind  astro add tailwind
+         mdx  astro add mdx
+     markdoc  astro add markdoc
+   partytown  astro add partytown
+     sitemap  astro add sitemap
+For more integrations, check out: https://astro.build/integrations
+```
+
+Anything not on that list (a community integration, or a raw Vite plugin) is added by hand: `npm install` it, then push it onto `integrations` (or `vite.plugins`) yourself.
+
+### Integration hooks: what actually runs, and when
+
+An integration is a plain object with a `name` and a `hooks` map — each hook fires at a specific point in Astro's own lifecycle. The two you'll reach for most: `astro:config:setup` (as Astro is resolving config, before anything builds) and `astro:build:done` (after the whole build finishes, with the output directory). Proven with a real, minimal integration and a real build:
+
+```js
+// my-log-integration.mjs
+export default function myLogIntegration() {
+  return {
+    name: 'my-log-integration',
+    hooks: {
+      'astro:config:setup': ({ logger }) => {
+        logger.info('config:setup ran');
+      },
+      'astro:build:done': ({ logger, dir }) => {
+        logger.info(`build:done, output at ${dir}`);
+      },
+    },
+  };
+}
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import myLogIntegration from './my-log-integration.mjs';
+
+export default defineConfig({
+  integrations: [myLogIntegration()],
+});
+```
+
+```text
+$ npx astro build --outDir dist
+[my-log-integration] config:setup ran
+[my-log-integration] build:done, output at file:///.../dist/client/
+```
+
+Both lines are real logger output from the real build — `astro:config:setup` fires once, early, while Astro is still assembling the config (it's where most integrations register Vite plugins or content collections); `astro:build:done` fires once, at the very end, and hands you `dir` — the real output location — which is exactly what an integration that needs to post-process build output (write a manifest, upload assets) waits for.
+
 ## Astro is built on Vite
 
 Under the hood, Astro's dev server and build are powered by **Vite** — Vite 8 since Astro 7, whose default bundler is **Rolldown**, a Rust rewrite that is 10–30× faster than Rollup while keeping the same plugin API. That's why the dev server starts instantly, why HMR is fast, and why you can use most of the Vite/Rollup plugin ecosystem (check a plugin's Vite 8 support when you upgrade). When you need something Astro doesn't expose directly, drop into the `vite` key and configure Vite itself:
@@ -84,6 +156,46 @@ experimental: { advancedRouting: true }      // removed — src/fetch.ts is alwa
 ```
 
 New top-level keys worth knowing: **`compressHTML`** now defaults to `'jsx'` (JSX whitespace rules); **`fetchFile`** relocates or disables the reserved `src/fetch.ts` entrypoint; **`markdown.processor`** lets you swap Sätteri for `unified()` from `@astrojs/markdown-remark`. And one package is gone: **`@astrojs/db`** is no longer maintained — use `node:sqlite`, Drizzle, or a hosted database (Turso, Neon, PlanetScale) instead.
+
+### What's still under `experimental` in 7.3.5
+
+Not everything moved to the top level — some flags are genuinely still experimental. This is the complete, real list, read straight from the installed package's own config schema (`node_modules/astro/dist/core/config/schemas/base.js`), not a blog post that may be stale by the time you read it:
+
+```text
+experimental: {
+  clientPrerender,        // pre-render <a> targets on hover/viewport-entry via speculation rules
+  contentIntellisense,    // editor JSON schemas for content collection frontmatter
+  chromeDevtoolsWorkspace,// wires the dev server into Chrome DevTools' Workspaces feature
+  incrementalBuild,       // only rebuild what changed, for faster repeated builds
+  svgOptimizer,           // hook to run your own optimizer over inlined SVGs
+  collectionStorage,      // 'single-file' | 'chunked' | { type: 'chunked', chunkSize } — content store layout
+}
+```
+
+If a config snippet (yours or AI-generated) sets `experimental.rustCompiler`, `experimental.queuedRendering`, or `experimental.advancedRouting`, it's stale — those three were removed, not renamed, because their behavior is simply always-on now (proven above). Setting an unknown key under `experimental` is a real schema validation error, since the schema above is a `z.strictObject`.
+
+<SpotTheBug code={`// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  experimental: {
+    rustCompiler: true,
+    contentIntellisense: true,
+  },
+});
+`} lang="js">
+`contentIntellisense` is real and still experimental in 7.3.5 — that part is fine. `rustCompiler` isn't: the Rust compiler stopped being optional back when Astro 7 made it the *only* compiler, so the flag was deleted along with the old JS-based one it used to toggle away from. Because `experimental` is validated as a `z.strictObject` (verified in the installed schema), an unrecognized key like this one fails config validation for real — proven with this exact config against a real build:
+
+```text
+[config] Astro found issue(s) with your configuration:
+
+! Invalid or outdated experimental feature.
+  Check for incorrect spelling or outdated Astro version.
+  See https://docs.astro.build/en/reference/experimental-flags/ for a list of all current experiments.
+```
+
+Not a silent no-op — the build refuses to start at all. The fix is simply deleting the `rustCompiler` line.
+</SpotTheBug>
 
 ## Adding Tailwind (the current way)
 
@@ -130,8 +242,38 @@ Both come from the exact same `security.csp` config and carry the exact same gen
 Enabling `security.csp` on a project still using Shiki for syntax highlighting produces a real build warning: *"Shiki syntax highlighting uses inline styles that are not compatible with Content Security Policy (CSP)."* Shiki colors code with per-token inline `style` attributes, which a strict `style-src` blocks unless you add Shiki's own hashes or switch to Prism (`markdown.syntaxHighlight: 'prism'`), which uses CSS classes instead of inline styles.
 </Callout>
 
+## Reading AI-generated code
+
+A generated `astro.config.mjs` — or a whole "here's how to configure Astro" answer — is worth checking against what 7.3.5 actually validates:
+
+- Does it nest anything under `experimental` that isn't in the six real flags proven above (`clientPrerender`, `contentIntellisense`, `chromeDevtoolsWorkspace`, `incrementalBuild`, `svgOptimizer`, `collectionStorage`)? A stale flag from an Astro 4/5 blog post is a real startup error, proven above, not a warning.
+- Does it still nest `cache`, `routeRules`, or `logger` under `experimental`? Those are top-level keys as of Astro 7.
+- Does it add `@astrojs/tailwind` to `integrations`? That's the pre-Tailwind-v4 integration; current Astro uses the `@tailwindcss/vite` Vite plugin instead, installed via `astro add tailwind`.
+- Does it recommend `@astrojs/db` for a database layer? It's deprecated on npm — verified directly: `npm view @astrojs/db deprecated` returns *"This package is deprecated. Use a database client (Drizzle, Kysely, etc.) directly instead."*
+- Does an integration's hook read `dir` (the output directory) inside `astro:config:setup` instead of `astro:build:done`? Proven above: `dir` is only meaningful once the build has actually produced output — `astro:config:setup` runs before anything builds.
+
+## Mental Model
+
+`astro.config.mjs` isn't a flat bag of settings — it's closer to a pipeline description: `integrations` (and `adapter`) are pre-packaged behavior that hooks into specific build lifecycle moments (`astro:config:setup`, `astro:build:done`, …, proven above with a real logging integration), while `vite` is the raw escape hatch underneath all of it. `experimental` is explicitly a temporary, `strictObject`-validated holding area — proven above, an unrecognized key there fails loudly rather than being ignored, precisely so a stale flag from an old tutorial doesn't silently do nothing.
+
+## Trade-offs
+
+| | Official integration (`astro add x`) | Raw Vite plugin (`vite.plugins`) |
+|---|---|---|
+| **Setup** | One command, edits config for you | Manual `npm install` + wire into `vite.plugins` |
+| **Astro-aware** | Yes — can hook `astro:config:setup`, register content collections, etc. | No — plain Vite plugin API only |
+| **Coverage** | UI frameworks, MDX, sitemap, adapters, Tailwind | Anything in the Vite/Rollup-compatible ecosystem |
+| **Version drift risk** | Low — maintained against Astro's own release cadence | Depends on the plugin author tracking Vite 8/Rolldown |
+
+## Common Misconceptions
+
+- **"All `experimental` flags from Astro 4/5 tutorials still apply, just maybe with a warning."** Proven above: an unrecognized `experimental` key is a hard config error on 7.3.5 (`z.strictObject`), not a warning — the build refuses to start.
+- **"`astro add` can install any npm package into the config."** Proven above with the real `--help` output: it only knows a fixed recipe list; anything else is a manual `npm install` plus a manual config edit.
+- **"An integration hook can read the finished `dist/` output as soon as the build starts."** Proven above: `astro:build:done` — not `astro:config:setup` — is the one that fires after output exists, with a real `dir` pointing at it.
+- **"`@astrojs/tailwind` is still the right way to add Tailwind."** It's the pre-v4 integration; current Astro's `astro add tailwind` installs the `@tailwindcss/vite` Vite plugin instead.
+
 <Callout title="The one-line takeaway">
-`astro.config.mjs` configures a project via `defineConfig` — key fields are `site` (deployed URL, needed for absolute URLs), `base` (path prefix), `output`, `adapter`, and `integrations`. **Integrations** (`@astrojs/*`, added with `npx astro add`) extend the build with UI frameworks, MDX, sitemaps, and adapters. Astro runs on **Vite**, so you can drop into the `vite` key for raw plugins — and current Tailwind is a Vite plugin added with `astro add tailwind`, not the legacy `@astrojs/tailwind` integration. In Astro 7 the `cache`, `routeRules`, and `logger` keys are top-level (the `experimental` flags are gone), `compressHTML` defaults to `'jsx'`, and `@astrojs/db` has been removed.
+`astro.config.mjs` configures a project via `defineConfig` — key fields are `site` (deployed URL, needed for absolute URLs), `base` (path prefix), `output`, `adapter`, and `integrations`. **Integrations** (`@astrojs/*`, added with `npx astro add` — a fixed recipe list, proven above, not a generic installer) extend the build by hooking into lifecycle moments like `astro:config:setup` and `astro:build:done` (proven above with a real logging integration). Astro runs on **Vite**, so you can drop into the `vite` key for raw plugins — and current Tailwind is a Vite plugin added with `astro add tailwind`, not the legacy `@astrojs/tailwind` integration. In Astro 7 the `cache`, `routeRules`, and `logger` keys are top-level; what's left under `experimental` is a short, real list (`clientPrerender`, `contentIntellisense`, `chromeDevtoolsWorkspace`, `incrementalBuild`, `svgOptimizer`, `collectionStorage`, proven above) validated strictly — an unrecognized flag is a real startup error, not a silent no-op. `compressHTML` defaults to `'jsx'`, and `@astrojs/db` is npm-deprecated.
 </Callout>
 
 export const quizConfig = [
@@ -144,6 +286,7 @@ export const quizConfig = [
       'Enables TypeScript',
     ],
     answer: 1,
+    explain: 'site declares the real deployed URL; anything that emits an absolute URL (sitemap, canonical tags, RSS) is built from it.',
   },
   {
     q: 'What is the easiest way to add an official integration like React?',
@@ -154,6 +297,7 @@ export const quizConfig = [
       'Import it in every page',
     ],
     answer: 1,
+    explain: 'astro add is a one-command installer for the fixed recipe list it knows (proven above via --help) — it installs the dependency and edits astro.config.mjs for you.',
   },
   {
     q: 'What build tool underpins Astro, and how do you access it directly?',
@@ -164,6 +308,7 @@ export const quizConfig = [
       'You cannot access the underlying tool',
     ],
     answer: 1,
+    explain: 'Astro 7 runs on Vite 8 (Rolldown bundler); the vite key is the escape hatch for raw Vite config and plugins Astro does not expose directly.',
   },
   {
     q: 'What is the current recommended way to add Tailwind to Astro?',
@@ -174,6 +319,7 @@ export const quizConfig = [
       'Tailwind is built in',
     ],
     answer: 1,
+    explain: 'Tailwind v4 ships as a Vite plugin (@tailwindcss/vite); astro add tailwind installs and wires it up. @astrojs/tailwind is the older, pre-v4 integration.',
   },
   {
     q: 'After upgrading to Astro 7 your config still has `experimental: { cache: ... }`. What happens?',
@@ -184,6 +330,29 @@ export const quizConfig = [
       'Astro downgrades to version 6',
     ],
     answer: 1,
+    explain: 'cache, routeRules, and logger moved to top-level keys in Astro 7 — leaving them nested under experimental is a real config error, not a silently-ignored legacy shape.',
+  },
+  {
+    q: '```js\n// astro.config.mjs\nexport default defineConfig({\n  experimental: {\n    rustCompiler: true,\n    contentIntellisense: true,\n  },\n});\n```\nOn the installed astro@7.3.5, what does a real build do with this config?',
+    options: [
+      'Builds normally, ignoring the unknown rustCompiler flag',
+      'Refuses to start: "Invalid or outdated experimental feature" — proven above, because experimental is a strictObject and rustCompiler was removed, not renamed',
+      'Silently disables the Rust compiler',
+      'Only contentIntellisense causes an error, not rustCompiler',
+    ],
+    answer: 1,
+    explain: 'Proven above with a real build: an unrecognized key under the strictObject-validated experimental config is a hard startup error naming the exact problem, not a warning or a silent skip.',
+  },
+  {
+    q: '```js\n// my-log-integration.mjs\nexport default function myLogIntegration() {\n  return {\n    name: \'my-log-integration\',\n    hooks: {\n      \'astro:build:done\': ({ logger, dir }) => {\n        logger.info(`build:done, output at ${dir}`);\n      },\n    },\n  };\n}\n```\nWhen does `astro:build:done` fire, and what does `dir` point to?',
+    options: [
+      'Before the build starts; dir is the source directory',
+      'After the entire build finishes, with dir pointing at the real output directory — proven above with real logger output',
+      'On every file change in dev mode',
+      'It never fires unless an adapter is configured',
+    ],
+    answer: 1,
+    explain: 'Proven above with a real astro build: astro:build:done fires once, at the very end, and dir is the real, already-written output location — useful for post-processing build output.',
   },
 ];
 

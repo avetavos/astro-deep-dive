@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## test สามชั้น
 
@@ -27,8 +28,16 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 เพราะ Astro รันบน Vite **Vitest** จึงเป็น unit-test runner ที่เป็นธรรมชาติ — config เดียวกัน, เริ่มทันที อะไรที่เป็น TypeScript ล้วน (date formatter, filter, Zod schema) ก็ test แบบปกติ:
 
 ```ts
+// src/lib/format.ts
+export function formatDate(d: Date): string {
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+```
+
+```ts
+// src/__tests__/format.test.ts
 import { expect, test } from 'vitest';
-import { formatDate } from '../src/lib/format';
+import { formatDate } from '../lib/format';
 
 test('formatDate renders a friendly date', () => {
   expect(formatDate(new Date('2026-01-15'))).toBe('Jan 15, 2026');
@@ -37,26 +46,64 @@ test('formatDate renders a friendly date', () => {
 
 ## component test ด้วย Container API
 
-เพื่อ test ว่า component `.astro` render HTML ถูกต้อง ใช้ **Astro Container API** — API นี้ render component เป็น string แบบแยกเดี่ยว ไม่ต้องมี browser ตอนนี้เปิดให้ใช้ในชื่อ `experimental_AstroContainer`:
+เพื่อ test ว่า component `.astro` render HTML ถูกต้อง ใช้ **Astro Container API** — API นี้ render component เป็น string แบบแยกเดี่ยว ไม่ต้องมี browser ตอนนี้เปิดให้ใช้ในชื่อ `experimental_AstroContainer` — ยัง experimental จริง ๆ ตามชื่อเป๊ะ ถึงแม้จะเสถียรพอที่ Astro เองแนะนำให้ใช้เป็นวิธี component-test หลัก:
 
 ```ts
+// src/__tests__/card-render.test.ts
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import { expect, test } from 'vitest';
-import Card from '../src/components/Card.astro';
+import Card from '../components/Card.astro';
 
-test('Card renders its title and slotted content', async () => {
+test('Card renders its title and href', async () => {
   const container = await AstroContainer.create();
   const result = await container.renderToString(Card, {
-    props: { title: 'Hello' },
-    slots: { default: 'Body content' },
+    props: { title: 'Hello', href: '/hello' },
   });
 
   expect(result).toContain('Hello');
-  expect(result).toContain('Body content');
+  expect(result).toContain('href="/hello"');
 });
 ```
 
 คุณได้ HTML ที่ render เป็น string แล้ว assert กับ string นั้นได้เลย — เร็ว และ exercise component จริงรวมถึง props และ slot ของตัวเอง
+
+### Container-test island ที่เป็น framework component
+
+type จริงของ `renderToString` รับแค่ `AstroComponentFactory` — component `.astro` ธรรมดา — ไม่ใช่ framework function component ดิบ ๆ (verify ตรง ๆ: ส่ง `Counter.tsx` ตรง ๆ ให้ `renderToString` เป็น `astro check` error จริง `ts(2345): Argument of type '() => Element' is not assignable to parameter of type 'AstroComponentFactory'`) pattern ที่ type-safe และมี doc รองรับ (ตรงจาก Container API reference ของ Astro เอง) คือห่อ island ด้วย component `.astro` บาง ๆ แล้ว test *อันนั้น* แทน:
+
+```astro
+---
+// src/components/CounterWrapper.astro
+import Counter from './Counter.tsx';
+---
+<Counter client:load />
+```
+
+การ render wrapper นั้นยังต้องมี renderer ของ framework เองลงทะเบียนก่อน ผ่าน `getContainerRenderer` — import จาก **subpath ของ package integration ของ framework นั้นเจาะจง** เว็บคอร์สนี้ใช้ Preact เป็น island เลยเป็น `@astrojs/preact/container-renderer` (verify ตรง ๆ จาก `exports` map ของ package ที่ติดตั้งจริง ซึ่งมี `./container-renderer`) — ไม่ใช่ `@astrojs/react/container-renderer` ที่มีอยู่ก็ต่อเมื่อคุณติดตั้ง `@astrojs/react` จริง ๆ:
+
+```ts
+// src/__tests__/counter-island.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { getContainerRenderer } from '@astrojs/preact/container-renderer';
+import { loadRenderers } from 'astro:container';
+import { expect, test } from 'vitest';
+import CounterWrapper from '../components/CounterWrapper.astro';
+
+test('Counter island renders its initial count via the Container API', async () => {
+  const renderers = await loadRenderers([getContainerRenderer()]);
+  const container = await AstroContainer.create({ renderers });
+  const html = await container.renderToString(CounterWrapper);
+  expect(html).toContain('Count: 0');
+});
+```
+
+```text
+$ npx vitest run src/__tests__/counter-island.test.ts
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+```
+
+ถ้าไม่ลงทะเบียน `renderers` Container API ไม่มีทาง render `<Counter client:load />` ที่อยู่ใน wrapper ได้เลย — `loadRenderers` บวก `getContainerRenderer` เฉพาะ framework คือสิ่งที่ทำให้เป็นไปได้ และการห่อด้วยไฟล์ `.astro` จริง (แทนที่จะส่ง `Counter.tsx` ตรง ๆ) คือสิ่งที่ทำให้ type ของ `renderToString` เองพอใจ
 
 ## end-to-end ด้วย Playwright
 
@@ -79,14 +126,103 @@ export const testDiagram = `flowchart LR
   comp["component HTML output"] --> container["Container API test"]
   flow["hydrated flows and navigation"] --> pw["Playwright e2e"]`;
 
+## `astro check`: เช็คอะไร และ exit code
+
+`astro check` type-check ไฟล์ `.astro`, `.ts`, และ `.tsx` ด้วย diagnostic จริงสามระดับ — `error`, `warning`, `hint` — แล้ว print สรุป (`Result (N files): - X error(s) - Y warning(s) - Z hint(s)`) พิสูจน์กับ 7.3.5 ที่ติดตั้งจริง: โปรเจกต์สะอาด exit `0`; โปรเจกต์ที่มีอย่างน้อยหนึ่ง `error` exit `1`:
+
+```text
+$ npx astro check; echo "exit: $?"
+Result (100 files): 
+- 0 errors
+- 0 warnings
+- 3 hints
+exit: 0
+
+# after introducing one real type error:
+$ npx astro check; echo "exit: $?"
+Result (100 files): 
+- 1 error
+- 0 warnings
+- 3 hints
+exit: 1
+```
+
+โดย default **มีแค่ diagnostic ระดับ `error` เท่านั้นที่ทำให้คำสั่งล้มเหลว** — `--minimumFailingSeverity` (default `"error"`) ควบคุม threshold นั้น และตั้งให้เข้มขึ้นเป็น `"warning"` หรือ `"hint"` ได้ถ้าอยากให้ CI ล้มเหลวกับพวกนั้นด้วย นั่นแหละคือเหตุผลที่ `astro check && astro build` คุ้มค่าจะใช้: warning กับ hint จะไม่บล็อก deploy เงียบ ๆ เว้นแต่คุณจะขอให้เข้มขึ้นตรง ๆ
+
+## ESLint สำหรับ Astro
+
+`eslint-plugin-astro` (ปัจจุบัน `3.2.1`, verify ผ่าน `npm view eslint-plugin-astro version`) lint ไฟล์ `.astro` — frontmatter, template, directive และ (ถ้าติดตั้ง `eslint-plugin-jsx-a11y`/`-x` คู่กัน) rule เรื่อง accessibility เป็น flat-config อย่างเดียว และ README ของมันเองบอกว่า *"in the experimental stages of development"* — ควรรู้ไว้ก่อนที่จะเอาไปเป็น CI gate ที่ fail แล้วบล็อกจริง ๆ shape ของ flat config จริงจาก doc ของมันเอง:
+
+```js
+// eslint.config.js
+import eslintPluginAstro from 'eslint-plugin-astro';
+
+export default [
+  ...eslintPluginAstro.configs.recommended,
+  {
+    rules: {
+      // override/add rules here, e.g.:
+      // 'astro/no-set-html-directive': 'error'
+    },
+  },
+];
+```
+
+`configs.recommended` คือ array ที่ spread เข้าไป (flat-config object หลายตัว) ไม่ใช่ object เดียว — snippet ที่ AI generate มาแล้วเขียน `eslintPluginAstro.configs.recommended` โดยไม่ spread `...` จะได้ config array ที่พัง
+
 ## Dev Toolbar
 
 ระหว่าง development Astro แสดง **Dev Toolbar** ที่ด้านล่างของหน้า — toolbar เตือนปัญหา accessibility, แสดงว่า component ไหนเป็น island (และ hydration directive ของตัวเอง) และมี plugin สำหรับ audit และ debug เป็นวิธีที่เร็วที่สุดในการเห็นว่า *อะไรกลายเป็น island จริง ๆ* และจับปัญหา a11y ระหว่างสร้าง Dev Toolbar รันแค่ตอน dev และไม่ส่งขึ้น production
 
-Astro 7 ยังทำให้ dev server เป็นมิตรกับ automation มากขึ้น: รันแบบ **background mode** ได้, ตรวจจับได้ว่ามี **AI coding agent** กำลังขับมันอยู่ และส่ง **log แบบ JSON ที่มีโครงสร้าง** ให้เครื่องมือ (และ agent) อ่าน error ได้โดยไม่ต้อง scrape terminal มีโน้ต API เล็ก ๆ สองข้อสำหรับโค้ดทดสอบ: container renderer ของ framework ตอนนี้ import จาก subpath (`import { getContainerRenderer } from '@astrojs/react/container-renderer'`) และการทดสอบ view transition ควร listen ชื่อ event แบบ string (`'astro:before-swap'`) เพราะค่าคงที่ที่เคย export ถูกถอดออกแล้ว
+Astro 7 ยังทำให้ dev server เป็นมิตรกับ automation มากขึ้น: รันแบบ **background mode** ได้, ตรวจจับได้ว่ามี **AI coding agent** กำลังขับมันอยู่ และส่ง **log แบบ JSON ที่มีโครงสร้าง** ให้เครื่องมือ (และ agent) อ่าน error ได้โดยไม่ต้อง scrape terminal มีโน้ต API เล็ก ๆ สองข้อสำหรับโค้ดทดสอบ: container renderer ของ framework ตอนนี้ import จาก subpath ที่เจาะจงกับ framework ที่คุณติดตั้งจริง (พิสูจน์แล้วข้างบน: `@astrojs/preact/container-renderer` บนโปรเจกต์คอร์สนี้ที่ใช้ Preact) และการทดสอบ view transition ควร listen ชื่อ event แบบ string (`'astro:before-swap'`) เพราะค่าคงที่ที่เคย export ถูกถอดออกแล้ว
+
+## อ่านโค้ดที่ AI เขียน
+
+test snippet ที่ AI generate มาสำหรับโปรเจกต์ Astro ควรเช็คซ้ำ:
+
+- Container API test ส่ง framework component ดิบ ๆ (`.tsx`/`.vue`/`.svelte`) ตรง ๆ ให้ `renderToString` แทนที่จะห่อด้วย component `.astro` บาง ๆ ก่อนหรือเปล่า? พิสูจน์แล้วข้างบน: type จริงของ `renderToString` คือ `(component: AstroComponentFactory, ...)` ดังนั้นส่ง framework component ดิบ ๆ เป็น `astro check` error จริง (`ts(2345)`) ก่อนจะไปถึงเรื่อง renderer เลยด้วยซ้ำ
+- Container API test ข้าม `loadRenderers`/`getContainerRenderer` เวลา render อะไรที่ฝัง island ของ framework ไว้ข้างในหรือเปล่า? พิสูจน์แล้วข้างบนด้วย runtime error จริง: `NoMatchingRenderer: Unable to render 'Counter'. No valid renderer was found for this file extension.` — ไม่ใช่ empty string เงียบ ๆ
+- มันอ้างว่า `experimental_AstroContainer` "จริง ๆ ก็เสถียรแล้ว ชื่อแค่เป็นของเก่าเฉย ๆ" หรือเปล่า? มันยัง experimental จริง ๆ — API เปลี่ยนได้แม้ใน minor version ซึ่งสำคัญถ้าคุณกำลังตัดสินใจว่าจะสร้าง test infrastructure ทับมันมากแค่ไหน
+- CI config ต่อ `astro check` เข้าไปแล้วสมมติว่า warning ไหนก็ทำให้ build ล้มเหลวหรือเปล่า? พิสูจน์แล้วข้างบน: โดย default มีแค่ diagnostic ระดับ `error` เท่านั้นที่ทำให้คำสั่งล้มเหลว (`--minimumFailingSeverity`) โปรเจกต์ที่มี warning เยอะแต่ไม่มี error ยัง exit `0`
+- snippet `eslint.config.js` เขียน `rules: eslintPluginAstro.configs.recommended` (ไม่ spread) แทนที่จะ spread เข้า config array หรือเปล่า? `configs.recommended` เป็น array ของ flat-config object เอง ไม่ใช่ rules map
+
+<SpotTheBug code={`// src/__tests__/badge.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Badge from '../components/Badge.tsx';
+
+test('Badge renders', async () => {
+  const container = await AstroContainer.create();
+  const html = await container.renderToString(Badge, { props: { label: 'New' } });
+  expect(html).toContain('New');
+});
+`} lang="ts">
+มี bug สองอันซ้อนกันอยู่ตรงนี้ อันแรก `Badge.tsx` เป็น framework component (ไฟล์ `.tsx` ไม่ใช่ `.astro`) แต่ `renderToString` ถูก type ให้รับแค่ `AstroComponentFactory` — ส่ง `Badge` ตรง ๆ เป็น `astro check` error จริง `ts(2345): Argument of type '() => Element' is not assignable to parameter of type 'AstroComponentFactory'` พิสูจน์แล้วข้างบนด้วย bug รูปแบบเดียวกันเป๊ะบน `Counter` วิธีแก้ตาม doc คือห่อด้วย component `.astro` บาง ๆ ก่อน (`<Badge {...props} />` ในไฟล์ `.astro` จริง) แล้ว render *อันนั้น* แทน — ตรงกับ pattern `CounterWrapper` ที่โชว์ไว้ข้างบนเป๊ะ อันที่สอง แม้จะผ่านจุดนั้นไปแล้ว: container นี้ถูกสร้างโดยไม่มี `renderers` เลย ดังนั้นพอ framework component ถูกเข้าถึงจริงระหว่าง render มันก็ล้มเหลวจริงตอน runtime ด้วย — พิสูจน์แล้วข้างบนด้วย error ตัวจริง: `NoMatchingRenderer: Unable to render 'Counter'. No valid renderer was found for this file extension.` ทั้งสองปัญหาต้องแก้ด้วยวิธีเดียวกัน: ห่อด้วย `.astro` แล้ว `loadRenderers([getContainerRenderer()])` จาก package ของ framework ที่เจาะจง (`@astrojs/preact/container-renderer` ในกรณีนี้) แล้วส่ง `{ renderers }` ให้ `AstroContainer.create()`
+</SpotTheBug>
+
+## Mental Model
+
+จับคู่ test กับสิ่งที่พังได้จริงในชั้นนั้น pure function ไม่เกี่ยวกับ framework เลย — Vitest ตรง ๆ component `.astro` มี failure mode เดียวคือ "HTML ผิดสำหรับ props/slots พวกนี้" — Container API ตอบตรงนั้นเป๊ะ และ (พิสูจน์แล้วข้างบน) ไม่ต้องมี browser ไม่ต้อง setup เพิ่มเลยสำหรับไฟล์ `.astro` ธรรมดา แต่ต้องมี renderer ลงทะเบียนทันทีที่ component ไม่ใช่ `.astro` แล้ว Hydration — สิ่งเดียวที่สองชั้นนั้นทดสอบไม่ได้เลย เพราะไม่มีชั้นไหนรัน client JavaScript จริง — คือเหตุผลทั้งหมดที่ Playwright มีอยู่ เลือกชั้นที่ถูกที่สุดที่ยังสังเกตความล้มเหลวที่คุณกังวลได้จริง
+
+## ข้อแลกเปลี่ยน
+
+| | Vitest (unit) | Container API (component) | Playwright (e2e) |
+|---|---|---|---|
+| **ต้องมี browser ไหม** | ไม่ | ไม่ | ต้องมี |
+| **รัน JavaScript ของ island ไหม** | ไม่ | ไม่ | รัน |
+| **ความเร็ว** | เร็วที่สุด | เร็ว | ช้าที่สุด |
+| **จับอะไร** | bug ใน logic | HTML ผิดสำหรับ props/slots ที่ให้ | hydration, navigation, user flow จริง |
+| **ความเสถียรของ API เอง** | เสถียร | `experimental_AstroContainer` — พิสูจน์แล้วข้างบน ยัง experimental จริง | เสถียร |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"Container API test พิสูจน์ว่า island interactive"** มันพิสูจน์แค่ว่า HTML *เริ่มต้น* ถูกต้อง — พิสูจน์แล้วข้างบน `Counter` render `Count: 0` แต่ไม่มีตรงไหนใน test นั้นคลิกปุ่มหรือรันโค้ด `preact/hooks` เลย นั่นเป็นงานของ Playwright
+- **"import `getContainerRenderer` ของ framework ไหนก็ใช้ได้กับทุกโปรเจกต์"** พิสูจน์แล้วข้างบน: subpath ผูกกับ package `@astrojs/<framework>` ที่ติดตั้งจริงเท่านั้น — `@astrojs/react/container-renderer` ไม่มีอยู่จริง (และ import ไม่ได้) บนโปรเจกต์ที่ใช้ Preact อย่างเดียว
+- **"`astro check` ล้มเหลวใน CI แปลว่ามี type error"** พิสูจน์แล้วข้างบน: โดย default มีแค่ diagnostic ระดับ `error` เท่านั้นที่ทำให้คำสั่งล้มเหลว โปรเจกต์ที่เต็มไปด้วย warning กับ hint ยัง exit `0` เว้นแต่จะตั้ง `--minimumFailingSeverity` ให้เข้มขึ้น
+- **"`experimental_AstroContainer` ก็แค่ API ที่ตั้งชื่อแปลก ๆ แต่จริง ๆ เสถียรแล้ว"** มันเป็นเรื่องจริง: การตั้งชื่อของ Astro เองบอกว่า experimental หมายความว่า shape ของมันยังเปลี่ยนได้ข้าม minor version — ควรจดไว้ถ้าทีมกำลังลงทุนสร้าง test infrastructure ทับ Container API หนัก ๆ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-test เว็บ Astro ที่สามชั้น: **Vitest** สำหรับ logic ล้วน, **Astro Container API** (`experimental_AstroContainer`, `renderToString`) สำหรับ assert HTML ที่ component render แบบแยกเดี่ยว และ **Playwright** สำหรับ end-to-end flow ที่ต้องมี hydration และ navigation จริง Container test ไม่รัน island ดังนั้นพฤติกรรม interactive อยู่ที่ Playwright **Dev Toolbar** (เฉพาะ dev) ช่วยให้เห็นว่า component ไหนกลายเป็น island และจับปัญหา accessibility ระหว่างสร้าง
+test เว็บ Astro ที่สามชั้น: **Vitest** สำหรับ logic ล้วน, **Astro Container API** (`experimental_AstroContainer`, `renderToString` — ยัง experimental จริง) สำหรับ assert HTML ที่ component render แบบแยกเดี่ยว และ **Playwright** สำหรับ end-to-end flow ที่ต้องมี hydration และ navigation จริง island ของ framework ต้องมี `loadRenderers([getContainerRenderer()])` ก่อน — พิสูจน์แล้วข้างบนด้วย test จริงที่ผ่าน และ subpath (`@astrojs/preact/container-renderer` ที่นี่) เจาะจงกับ framework ที่ติดตั้งจริง ไม่ใช่ import แบบ generic `astro check` type-check `.astro`/`.ts`/`.tsx` สามระดับ และ exit `1` ก็ต่อเมื่อมี diagnostic ระดับ `error` เท่านั้นโดย default (`--minimumFailingSeverity`) พิสูจน์แล้วข้างบนด้วย exit code จริง — ต่อ `astro check && astro build` ไว้ เพื่อให้ type error จริง ไม่ใช่ warning เป็นตัวบล็อก deploy `eslint-plugin-astro` (`3.2.1` ยังติดป้าย experimental) lint ไฟล์ `.astro` ผ่าน flat config (`...eslintPluginAstro.configs.recommended` ต้อง spread — มันคือ array ไม่ใช่ object) **Dev Toolbar** (เฉพาะ dev) ช่วยให้เห็นว่า component ไหนกลายเป็น island และจับปัญหา accessibility ระหว่างสร้าง
 </Callout>
 
 export const quizTesting = [
@@ -99,6 +235,7 @@ export const quizTesting = [
       'Dev Toolbar',
     ],
     answer: 1,
+    explain: 'Container API render component เป็น string โดยไม่ต้องมี browser เลย — พิสูจน์แล้วข้างบนด้วย test ของ Card และ Counter ที่ผ่านจริง',
   },
   {
     q: 'ทำไมต้องมี Playwright เพิ่มจาก Container API test?',
@@ -109,6 +246,7 @@ export const quizTesting = [
       'ไม่ต้อง — Container test ครอบคลุมทุกอย่าง',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: Container API test ของ Counter เช็ค HTML เริ่มต้น (Count: 0) แต่ไม่เคยคลิกปุ่มเลย — การคลิกต้องมี hydration จริง ซึ่งมีแค่ Playwright เท่านั้นที่ขับได้',
   },
   {
     q: 'unit-test runner ที่เป็นธรรมชาติของโปรเจกต์ Astro คืออะไร และทำไม?',
@@ -119,6 +257,7 @@ export const quizTesting = [
       'Astro ไม่มี unit testing',
     ],
     answer: 1,
+    explain: 'Vitest ใช้ Vite config เดียวกับ Astro เองและเริ่มทันที นั่นคือเหตุผลที่มันเป็นตัวเลือกที่เป็นธรรมชาติ แทนที่จะต้อง config runner แยก',
   },
   {
     q: 'Astro Dev Toolbar ช่วยเรื่องอะไร?',
@@ -129,6 +268,29 @@ export const quizTesting = [
       'format code',
     ],
     answer: 1,
+    explain: 'มันเป็น tool เฉพาะ dev สำหรับดูว่า component ไหนกลายเป็น island จริง ๆ และจับปัญหา accessibility ระหว่างสร้าง ไม่เคยส่งขึ้น production เลย',
+  },
+  {
+    q: '```ts\nimport { getContainerRenderer } from \'@astrojs/preact/container-renderer\';\nimport { loadRenderers } from \'astro:container\';\nconst renderers = await loadRenderers([getContainerRenderer()]);\nconst container = await AstroContainer.create({ renderers });\nconst html = await container.renderToString(CounterWrapper); // renders <Counter client:load />\nexpect(html).toContain(\'Count: 0\');\n```\ntest นี้ผ่านจริง การลงทะเบียน `renderers` เปิดใช้อะไรจริง ๆ?',
+    options: [
+      'ไม่มีอะไร — Container API render component ไหนก็เหมือนกันหมด',
+      'render island Preact `<Counter />` ที่ฝังอยู่ใน wrapper .astro ได้ — ถ้าไม่มี renderer ที่ match Container API render framework component ไม่ได้เลย',
+      'ทำให้ปุ่มคลิกได้ใน test',
+      'จำเป็นแค่กับ component .astro เท่านั้น ไม่ใช่ของ framework',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: Container API ต้องมี renderer เฉพาะ framework (ผ่าน getContainerRenderer + loadRenderers) เพื่อ render framework component อย่าง Counter — แม้จะฝังอยู่ใน wrapper .astro ธรรมดา ก็จะไม่มี renderer ที่ match มันอยู่ดี',
+  },
+  {
+    q: '```text\n$ npx astro check; echo "exit: $?"\nResult (100 files): \n- 0 errors\n- 0 warnings\n- 3 hints\nexit: 0\n```\nรันครั้งถัดมา report 1 error, 0 warnings, 3 hints exit code คืออะไร โดย default?',
+    options: [
+      '0 — hint กับ warning และ error เดียวก็ยังผ่าน',
+      '1 — โดย default มีแค่ diagnostic ระดับ error เท่านั้นที่ทำให้ astro check ล้มเหลว (--minimumFailingSeverity default เป็น "error")',
+      'ขึ้นกับว่ามี hint กี่ตัว',
+      'astro check ไม่เคยตั้ง exit code ที่ไม่ใช่ศูนย์',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย exit code จริง: รันที่มี 0 error exit 0 ไม่ว่าจะมี hint กี่ตัว และรันที่มี 1 error exit 1 — threshold ที่ทำให้ล้มเหลว default คือระดับ error เจาะจง',
   },
 ];
 

@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem: shipping a framework to render text
 
@@ -57,14 +58,122 @@ const posts = await getPosts();
 
 The result is pages that are fast by construction: the browser gets HTML it can paint immediately, and downloads JavaScript only for the islands you explicitly opted into.
 
+## Proof: what a build actually ships
+
+"Zero JS by default" is a checkable claim, not a slogan — build two pages side by side and read `dist/`. First, a page with **zero islands** (a plain list, server-rendered):
+
+```astro
+---
+// src/pages/zero-js.astro
+const posts = [{ title: 'One' }, { title: 'Two' }];
+---
+<html><body>
+<ul>{posts.map((p) => <li>{p.title}</li>)}</ul>
+</body></html>
+```
+
+Second, the same shell with **one island** — a Preact counter hydrated with `client:visible`:
+
+```tsx
+// src/components/Counter.tsx
+import { useState } from 'preact/hooks';
+
+export default function Counter() {
+  const [n, setN] = useState(0);
+  return <button onClick={() => setN(n + 1)}>Count: {n}</button>;
+}
+```
+
+```astro
+---
+// src/pages/one-island.astro
+import Counter from '../components/Counter.tsx';
+---
+<html><body>
+<Counter client:visible />
+</body></html>
+```
+
+A real `astro build` of both, then the real output tree:
+
+```text
+$ npx astro build --outDir dist
+$ find dist/client -type f | sort
+_astro/Counter.D0Rq_C0J.js
+_astro/client.CYoOuZrL.js
+_astro/hooks.module.C-rKEPwH.js
+_astro/preact.module.Bl7PEaKa.js
+_astro/signals.module.r9f66GF9.js
+favicon.ico
+favicon.svg
+index.html
+one-island/index.html
+zero-js/index.html
+
+$ grep -o '<script[^>]*>' dist/client/zero-js/index.html
+(no output — no <script> tag at all)
+
+$ grep -o '<script[^>]*>' dist/client/one-island/index.html
+<script>
+<script>
+```
+
+`zero-js/index.html` ships no `_astro/*.js` chunk and no `<script>` tag — it's HTML, full stop. Adding exactly one island (`one-island.astro`) is what pulls in the Preact runtime, the island's own component chunk, and the client hydration bootstrap — five JS files for the whole site, and every one of them traces back to that single `client:visible`. Delete the island and the JS disappears with it; nothing else on the page pays for it.
+
+## Reading AI-generated code
+
+A generated Astro snippet often carries assumptions from React/Vue tutorials that don't hold here. Check for:
+
+- Does a component use `useState`, `useEffect`, or any hook at the top level of the `.astro` frontmatter? Hooks only run inside a *hydrated framework component* (an island) — in a `.astro` file's server-only script they're either a hard error (wrong import) or dead code that never runs client-side.
+- Is a client directive (`client:load`, `client:visible`, …) present on every component the generated code expects to be interactive? A framework component (`.tsx`/`.vue`/`.svelte`) embedded in Astro with **no** directive renders its static markup only — its event handlers are silently dropped, not "just not hydrated yet."
+- Does the explanation claim "Astro hydrates the whole page"? It doesn't — only components explicitly marked as islands hydrate; everything else stays static HTML forever, proven above.
+- Is an `onClick`/`onSubmit` attached to a plain `.astro` template element (not inside an island)? That handler is server-side dead code — it's stripped, because `.astro` templates never ship their own client JavaScript.
+
+<SpotTheBug code={`// src/components/LikeButton.tsx (a Preact component)
+import { useState } from 'preact/hooks';
+
+export default function LikeButton() {
+  const [liked, setLiked] = useState(false);
+  return <button onClick={() => setLiked(!liked)}>{liked ? 'Liked' : 'Like'}</button>;
+}
+
+// --- used with no client directive: ---
+// src/pages/index.astro
+// <LikeButton />
+`} lang="tsx">
+No client directive is set on `<LikeButton />`, so Astro renders it once on the server and ships **only** the resulting static `<button>Like</button>` HTML — the `useState` hook and the `onClick` handler never reach the browser at all. Clicking the button does nothing; there's no JavaScript listening. The fix is one attribute: `<LikeButton client:visible />` (or `client:load`/`client:idle`), which tells Astro to also ship this component's JS and hydrate it — proven above, hydrating an otherwise-static page is exactly what pulled in the five `_astro/*.js` files.
+</SpotTheBug>
+
+## Mental Model
+
+An Astro page starts as HTML with the interactivity surgically removed, not a JavaScript app with the HTML added back. Every component defaults to "printed and done"; you have to explicitly say "keep this one alive in the browser" with a client directive. That inversion — opt-in JS instead of opt-out — is the entire mechanism behind the build proof above.
+
+## Trade-offs
+
+| | Islands (Astro) | Full SPA |
+|---|---|---|
+| **JS shipped for a static section** | None | The whole app bundle, even for a footer |
+| **Interactivity granularity** | Per-component, opt-in | All-or-nothing, on by default |
+| **Time-to-interactive for content pages** | Fast — HTML paints immediately | Slower — framework must boot first |
+| **Best fit** | Content-driven sites with pockets of interactivity | App-like UIs where nearly everything is stateful |
+| **Cost of a highly-interactive page** | Large islands start to defeat the purpose | This is the framework's home turf |
+
+## Common Misconceptions
+
+- **"Astro hydrates the whole page, just efficiently."** No — proven above: a page with zero islands ships zero `_astro/*.js` files and no `<script>` tag. Nothing hydrates unless a component is explicitly marked as an island.
+- **"A framework component (`.tsx`) is automatically interactive because it's React/Preact."** It renders to static HTML like anything else unless it carries a client directive — see the `LikeButton` bug above.
+- **"Islands architecture means every page has some JavaScript."** A page can have zero islands and ship zero JavaScript, as proven by `zero-js/index.html` above — islands are opt-in per component, not a guaranteed baseline.
+
 ## When Astro is (and isn't) the right tool
 
 Astro shines for **content-driven sites**: blogs, documentation, marketing, portfolios, e-commerce, anything where most of the page is content and interactivity is localized.
 
 It's a weaker fit for **highly interactive app-like UIs** — a figma-style editor, a trading dashboard, a realtime collaborative tool — where nearly everything is stateful and interactive. There, a full SPA framework (or Astro with very large islands, which defeats the purpose) makes more sense. Astro even lets you embed those framework components as islands when you need them.
 
+The next lesson in [Islands](/astro/en/islands/client-directives/) covers the directives (`client:load`, `client:visible`, `client:idle`, …) that turn a component into an island — this lesson only proved *that* the opt-in exists; that one covers *which* directive to reach for.
+
 <Callout title="The one-line takeaway">
-Astro renders pages to static HTML and ships **zero JavaScript by default**; interactivity is added deliberately as **islands** — small, isolated, individually-hydrated components in an otherwise static page. That makes content sites fast by construction (paint HTML immediately, download JS only for the few interactive pieces). It's the right tool for content-driven sites, and a weaker fit for fully app-like, everything-is-interactive UIs.
+Astro renders pages to static HTML and ships **zero JavaScript by default**; interactivity is added deliberately as **islands** — small, isolated, individually-hydrated components in an otherwise static page. Proven above: a zero-island page ships zero `_astro/*.js` chunks and no `<script>` tag, while adding one `client:visible` component pulls in exactly the JS that component needs and nothing else. That makes content sites fast by construction. It's the right tool for content-driven sites, and a weaker fit for fully app-like, everything-is-interactive UIs.
 </Callout>
 
 export const quizWhy = [
@@ -77,6 +186,7 @@ export const quizWhy = [
       'It only works offline',
     ],
     answer: 1,
+    explain: 'A client-rendered SPA ships a framework bundle and re-renders on the client work that could have been sent as static HTML — that costs first paint and delays interactivity, the exact cost islands avoid.',
   },
   {
     q: 'What are the two defining properties of an island?',
@@ -87,6 +197,7 @@ export const quizWhy = [
       'Encrypted and compressed',
     ],
     answer: 1,
+    explain: 'Isolated means each island hydrates on its own without blocking others; opt-in means nothing ships client JS unless you mark it with a directive — proven above with the zero-island build.',
   },
   {
     q: 'By default, how much JavaScript does an Astro component ship?',
@@ -97,6 +208,7 @@ export const quizWhy = [
       'Only the event handlers',
     ],
     answer: 1,
+    explain: 'Proven above: dist/client/zero-js/index.html has no <script> tag and no _astro/*.js chunk — zero JS is the real, checkable default, not a marketing line.',
   },
   {
     q: 'Which project is the WEAKEST fit for Astro?',
@@ -107,6 +219,29 @@ export const quizWhy = [
       'A blog',
     ],
     answer: 2,
+    explain: 'When nearly every pixel is stateful and interactive, islands stop paying off — you would end up with one enormous island, which is just a SPA with extra steps.',
+  },
+  {
+    q: '```tsx\n// src/components/LikeButton.tsx, a Preact component\nimport { useState } from \'preact/hooks\';\nexport default function LikeButton() {\n  const [liked, setLiked] = useState(false);\n  return <button onClick={() => setLiked(!liked)}>{liked ? \'Liked\' : \'Like\'}</button>;\n}\n// used in a page as <LikeButton /> — no client directive\n```\nWhat actually ships to the browser?',
+    options: [
+      'The full interactive button, because it is a framework component',
+      'Only the static rendered `<button>Like</button>` HTML — no JS, so clicking it does nothing',
+      'A build error, because useState requires a directive',
+      'The component is skipped entirely and renders nothing',
+    ],
+    answer: 1,
+    explain: 'Proven above (SpotTheBug): with no client directive, Astro renders LikeButton once on the server and ships only the resulting static HTML. useState and the onClick handler never reach the browser — add client:visible (or client:load/client:idle) to hydrate it.',
+  },
+  {
+    q: '```text\n$ find dist/client -type f | sort\nfavicon.ico\nfavicon.svg\nindex.html\nzero-js/index.html\n```\nA build produced only these files for a page with zero islands. What does the absence of any `_astro/*.js` file confirm?',
+    options: [
+      'The build failed',
+      'Zero JavaScript shipped for that page — there is nothing to hydrate, matching the zero-island claim',
+      'The page has no CSS',
+      'JavaScript was minified to zero bytes but still present',
+    ],
+    answer: 1,
+    explain: 'No _astro/*.js chunk in the output means no client bundle was generated at all for that route — the strongest possible proof that "zero JS by default" is literal, not approximate.',
   },
 ];
 

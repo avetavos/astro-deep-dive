@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## TypeScript is built in
 
@@ -61,20 +62,100 @@ export const typesDiagram = `flowchart LR
 
 These types live in a generated `.astro/` folder that Astro maintains for you (refreshed by the dev server and by `astro sync`). You never edit them; you just get autocomplete and safety for free from the schema you already wrote.
 
-## Typing Astro.locals
+### `astro sync` and what actually lands in `.astro/`
 
-When you use middleware to attach request-scoped data (like the current user) to `Astro.locals`, you type it by declaring the `App.Locals` interface, usually in `src/env.d.ts`:
+`astro sync` (also run implicitly by `astro dev`/`astro check`/`astro build`) reads your collection configs and writes real, checkable TypeScript — not just declarations of intent. Proven directly against a real `astro sync`, the generated `.astro/content.d.ts` for this course's fixed probe collections (`blog`, `authors`) contains the real `CollectionEntry`/`InferEntrySchema` machinery:
+
+```ts
+// .astro/content.d.ts (generated — never hand-edit)
+export type CollectionEntry<C extends CollectionKey> = Flatten<DataEntryMap[C]>;
+// ...
+type InferEntrySchema<C extends keyof DataEntryMap> = import('astro/zod').infer<
+  ContentConfig['collections'][C]['schema']
+>;
+```
+
+Two names worth knowing by sight: **`CollectionEntry<'blog'>`** is the type of one full entry (id, collection name, and `data`); **`InferEntrySchema<'blog'>`** is just the `data` shape on its own, inferred straight from the Zod schema (useful when a helper function only needs the frontmatter shape, not the whole entry wrapper):
+
+```ts
+import type { CollectionEntry } from 'astro:content';
+
+function renderTitle(entry: CollectionEntry<'blog'>) {
+  return entry.data.title;   // typed as string, straight from the schema
+}
+```
+
+Before `astro sync` has ever run, `astro/types/content.d.ts` ships a static fallback (`export type CollectionEntry<C> = any;`) so the project still compiles — but that fallback is untyped by design, which is exactly why `astro check`/`astro build` run `sync` first rather than trusting whatever `.astro/` happened to contain already.
+
+## Typing `Astro.locals` with `App.Locals`
+
+When you use middleware to attach request-scoped data (like the current user) to `Astro.locals`, you type it by declaring the `App.Locals` interface, usually in `src/env.d.ts`. Ambient declarations like this aren't scoped to one file in a real project — every `.ts`/`.astro` file sees the same merged `App.Locals` — so this course uses **one single shape everywhere it's shown**, matching the [middleware & sessions](/astro/en/server-side/middleware-and-sessions/) lesson exactly:
 
 ```ts
 // src/env.d.ts
+type User = { id: string; name: string };
+
 declare namespace App {
   interface Locals {
-    user: { id: string; name: string } | null;
+    user: User | null;
+    requestId: string;
   }
 }
 ```
 
-Now `Astro.locals.user` is typed everywhere — in middleware, pages, and endpoints.
+Now `Astro.locals.user` and `Astro.locals.requestId` are typed everywhere — in middleware, pages, and endpoints.
+
+## Typed `Astro.params`/`Astro.props` from `getStaticPaths`
+
+A dynamic route's `getStaticPaths` returns `{ params, props }` per generated page, and `InferGetStaticPropsType` (verified in `astro/dist/types/public/common.d.ts`) recovers the exact `props` type from the function itself, instead of retyping it by hand:
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import type { InferGetStaticPropsType } from 'astro';
+
+export async function getStaticPaths() {
+  return [
+    { params: { slug: 'hello-world' }, props: { title: 'Hello World', views: 42 } },
+  ];
+}
+
+type Props = InferGetStaticPropsType<typeof getStaticPaths>;
+const { title, views } = Astro.props;   // title: string, views: number — inferred, not retyped by hand
+const { slug } = Astro.params;          // slug is typed from the route's own [slug] segment
+---
+<h1>{title} ({views} views) — /{slug}</h1>
+```
+
+## `astro:env` typed vars
+
+Declaring a schema under the `env` config key (stable, not under `experimental` — verified against the installed schema) makes Astro generate real, named exports for `astro:env/client` and `astro:env/server` — not a generic `Record<string, string>`. Proven with a real `astro sync` against this exact config:
+
+```js
+// astro.config.mjs
+import { defineConfig, envField } from 'astro/config';
+
+export default defineConfig({
+  env: {
+    schema: {
+      API_URL: envField.string({ context: 'client', access: 'public' }),
+      API_SECRET: envField.string({ context: 'server', access: 'secret' }),
+    },
+  },
+});
+```
+
+```ts
+// .astro/env.d.ts (generated — never hand-edit)
+declare module 'astro:env/client' {
+	export const API_URL: string;
+}
+declare module 'astro:env/server' {
+	export const API_SECRET: string;
+}
+```
+
+`API_URL` is importable from `astro:env/client` (and, being `context: 'client'`, safe in browser code); `API_SECRET` only exists on `astro:env/server` — importing it from a client-run module is a real module-resolution error, by construction, not a runtime leak like an unprefixed `.env` var can be.
 
 ## Type-checking with astro check
 
@@ -88,8 +169,48 @@ Editors type-check as you go, but `.astro` files aren't checked by `tsc`. The co
 }
 ```
 
+## Reading AI-generated code
+
+A generated `.astro`/`env.d.ts`/`astro:env` snippet is worth checking against the real generated types:
+
+- Does it declare `App.Locals` differently in more than one file of the same project (e.g. one file says `user: { id: string }`, another says `user: SomeOtherShape`)? Ambient declarations merge project-wide — proven above, this course deliberately uses one identical shape everywhere `App.Locals` is shown, specifically to avoid that clash.
+- Does it hand-write a type for `getCollection('blog')`'s return value instead of using `CollectionEntry<'blog'>`? The generated type (proven above, from real `.astro/content.d.ts`) is already there, and a hand-written duplicate drifts the moment the schema changes.
+- Does it import from `astro:env/client` inside a file that also imports something server-only, or the reverse? `astro:env/client` and `astro:env/server` are two separate virtual modules by design (proven above) — a secret declared `context: 'server'` simply doesn't exist on the client module, so importing it there is a real module-resolution error, not a runtime leak to catch later.
+- Does it claim `astro/tsconfigs/base` is the strict/recommended option? `strict` or `strictest` are the ones that actually catch bugs; `base` is the loosest of the three.
+- Does a `getStaticPaths` page retype its own `props` shape by hand instead of `InferGetStaticPropsType<typeof getStaticPaths>`? The hand-written version can drift silently from what `getStaticPaths` actually returns; the inferred one can't.
+
+<SpotTheBug code={`// src/env.d.ts
+declare namespace App {
+  interface Locals {
+    user: { id: string; role: string } | null;
+  }
+}
+`}>
+This project already has `src/env.d.ts` declaring `App.Locals` with `user: User | null; requestId: string` (shown earlier in this lesson, matching the middleware & sessions lesson). Adding a *second* `declare namespace App { interface Locals { user: ...} }` with a differently-shaped `user` (here, `{ id: string; role: string }` instead of `{ id: string; name: string }`) does not override the first — TypeScript merges same-named declarations project-wide, and two incompatible declared types for the identical property `user` on the identical merged interface is a real conflict at the type level (a "subsequent property declarations must have the same type" error). Ambient global declarations aren't file-scoped the way an import is; there's exactly one `App.Locals` per project, however many files contribute to it.
+</SpotTheBug>
+
+## Mental Model
+
+Astro's typing story has one running theme: don't hand-write a type that could instead be *generated* from something you already wrote once (a Zod schema, a `getStaticPaths` return, an `env.schema`). `CollectionEntry`, `InferEntrySchema`, and `InferGetStaticPropsType` are all the same move — point a type helper at the real source of truth instead of copying its shape by hand, so a change to the schema is a change to the types automatically, with no second file to remember to update.
+
+## Trade-offs
+
+| | Hand-written type | Astro-generated / inferred type |
+|---|---|---|
+| **Source of truth** | Wherever you copied it from | The schema/function itself |
+| **Drifts when the schema changes?** | Yes — silently, until something breaks | No — the type updates with it |
+| **Setup** | None | `astro sync` (automatic in dev/build/check) |
+| **Best for** | Data that genuinely isn't schema-derived | Content collections, `getStaticPaths` props, `astro:env` |
+
+## Common Misconceptions
+
+- **"Each lesson/file can declare its own version of `App.Locals`."** Proven above: ambient declarations merge project-wide, and two files declaring incompatible types for the same property is a real conflict, not an override.
+- **"`CollectionEntry<'blog'>` is just documentation of the shape, not a real generated type."** Proven above by reading the actual generated `.astro/content.d.ts`: it's real, checkable TypeScript, generated fresh from the Zod schema by `astro sync`.
+- **"`astro:env/client` and `astro:env/server` are the same module, just organized by convention."** They're separate virtual modules (proven above with the real generated `.astro/env.d.ts`) — a `context: 'server'` var genuinely does not exist on the client one.
+- **"TypeScript preset choice (`base`/`strict`/`strictest`) barely matters."** `base` is deliberately the loosest of the three; `strict`/`strictest` turn on the checks that catch real bugs — proven by their names being an actual escalation, not marketing labels.
+
 <Callout title="The one-line takeaway">
-Astro has **built-in TypeScript** (extend `astro/tsconfigs/strict`). Type component props with a `Props` interface, and type request data on `Astro.locals` via the `App.Locals` interface. The standout feature: Astro **generates types from your content Zod schemas**, so `getCollection`/`getEntry` return fully-typed entries with autocomplete and errors on wrong field access. Run **`astro check`** (ideally as `astro check && astro build`) to type-check `.astro` files and block broken builds.
+Astro has **built-in TypeScript** (extend `astro/tsconfigs/strict` or `strictest` — `base` is the loosest of the three). Type component props with a `Props` interface, and type request data on `Astro.locals` via **one single, project-wide** `App.Locals` interface (ambient declarations merge globally — proven above, an incompatible second declaration is a real conflict, not an override). The standout feature: Astro **generates types from your content Zod schemas** (`CollectionEntry`, `InferEntrySchema`, proven above straight from the real generated `.astro/content.d.ts`), so `getCollection`/`getEntry` return fully-typed entries. `InferGetStaticPropsType<typeof getStaticPaths>` does the same for a dynamic route's props, and a declared `env.schema` generates real named exports for `astro:env/client`/`astro:env/server` (proven above) instead of an untyped bag of strings. Run **`astro check`** (ideally as `astro check && astro build`) to type-check `.astro` files and block broken builds.
 </Callout>
 
 export const quizTypes = [
@@ -102,6 +223,7 @@ export const quizTypes = [
       'In a separate .d.ts per component',
     ],
     answer: 1,
+    explain: 'A Props interface in the frontmatter is what astro check validates every call site of that component against.',
   },
   {
     q: 'Where do the types for `getCollection(\'blog\')` come from?',
@@ -112,6 +234,7 @@ export const quizTypes = [
       'They are always `any`',
     ],
     answer: 1,
+    explain: 'Proven above by reading the real generated .astro/content.d.ts: CollectionEntry and InferEntrySchema are generated straight from the Zod schema, not hand-maintained.',
   },
   {
     q: 'How do you type data attached to `Astro.locals` (e.g. by middleware)?',
@@ -122,6 +245,7 @@ export const quizTypes = [
       'Pass it as a prop everywhere',
     ],
     answer: 1,
+    explain: 'App.Locals is the ambient interface that types Astro.locals project-wide — but proven above, it is exactly one merged interface, not one per file.',
   },
   {
     q: 'What does `astro check` do?',
@@ -132,6 +256,29 @@ export const quizTypes = [
       'Deploys the site',
     ],
     answer: 1,
+    explain: 'astro check is the tool that actually type-checks .astro files (tsc alone does not) — wiring it before astro build blocks a deploy on a real type error.',
+  },
+  {
+    q: '```ts\n// src/env.d.ts (already exists, elsewhere in this project)\ntype User = { id: string; name: string };\ndeclare namespace App {\n  interface Locals {\n    user: User | null;\n    requestId: string;\n  }\n}\n```\nA second file adds:\n```ts\ndeclare namespace App {\n  interface Locals {\n    user: { id: string; role: string } | null;\n  }\n}\n```\nWhat happens?',
+    options: [
+      'The second declaration silently overrides the first',
+      'A real type conflict — TypeScript merges both declarations project-wide, and the two incompatible types for `user` collide',
+      'Astro picks whichever file was edited most recently',
+      'Nothing — App.Locals is scoped per file',
+    ],
+    answer: 1,
+    explain: 'Proven above: ambient namespace/interface declarations merge across the whole project. Two files declaring different types for the identical Locals.user property is a real compile-time conflict, not an override — which is why this course uses one identical shape everywhere.',
+  },
+  {
+    q: '```js\n// astro.config.mjs\nexport default defineConfig({\n  env: {\n    schema: {\n      API_URL: envField.string({ context: \'client\', access: \'public\' }),\n      API_SECRET: envField.string({ context: \'server\', access: \'secret\' }),\n    },\n  },\n});\n```\nAfter `astro sync`, what does the generated `.astro/env.d.ts` actually contain?',
+    options: [
+      'A single generic Record<string, string> for all env vars',
+      'Two separate virtual modules, astro:env/client (only API_URL) and astro:env/server (only API_SECRET), each with real named exports',
+      'Nothing until you write the .d.ts by hand',
+      'Both variables available from both modules',
+    ],
+    answer: 1,
+    explain: 'Proven above with the real generated file: astro:env/client and astro:env/server are separate modules with named, typed exports matching each var\'s declared context — a server-only var is not importable from the client module at all.',
   },
 ];
 

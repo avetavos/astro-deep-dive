@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Component คือ function ที่ render บน server
 
@@ -38,6 +39,102 @@ import Card from '../components/Card.astro';
 ```
 
 props เข้ามาผ่าน **`Astro.props`** และคุณกำหนด type ของ props ด้วยการประกาศ interface `Props` ใน frontmatter — Astro ใช้ interface นี้ type-check การใช้งาน ที่นี่ไม่มี `useState` component รันครั้งเดียวเพื่อผลิต HTML
+
+ลืม prop ที่จำเป็นไปเป็น type error จริงที่เช็คได้ — ไม่ใช่เรื่องเซอร์ไพรส์ตอน runtime พิสูจน์ด้วย `astro check` จริงกับ `Card` component ตัวเดียวกันข้างบน เรียกโดยมีแค่ `title`:
+
+```astro
+---
+// @expect-error deliberately omits the required `href` prop, proven below
+import Card from '../components/Card.astro';
+---
+<Card title="Hello" />
+```
+
+```text
+$ npx astro check
+src/pages/card-missing-prop.astro:4:2 - error ts(2322): Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes & Props'.
+  Property 'href' is missing in type '{ title: string; }' but required in type 'Props'.
+
+<Card title="Hello" />
+ ~~~~
+```
+
+นั่นคือประโยชน์เชิงปฏิบัติของการกำหนด type ให้ props เลย: prop ที่หายไป (หรือ type ผิด) ถูกจับได้ก่อนที่หน้าจะ render เลยด้วยซ้ำ ตรงจุดที่เรียกใช้เป๊ะ ๆ
+
+### พิสูจน์: component เป็น pure function ของ props จริง ๆ
+
+ถ้า component เป็น function จาก props ไปเป็น HTML จริง ๆ โดยไม่มี state ซ่อนอยู่ การเรียกมันสองครั้งด้วย props เดียวกันต้องได้ output เดียวกันเป๊ะ — ไม่ต้องมี client ไม่ต้องมี browser แค่ render เฉย ๆ **Astro Container API** (`experimental_AstroContainer` พูดถึงเต็ม ๆ ในบท testing) render component เป็น string แบบแยกตัว ทำให้เทสแบบนี้ทำได้ตรง ๆ:
+
+```ts
+// src/__tests__/card.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Card from '../components/Card.astro';
+
+test('Card is a pure function of props: same props, same output', async () => {
+  const container = await AstroContainer.create();
+  const a = await container.renderToString(Card, { props: { title: 'Hello', href: '/hello' } });
+  const b = await container.renderToString(Card, { props: { title: 'Hello', href: '/hello' } });
+  expect(a).toBe(b);
+  expect(a).toContain('Hello');
+  expect(a).toContain('href="/hello"');
+});
+```
+
+```text
+$ npx vitest run src/__tests__/card.test.ts
+ ✓ src/__tests__/card.test.ts (1 test) 1 passed
+```
+
+## กำหนด type ให้ props อย่างละเอียด: `HTMLAttributes`, `Polymorphic`, `ComponentProps`
+
+นอกเหนือจาก interface `Props` ที่เขียนเอง `astro/types` export helper สามตัวสำหรับ pattern ของ props ที่เจอบ่อยมาก — แต่ละตัว verify ตรง ๆ จาก `types.d.ts` ของ `astro@7.3.5` ที่ติดตั้งจริง:
+
+- **`HTMLAttributes<Tag>`** — attribute จริงในตัวของ tag HTML นั้น ๆ ทำให้ wrapper component รับทุกอย่างที่ element จริงรับได้ (`onclick`, `aria-*`, `data-*`, …) โดยไม่ต้องประกาศเองใหม่ทีละตัว:
+
+```astro
+---
+// src/components/Button.astro
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends HTMLAttributes<'button'> {
+  variant?: 'primary' | 'secondary';
+}
+const { variant = 'primary', ...attrs } = Astro.props;
+---
+<button class={`btn btn-${variant}`} {...attrs}>
+  <slot />
+</button>
+```
+
+- **`Polymorphic<P>`** — กำหนด type ให้ component ที่ render *เป็น* tag อื่นได้ผ่าน prop `as` (`<Heading as="h2">` ที่ต้องการ attribute จริงของ `h2` ไม่ใช่ element ตายตัว):
+
+```astro
+---
+// src/components/Heading.astro
+import type { HTMLTag, Polymorphic } from 'astro/types';
+
+type Props<Tag extends HTMLTag> = Polymorphic<{ as: Tag }>;
+const { as: Tag = 'h2' as const, ...attrs } = Astro.props;
+---
+<Tag {...attrs}><slot /></Tag>
+```
+
+- **`ComponentProps<T>`** — ดึง type ของ props จาก *function* component (framework island) มีประโยชน์เวลาอยากรับ "props อะไรก็ตามที่ `SomeIsland` รับได้" โดยไม่ต้อง import แล้วเขียน interface `Props` ซ้ำ:
+
+```ts
+import type { ComponentProps } from 'astro/types';
+import type Counter from '../components/Counter.tsx';
+
+type CounterProps = ComponentProps<typeof Counter>;
+```
+
+<Mermaid title="สามวิธีกำหนด type ให้ props นอกเหนือจาก interface ธรรมดา" code={propsTypesDiagram} />
+
+export const propsTypesDiagram = `flowchart LR
+  a["HTMLAttributes<'button'>"] --> u1["สืบ attribute ของ element จริง"]
+  b["Polymorphic<{ as: Tag }>"] --> u2["กำหนด type ให้ component แบบ as=..."]
+  c["ComponentProps<typeof Fn>"] --> u3["reuse prop type ของ function component"]`;
 
 ## Slots: composition ด้วยการส่ง markup
 
@@ -99,8 +196,60 @@ tag `<style>` ภายใน `.astro` component เป็น **scoped ให้
 
 คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา — ไม่มี CSS-in-JS ไม่ต้องมีพิธีตั้งชื่อแบบ BEM เมื่อคุณ *อยาก* ให้ rule ใช้แบบ global คุณ opt out ด้วย `<style is:global>` (พูดถึงในบท styles)
 
+## อ่านโค้ดที่ AI เขียน
+
+`.astro` component snippet ที่ AI generate มา มักพกสมมติฐานจาก client framework มาด้วย เช็คสิ่งเหล่านี้:
+
+- มันเรียก `useState`, `useEffect`, หรือ hook อื่นที่ top level ของ frontmatter หรือเปล่า? ไม่มีอะไรแบบนั้นอยู่ใน script ฝั่ง server-only ของ component `.astro` เลย — hook พวกนั้นอยู่ใน *framework component ที่ hydrate แล้ว* (island) เท่านั้น ไม่ใช่ไฟล์ `.astro`
+- มันประกาศ `Props` แต่ template destructure field ที่ไม่เคยอยู่ใน interface หรือเปล่า? `astro check` จับ field ที่จำเป็น *หายไป* ได้ (พิสูจน์แล้วข้างบนด้วย `Card`) — แต่ field แบบ optional ที่พิมพ์ผิดใน template (`hraf` แทน `href`) จะอ่าน `undefined` เงียบ ๆ ที่ระดับ *template* เว้นแต่ field นั้นจะถูกอ้างชื่อผิดใน `Astro.props` ด้วย
+- component แบบ `Polymorphic`/prop `as` hard-code tag ที่ render ไว้ในตัว logic ของมันเองที่ไหนหรือเปล่า (เช่น เช็ค `as === 'button'` เพื่อตัดสินใจอะไรบางอย่าง) ซึ่งขัดกับจุดประสงค์ของการทำให้ polymorphic?
+- มันใช้ `<slot />` ใน component ที่ render เป็น framework island (เช่น `client:load`) หรือเปล่า? named/default slot เป็น feature ของ Astro template — "สิ่งที่เทียบเท่า slot" ของ framework component คือ `children`/named props ไม่ใช่ `<slot />`
+- block `<style>` แบบ scoped ถูกสันนิษฐานว่ามีผลกับ markup ของ component *ลูก* หรือเปล่า (เช่น style `<h3>` ภายในของ `<Card>` จาก parent)? scoped style มีผลแค่กับ selector ที่ match element ใน *ไฟล์เดียวกัน* เท่านั้น การเอื้อมเข้าไปใน child ต้องใช้ `:global()` หรือ class ที่ขับเคลื่อนด้วย prop
+
+<SpotTheBug code={`---
+// src/components/UserBadge.astro
+interface Props {
+  name: string;
+  role?: 'admin' | 'member';
+}
+const { name, role = 'member' } = Astro.props;
+---
+<span class={\`badge badge-\${role}\`}>{nam}</span>
+`}>
+template อ่าน `{nam}` — พิมพ์ผิดจาก `{name}` — และมันเป็น `astro check` error จริง แต่ไม่ใช่ error แบบ props-shape ที่คาดไว้จากกรณี "prop หายไป" ข้างบน พิสูจน์กับ snippet นี้เป๊ะ ๆ:
+
+```text
+src/pages/userbadge-test.astro:8:38 - error ts(2552): Cannot find name 'nam'. Did you mean 'name'?
+
+<span class={`badge badge-${role}`}>{nam}</span>
+                                     ~~~
+```
+
+`nam` ไม่ใช่ identifier ที่ถูกประกาศไว้เลย TypeScript จึง report `ts(2552)` ("cannot find name" พร้อมคำแนะนำ "did you mean") — ไม่ใช่ `ts(2322)` แบบ interface `Props` ไม่ตรงกันเหมือนข้างบน เป็น bug คนละประเภทจากกรณี prop ที่จำเป็นหายไป: อันนั้นคือ *props* ผิด ส่วนอันนี้คือพิมพ์ผิดใน *template* ที่อ้างถึงสิ่งที่ไม่เคยถูก destructure ทั้งคู่เป็น `astro check` error จริง แต่คนละเหตุผล — นี่แหละคือเหตุผลที่ควรอ่านให้ลึกกว่า "astro check ผ่านไหม" ไปถึง "astro check ผ่าน *ด้วยเหตุผลที่คาดไว้* ไหม"
+</SpotTheBug>
+
+## Mental Model
+
+คิดถึง `.astro` component เหมือน pure server-side template function: `render(props) -> html` props ไหลเข้ามาทิศทางเดียว ผ่าน `Astro.props` ไม่มีอะไรไหลกลับออกไปนอกจาก markup ที่ render แล้ว Slots ก็แค่ input อีกแบบหนึ่ง — markup แทนที่จะเป็นข้อมูล — ส่งแบบตำแหน่ง (default) หรือแบบชื่อ ไม่มี lifecycle ให้คิดเพราะไม่มี "ทีหลัง": function รันครั้งเดียว คืน HTML แล้วจบ Container API test ข้างบนคือหลักฐานตรง ๆ: input เดียวกัน output เดียวกัน ทุกครั้ง
+
+## ข้อแลกเปลี่ยน
+
+| | `.astro` component | Framework island (`.tsx`/`.vue`/…) |
+|---|---|---|
+| **รันที่ไหน** | server เท่านั้น (function ของ props ไม่มี lifecycle) | server (render แรก) *และ* client (ถ้า hydrate) |
+| **State** | ไม่มี — re-run ใหม่จากศูนย์ทุกครั้งที่ render | `useState`/reactive state คงอยู่ข้าม re-render |
+| **Slots** | `<slot />` / named slots | `children` / props ตาม convention ของ framework |
+| **Styling** | `<style>` แบบ scoped มีในตัว, selector ธรรมดา | convention ของ framework เอง (CSS modules, styled-components, …) |
+| **กำหนด type ให้ props** | interface `Props` หรือ `HTMLAttributes`/`Polymorphic`/`ComponentProps` จาก `astro/types` | convention การกำหนด type props ของ framework เอง |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"prop ที่จำเป็นหายไปจะเป็น `undefined` ตอน runtime จับได้ (ถ้าจับได้) ตอนหน้าพัง"** พิสูจน์แล้วข้างบน: `astro check` จับได้ตรงจุดที่เรียกใช้เป๊ะ ๆ ก่อนที่หน้าจะ render เลยด้วยซ้ำ — `ts(2322)`, "Property 'href' is missing"
+- **"`.astro` component เก็บ state ข้าม render ได้ เหมือน class ที่มี instance field"** เก็บไม่ได้ — พิสูจน์ด้วย Container API test ข้างบน: props เดียวกันได้ output เหมือนกันทุก byte เสมอ เพราะ component ถูก re-run ใหม่จากศูนย์ทุกครั้ง ไม่มีอะไรคงอยู่เลย
+- **"`HTMLAttributes<'button'>` ก็แค่ `{ [key: string]: any }`"** มันคือ attribute set จริงและเฉพาะเจาะจงของ tag นั้น (verify ตรง ๆ จาก `astro/types.d.ts`) — ส่ง attribute ที่ไม่มีจริงบน `<button>` (เช่น `href` ตรง ๆ) ก็ยังเป็น type error อยู่ดี
+
 <Callout title="สรุปบรรทัดเดียว">
-Astro component คือ **function ของ props ที่ render บน server** — props มาผ่าน `Astro.props` และกำหนด type ด้วย interface `Props` ไม่มี state หรือ lifecycle ฝั่ง client **Slots** เปิดทางให้ composition: markup ที่ส่งระหว่าง tag ของ component จะ render ที่ `<slot />` (พร้อม named slots สำหรับหลายจุดแทรก) นั่นคือวิธีที่ layout ห่อหน้า และ `<style>` ของ component เป็น **scoped โดย default** ให้คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา
+Astro component คือ **function ของ props ที่ render บน server** — props มาผ่าน `Astro.props` กำหนด type ด้วย interface `Props` (หรือ `HTMLAttributes<Tag>`/`Polymorphic<P>`/`ComponentProps<T>` จาก `astro/types` สำหรับ pattern ที่เจอบ่อย) ไม่มี state หรือ lifecycle ฝั่ง client พิสูจน์แล้วข้างบนด้วย Container API test ที่ props เดียวกันให้ output เหมือนกันทุก byte เสมอ prop ที่จำเป็นหายไปเป็น `astro check` error จริงตรงจุดที่เรียกใช้ ไม่ใช่เรื่องเซอร์ไพรส์ตอน runtime **Slots** เปิดทางให้ composition: markup ที่ส่งระหว่าง tag ของ component จะ render ที่ `<slot />` (พร้อม named slots สำหรับหลายจุดแทรก) นั่นคือวิธีที่ layout ห่อหน้า และ `<style>` ของ component เป็น **scoped โดย default** ให้คุณได้ CSS แบบ component-local ด้วย selector ธรรมดา
 </Callout>
 
 export const quizComponents = [
@@ -113,6 +262,7 @@ export const quizComponents = [
       'ผ่าน URL',
     ],
     answer: 1,
+    explain: 'props มาผ่าน Astro.props การประกาศ interface Props ทำให้ Astro type-check ทุกจุดที่เรียกใช้เทียบกับมันได้',
   },
   {
     q: 'slot ใช้ทำอะไร?',
@@ -123,6 +273,7 @@ export const quizComponents = [
       'routing ฝั่ง client',
     ],
     answer: 1,
+    explain: 'slot render markup ที่ส่งระหว่าง tag เปิด/ปิดของ component ตรงตำแหน่ง <slot /> — กลไกที่ layout ใช้ห่อ content ของหน้า',
   },
   {
     q: 'โดย default block `<style>` ใน .astro component มีผลที่ไหน?',
@@ -133,6 +284,7 @@ export const quizComponents = [
       'ไม่มีผลจนกว่าจะถูก import',
     ],
     answer: 1,
+    explain: 'Astro เขียน selector ใหม่เพื่อให้ <style> ของ component match กับ element ใน output ของไฟล์เดียวกันเท่านั้น โดย default — ไม่ต้องมี CSS-in-JS หรือ BEM เพื่อแยก scope',
   },
   {
     q: 'คุณจะมีจุดแทรกหลายจุดใน component เดียวยังไง?',
@@ -143,6 +295,29 @@ export const quizComponents = [
       'ทำไม่ได้',
     ],
     answer: 1,
+    explain: 'Named slots ให้ component เปิดจุดแทรกได้มากกว่าหนึ่งจุด แต่ละจุดระบุด้วยชื่อ',
+  },
+  {
+    q: '```astro\n---\n// src/components/Card.astro\ninterface Props {\n  title: string;\n  href: string;\n}\nconst { title, href } = Astro.props;\n---\n<a class="card" href={href}><h3>{title}</h3></a>\n```\nใช้เป็น `<Card title="Hello" />` (ไม่มี `href`) `astro check` จริงจะ report อะไร?',
+    options: [
+      'ไม่มีอะไร — href เป็น undefined เงียบ ๆ',
+      'error ts(2322): Property \'href\' is missing in type \'{ title: string; }\' but required in type \'Props\'',
+      'runtime exception ตอนหน้าโหลด',
+      'astro check ไม่เช็คไฟล์ .astro',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย output จริงของ astro check เป๊ะ ๆ: prop ที่จำเป็นหายไปเป็น type error ตอน compile ตรงจุดที่เรียกใช้ ไม่ใช่ undefined เงียบ ๆ หรือ runtime crash',
+  },
+  {
+    q: '```ts\nimport { experimental_AstroContainer as AstroContainer } from \'astro/container\';\nconst container = await AstroContainer.create();\nconst a = await container.renderToString(Card, { props: { title: \'Hello\', href: \'/hello\' } });\nconst b = await container.renderToString(Card, { props: { title: \'Hello\', href: \'/hello\' } });\n// expect(a).toBe(b);\n```\ntest นี้ผ่านจริง มันพิสูจน์อะไรเกี่ยวกับ `.astro` component?',
+    options: [
+      'ไม่มีอะไรมีความหมาย — HTML string เท่ากันเป็นเรื่องปกติ',
+      'มันเป็น pure function ของ props: input เดียวกันให้ output เหมือนกันทุก byte เสมอ ไม่มี state ซ่อนอยู่ข้าม render',
+      'Container API cache การ render ไว้',
+      'Card มี bug',
+    ],
+    answer: 1,
+    explain: 'การเรียก renderToString สองครั้งแยกกันด้วย props เดียวกันให้ HTML เหมือนกันเป๊ะ ผ่าน Astro Container API จริง — หลักฐานตรง ๆ ว่าไม่มี lifecycle หรือ state ซ่อนอยู่ข้าม render เลย',
   },
 ];
 

@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Three layers of testing
 
@@ -27,8 +28,16 @@ The rule of thumb: push logic into plain functions and unit-test those, render-t
 Because Astro runs on Vite, **Vitest** is the natural unit-test runner — same config, instant startup. Anything that's plain TypeScript (a date formatter, a filter, a Zod schema) is tested the ordinary way:
 
 ```ts
+// src/lib/format.ts
+export function formatDate(d: Date): string {
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+```
+
+```ts
+// src/__tests__/format.test.ts
 import { expect, test } from 'vitest';
-import { formatDate } from '../src/lib/format';
+import { formatDate } from '../lib/format';
 
 test('formatDate renders a friendly date', () => {
   expect(formatDate(new Date('2026-01-15'))).toBe('Jan 15, 2026');
@@ -37,26 +46,64 @@ test('formatDate renders a friendly date', () => {
 
 ## Component tests with the Container API
 
-To test that a `.astro` component renders the right HTML, use the **Astro Container API** — it renders a component to a string in isolation, no browser needed. It's currently exposed as `experimental_AstroContainer`:
+To test that a `.astro` component renders the right HTML, use the **Astro Container API** — it renders a component to a string in isolation, no browser needed. It's currently exposed as `experimental_AstroContainer` — still experimental, exactly as the name says, even though it's stable enough to be Astro's own recommended way to component-test:
 
 ```ts
+// src/__tests__/card-render.test.ts
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import { expect, test } from 'vitest';
-import Card from '../src/components/Card.astro';
+import Card from '../components/Card.astro';
 
-test('Card renders its title and slotted content', async () => {
+test('Card renders its title and href', async () => {
   const container = await AstroContainer.create();
   const result = await container.renderToString(Card, {
-    props: { title: 'Hello' },
-    slots: { default: 'Body content' },
+    props: { title: 'Hello', href: '/hello' },
   });
 
   expect(result).toContain('Hello');
-  expect(result).toContain('Body content');
+  expect(result).toContain('href="/hello"');
 });
 ```
 
 You get the rendered HTML as a string and assert against it — fast, and it exercises the real component including its props and slots.
+
+### Container-testing a framework island
+
+`renderToString`'s real type signature only accepts an `AstroComponentFactory` — a plain `.astro` component — not a raw framework function component (verified directly: passing `Counter.tsx` straight to `renderToString` is a real `astro check` error, `ts(2345): Argument of type '() => Element' is not assignable to parameter of type 'AstroComponentFactory'`). The documented, type-safe pattern (straight from Astro's own Container API reference) is to wrap the island in a thin `.astro` component and test *that*:
+
+```astro
+---
+// src/components/CounterWrapper.astro
+import Counter from './Counter.tsx';
+---
+<Counter client:load />
+```
+
+Rendering that wrapper still needs the framework's own renderer registered first, via `getContainerRenderer` — imported from a **subpath of that specific framework's integration package**. This course's islands use Preact, so it's `@astrojs/preact/container-renderer` (verified directly against the installed package's own `exports` map, which lists `./container-renderer`) — not `@astrojs/react/container-renderer`, which only exists if you actually installed `@astrojs/react`:
+
+```ts
+// src/__tests__/counter-island.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { getContainerRenderer } from '@astrojs/preact/container-renderer';
+import { loadRenderers } from 'astro:container';
+import { expect, test } from 'vitest';
+import CounterWrapper from '../components/CounterWrapper.astro';
+
+test('Counter island renders its initial count via the Container API', async () => {
+  const renderers = await loadRenderers([getContainerRenderer()]);
+  const container = await AstroContainer.create({ renderers });
+  const html = await container.renderToString(CounterWrapper);
+  expect(html).toContain('Count: 0');
+});
+```
+
+```text
+$ npx vitest run src/__tests__/counter-island.test.ts
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+```
+
+Without `renderers` registered, the Container API has no way to render the `<Counter client:load />` inside the wrapper at all — `loadRenderers` plus the framework-specific `getContainerRenderer` is what makes that possible, and wrapping in a real `.astro` file (rather than passing `Counter.tsx` directly) is what keeps `renderToString`'s own types happy.
 
 ## End-to-end with Playwright
 
@@ -79,14 +126,104 @@ export const testDiagram = `flowchart LR
   comp["component HTML output"] --> container["Container API test"]
   flow["hydrated flows and navigation"] --> pw["Playwright e2e"]`;
 
+## `astro check`: what it checks, and its exit code
+
+`astro check` type-checks `.astro`, `.ts`, and `.tsx` files with real diagnostics at three severities — `error`, `warning`, `hint` — and prints a summary line (`Result (N files): - X error(s) - Y warning(s) - Z hint(s)`). Proven against the installed 7.3.5: a clean project exits `0`; a project with at least one `error` exits `1`:
+
+```text
+$ npx astro check; echo "exit: $?"
+Result (100 files): 
+- 0 errors
+- 0 warnings
+- 3 hints
+exit: 0
+
+# after introducing one real type error:
+$ npx astro check; echo "exit: $?"
+Result (100 files): 
+- 1 error
+- 0 warnings
+- 3 hints
+exit: 1
+```
+
+By default, **only `error`-severity diagnostics fail the command** — `--minimumFailingSeverity` (default `"error"`) controls that threshold, and can be tightened to `"warning"` or `"hint"` if you want CI to fail on those too. That's why `astro check && astro build` is the wiring worth using: warnings and hints won't silently block a deploy unless you explicitly ask them to.
+
+## ESLint for Astro
+
+`eslint-plugin-astro` (currently `3.2.1`, verified via `npm view eslint-plugin-astro version`) lints `.astro` files — frontmatter, template, directives, and (with `eslint-plugin-jsx-a11y`/`-x` installed alongside) accessibility rules. It's flat-config only, and its own README calls it *"in the experimental stages of development"* — worth knowing before you wire failing lint into a required CI gate. The real flat-config shape from its own docs:
+
+```js
+// eslint.config.js
+import eslintPluginAstro from 'eslint-plugin-astro';
+
+export default [
+  ...eslintPluginAstro.configs.recommended,
+  {
+    rules: {
+      // override/add rules here, e.g.:
+      // 'astro/no-set-html-directive': 'error'
+    },
+  },
+];
+```
+
+`configs.recommended` is a spread-in array (multiple flat-config objects), not a single object — a generated snippet that writes `eslintPluginAstro.configs.recommended` without the `...` spread will produce a broken config array.
+
 ## The Dev Toolbar
 
 In development, Astro shows a **Dev Toolbar** at the bottom of the page — it flags accessibility issues, shows which components are islands (and their hydration directives), and hosts plugins for auditing and debugging. It's the fastest way to see *what actually became an island* and catch a11y problems while you build. It only runs in dev and never ships to production.
 
-Astro 7 also made the dev server friendlier to automation: it can run in a **background mode**, detects when an **AI coding agent** is driving it, and can emit **structured JSON logs** so tools (and agents) read errors without scraping terminal output. Two small API notes for test code: framework container renderers are now imported from a subpath (`import { getContainerRenderer } from '@astrojs/react/container-renderer'`), and view-transition tests should listen for the string event names (`'astro:before-swap'`) because the exported constants were removed.
+Astro 7 also made the dev server friendlier to automation: it can run in a **background mode**, detects when an **AI coding agent** is driving it, and can emit **structured JSON logs** so tools (and agents) read errors without scraping terminal output. Two small API notes for test code: framework container renderers are now imported from a subpath specific to the framework you actually installed (proven above: `@astrojs/preact/container-renderer` on this course's Preact-based project), and view-transition tests should listen for the string event names (`'astro:before-swap'`) because the exported constants were removed.
+
+## Reading AI-generated code
+
+A generated test snippet for an Astro project is worth double-checking:
+
+- Does a Container API test pass a raw framework component (`.tsx`/`.vue`/`.svelte`) straight to `renderToString`, instead of wrapping it in a thin `.astro` component first? Proven above: `renderToString`'s own type is `(component: AstroComponentFactory, ...)`, so passing a raw framework component is a real `astro check` error (`ts(2345)`) even before you get to renderers.
+- Does a Container API test skip `loadRenderers`/`getContainerRenderer` entirely when rendering something that embeds a framework island? Proven above with the real runtime error: `NoMatchingRenderer: Unable to render 'Counter'. No valid renderer was found for this file extension.` — not a silent empty string.
+- Does it import `getContainerRenderer` from `@astrojs/react/container-renderer` on a project that uses Preact (or Vue, or Svelte)? The subpath is per-framework — proven above, this course's own islands need `@astrojs/preact/container-renderer`, and the wrong one is simply an unresolved-module error, not a generic "any framework" import.
+- Does it claim `experimental_AstroContainer` is "basically stable now, the name is just legacy"? It's genuinely still experimental — the API can change in a minor version, which matters if you're deciding how much test infrastructure to build on top of it.
+- Does a CI config wire `astro check` in and assume any warning fails the build? Proven above: only `error`-severity diagnostics fail by default (`--minimumFailingSeverity`); a warning-heavy but error-free project still exits `0`.
+- Does an `eslint.config.js` snippet write `rules: eslintPluginAstro.configs.recommended` (no spread) instead of spreading it into the config array? `configs.recommended` is itself an array of flat-config objects, not a rules map.
+
+<SpotTheBug code={`// src/__tests__/badge.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Badge from '../components/Badge.tsx';
+
+test('Badge renders', async () => {
+  const container = await AstroContainer.create();
+  const html = await container.renderToString(Badge, { props: { label: 'New' } });
+  expect(html).toContain('New');
+});
+`} lang="ts">
+Two separate bugs stacked here. First, `Badge.tsx` is a framework component (a `.tsx` file, not `.astro`), but `renderToString` is typed to accept only `AstroComponentFactory` — passing `Badge` directly is a real `astro check` error, `ts(2345): Argument of type '() => Element' is not assignable to parameter of type 'AstroComponentFactory'`, proven above with the exact same shape of mistake on `Counter`. The documented fix is to wrap it in a thin `.astro` component first (`<Badge {...props} />` inside a real `.astro` file) and render *that* — exactly the `CounterWrapper` pattern shown above. Second, even past that: this container was created with no `renderers` at all, so once a framework component is actually reached during rendering, it fails for real at runtime too — proven above with the exact error: `NoMatchingRenderer: Unable to render 'Counter'. No valid renderer was found for this file extension.` Both problems need the same fix: wrap in `.astro`, then `loadRenderers([getContainerRenderer()])` from the specific framework package (`@astrojs/preact/container-renderer` here) and pass `{ renderers }` to `AstroContainer.create()`.
+</SpotTheBug>
+
+## Mental Model
+
+Match the test to what can actually break at that layer. A pure function has no framework involvement at all — Vitest, directly. A `.astro` component's only failure mode is "wrong HTML for these props/slots" — the Container API answers exactly that, and (proven above) needs zero browser and zero extra setup for a plain `.astro` file, but does need a registered renderer the moment the component isn't `.astro` at all. Hydration — the one thing neither of those layers can exercise, because neither actually runs client JavaScript — is Playwright's entire reason to exist. Reach for the cheapest layer that can actually observe the failure you're worried about.
+
+## Trade-offs
+
+| | Vitest (unit) | Container API (component) | Playwright (e2e) |
+|---|---|---|---|
+| **Needs a browser** | No | No | Yes |
+| **Runs island JavaScript** | No | No | Yes |
+| **Speed** | Fastest | Fast | Slowest |
+| **Catches** | Logic bugs | Wrong HTML for given props/slots | Hydration, navigation, real user flows |
+| **Stability of the API itself** | Stable | `experimental_AstroContainer` — proven above, still experimental | Stable |
+
+## Common Misconceptions
+
+- **"A Container API test proves an island is interactive."** It proves the *initial* HTML is right — proven above, `Counter` renders `Count: 0`, but nothing in that test ever clicks the button or runs `preact/hooks` code; that's Playwright's job.
+- **"Any framework's `getContainerRenderer` import works for any project."** Proven above: the subpath is tied to whichever `@astrojs/<framework>` package is actually installed — `@astrojs/react/container-renderer` doesn't exist (and can't be imported) on a Preact-only project.
+- **"`astro check` failing in CI means there's a type error."** Proven above: by default only `error`-severity diagnostics fail the command; a project full of warnings and hints still exits `0` unless `--minimumFailingSeverity` is tightened.
+- **"`experimental_AstroContainer` is just an oddly-named stable API at this point."** It's real: Astro's own naming says experimental, meaning its shape can still change across minor versions — worth a note if a team is investing heavily in Container-API-based test infrastructure.
 
 <Callout title="The one-line takeaway">
-Test an Astro site at three layers: **Vitest** for plain logic, the **Astro Container API** (`experimental_AstroContainer`, `renderToString`) for asserting a component's rendered HTML in isolation, and **Playwright** for end-to-end flows that need real hydration and navigation. Container tests don't run islands, so interactive behavior belongs in Playwright. The dev-only **Dev Toolbar** helps you see which components became islands and catch accessibility issues as you build.
+Test an Astro site at three layers: **Vitest** for plain logic, the **Astro Container API** (`experimental_AstroContainer`, `renderToString` — still genuinely experimental) for asserting a component's rendered HTML in isolation, and **Playwright** for end-to-end flows that need real hydration and navigation. A framework island needs `loadRenderers([getContainerRenderer()])` first — proven above with a real passing test, and the subpath (`@astrojs/preact/container-renderer` here) is specific to the framework actually installed, not a generic import. `astro check` type-checks `.astro`/`.ts`/`.tsx` at three severities and exits `1` only for `error`-severity diagnostics by default (`--minimumFailingSeverity`), proven above with real exit codes — wire `astro check && astro build` so a real type error, not a warning, blocks a deploy. `eslint-plugin-astro` (`3.2.1`, still labeled experimental) lints `.astro` files via flat config (`...eslintPluginAstro.configs.recommended`, spread — it's an array, not an object). The dev-only **Dev Toolbar** helps you see which components became islands and catch accessibility issues as you build.
 </Callout>
 
 export const quizTesting = [
@@ -99,6 +236,7 @@ export const quizTesting = [
       'The Dev Toolbar',
     ],
     answer: 1,
+    explain: 'The Container API renders a component to a string with no browser needed — proven above with real passing Card and Counter tests.',
   },
   {
     q: 'Why do you need Playwright in addition to Container API tests?',
@@ -109,6 +247,7 @@ export const quizTesting = [
       'You do not — Container tests cover everything',
     ],
     answer: 1,
+    explain: 'Proven above: the Container API test for Counter checks the initial rendered HTML (Count: 0) but never clicks the button — clicking requires real hydration, which only Playwright drives.',
   },
   {
     q: 'What is the natural unit-test runner for an Astro project, and why?',
@@ -119,6 +258,7 @@ export const quizTesting = [
       'There is no unit testing in Astro',
     ],
     answer: 1,
+    explain: 'Vitest shares Astro\'s own Vite config and starts instantly, which is why it is the natural fit rather than a separately-configured runner.',
   },
   {
     q: 'What does the Astro Dev Toolbar help with?',
@@ -129,6 +269,29 @@ export const quizTesting = [
       'It formats your code',
     ],
     answer: 1,
+    explain: 'It is dev-only tooling for seeing which components actually became islands and catching accessibility issues while building, never shipped to production.',
+  },
+  {
+    q: '```ts\nimport { getContainerRenderer } from \'@astrojs/preact/container-renderer\';\nimport { loadRenderers } from \'astro:container\';\nconst renderers = await loadRenderers([getContainerRenderer()]);\nconst container = await AstroContainer.create({ renderers });\nconst html = await container.renderToString(CounterWrapper); // renders <Counter client:load />\nexpect(html).toContain(\'Count: 0\');\n```\nThis test passed for real. What does registering `renderers` actually enable?',
+    options: [
+      'Nothing — Container API renders any component the same way regardless',
+      'Rendering the Preact `<Counter />` island nested inside the .astro wrapper — without a matching renderer, the Container API cannot render a framework component at all',
+      'It makes the button clickable inside the test',
+      'It is only needed for .astro components, not framework ones',
+    ],
+    answer: 1,
+    explain: 'Proven above: the Container API needs a framework-specific renderer (via getContainerRenderer + loadRenderers) to render a framework component like Counter — even nested inside a plain .astro wrapper, it would otherwise have no renderer that claims it.',
+  },
+  {
+    q: '```text\n$ npx astro check; echo "exit: $?"\nResult (100 files): \n- 0 errors\n- 0 warnings\n- 3 hints\nexit: 0\n```\nA later run reports 1 error, 0 warnings, 3 hints. What is the exit code, by default?',
+    options: [
+      '0 — hints and warnings and a single error still pass',
+      '1 — by default only error-severity diagnostics fail astro check (--minimumFailingSeverity defaults to "error")',
+      'It depends on how many hints there are',
+      'astro check never sets a non-zero exit code',
+    ],
+    answer: 1,
+    explain: 'Proven above with real exit codes: a run with 0 errors exits 0 regardless of hints, and a run with 1 error exits 1 — the default failing threshold is error severity specifically.',
   },
 ];
 

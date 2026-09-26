@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ไฟล์ config
 
@@ -48,6 +49,77 @@ npx astro add mdx sitemap
 
 integration ทางการที่พบบ่อย (`@astrojs/*`): `react` / `vue` / `svelte` / `solid` / `preact` (UI framework island), `mdx` (component ใน Markdown), `sitemap` และ adapter ของแต่ละ platform (`cloudflare`, `node`, `vercel`, `netlify`) หมายเหตุ: `@astrojs/rss` *ไม่ใช่* integration — เป็น helper package ที่ import ใน endpoint เพื่อ generate feed จึงไม่มี `astro add rss` และไม่ต้องใส่ใน array `integrations`
 
+`astro add` ไม่ใช่คำสั่ง "เพิ่ม npm package อะไรก็ได้" แบบ generic — มันรู้จักแค่ integration ที่มัน ship recipe ให้เท่านั้น ตามที่ CLI help จริงบน 7.3.5 ที่ติดตั้งจริงโชว์:
+
+```text
+$ npx astro add --help
+  astro add [...integrations] [...adapters]
+   UI Frameworks 
+       react  astro add react
+      preact  astro add preact
+         vue  astro add vue
+      svelte  astro add svelte
+    solid-js  astro add solid-js
+         lit  astro add lit
+    alpinejs  astro add alpinejs
+   Documentation Frameworks 
+   starlight  astro add starlight
+   SSR Adapters 
+     netlify  astro add netlify
+      vercel  astro add vercel
+        deno  astro add deno
+  cloudflare  astro add cloudflare
+        node  astro add node
+   Others 
+    tailwind  astro add tailwind
+         mdx  astro add mdx
+     markdoc  astro add markdoc
+   partytown  astro add partytown
+     sitemap  astro add sitemap
+For more integrations, check out: https://astro.build/integrations
+```
+
+อะไรที่ไม่อยู่ในลิสต์นั้น (community integration หรือ raw Vite plugin) ต้องเพิ่มด้วยมือเอง: `npm install` แล้วดันเข้า `integrations` (หรือ `vite.plugins`) เอง
+
+### Integration hooks: รันตอนไหนจริง ๆ
+
+integration คือ object ธรรมดาที่มี `name` กับ `hooks` map — แต่ละ hook fire ที่จุดเฉพาะใน lifecycle ของ Astro เอง สองตัวที่ใช้บ่อยที่สุด: `astro:config:setup` (ตอน Astro กำลัง resolve config ก่อนอะไรจะ build) กับ `astro:build:done` (หลัง build ทั้งหมดเสร็จ พร้อม output directory) พิสูจน์ด้วย integration จริง ๆ ตัวเล็ก ๆ กับ build จริง:
+
+```js
+// my-log-integration.mjs
+export default function myLogIntegration() {
+  return {
+    name: 'my-log-integration',
+    hooks: {
+      'astro:config:setup': ({ logger }) => {
+        logger.info('config:setup ran');
+      },
+      'astro:build:done': ({ logger, dir }) => {
+        logger.info(`build:done, output at ${dir}`);
+      },
+    },
+  };
+}
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import myLogIntegration from './my-log-integration.mjs';
+
+export default defineConfig({
+  integrations: [myLogIntegration()],
+});
+```
+
+```text
+$ npx astro build --outDir dist
+[my-log-integration] config:setup ran
+[my-log-integration] build:done, output at file:///.../dist/client/
+```
+
+ทั้งสองบรรทัดคือ logger output จริงจาก build จริง — `astro:config:setup` fire ครั้งเดียว แต่เนิ่น ๆ ตอน Astro ยังประกอบ config อยู่ (จุดที่ integration ส่วนใหญ่ register Vite plugin หรือ content collection); `astro:build:done` fire ครั้งเดียว ตอนจบเลย และส่ง `dir` มาให้ — ตำแหน่ง output จริง — ซึ่งตรงกับที่ integration ที่ต้องประมวลผล build output ต่อ (เขียน manifest, upload asset) รอคอยพอดี
+
 ## Astro สร้างบน Vite
 
 ข้างใต้นั้น dev server และ build ของ Astro ขับเคลื่อนด้วย **Vite** — ตั้งแต่ Astro 7 คือ Vite 8 ที่ bundler default เป็น **Rolldown** ซึ่งเขียนใหม่ด้วย Rust เร็วกว่า Rollup 10–30 เท่าแต่ยังใช้ plugin API เดิม นั่นคือเหตุผลที่ dev server เริ่มทันที, HMR เร็ว และคุณใช้ plugin จาก ecosystem ของ Vite/Rollup ได้เกือบทั้งหมด (เช็กว่า plugin รองรับ Vite 8 ตอนอัปเกรด) เมื่อต้องการอะไรที่ Astro ไม่ได้เปิดให้ตรง ๆ ก็ลงไปที่ key `vite` แล้วตั้งค่า Vite เอง:
@@ -84,6 +156,46 @@ experimental: { advancedRouting: true }      // removed — src/fetch.ts is alwa
 ```
 
 key ระดับบนใหม่ที่ควรรู้: **`compressHTML`** ตอนนี้ default เป็น `'jsx'` (กฎ whitespace แบบ JSX); **`fetchFile`** ย้ายหรือปิด entrypoint `src/fetch.ts` ที่ถูกจองชื่อ; **`markdown.processor`** ให้สลับ Sätteri เป็น `unified()` จาก `@astrojs/markdown-remark` และมี package หนึ่งที่หายไป: **`@astrojs/db`** ไม่ได้ดูแลต่อแล้ว — ใช้ `node:sqlite`, Drizzle หรือ database แบบ hosted (Turso, Neon, PlanetScale) แทน
+
+### สิ่งที่ยังอยู่ใต้ `experimental` ใน 7.3.5
+
+ไม่ใช่ทุกอย่างย้ายขึ้นระดับบนสุด — บาง flag ยัง experimental จริง ๆ นี่คือลิสต์จริงครบถ้วน อ่านตรง ๆ จาก config schema ของ package ที่ติดตั้งจริง (`node_modules/astro/dist/core/config/schemas/base.js`) ไม่ใช่ blog post ที่อาจล้าสมัยไปแล้วตอนคุณอ่าน:
+
+```text
+experimental: {
+  clientPrerender,        // pre-render <a> targets on hover/viewport-entry via speculation rules
+  contentIntellisense,    // editor JSON schemas for content collection frontmatter
+  chromeDevtoolsWorkspace,// wires the dev server into Chrome DevTools' Workspaces feature
+  incrementalBuild,       // only rebuild what changed, for faster repeated builds
+  svgOptimizer,           // hook to run your own optimizer over inlined SVGs
+  collectionStorage,      // 'single-file' | 'chunked' | { type: 'chunked', chunkSize } — content store layout
+}
+```
+
+ถ้า config snippet (ของคุณเองหรือ AI generate มา) ตั้ง `experimental.rustCompiler`, `experimental.queuedRendering`, หรือ `experimental.advancedRouting` มันล้าสมัยแล้ว — สามตัวนี้ถูกถอดออก ไม่ใช่เปลี่ยนชื่อ เพราะพฤติกรรมของมันเปิดเป็น default อยู่แล้ว (พิสูจน์ข้างบน) การตั้ง key ที่ไม่รู้จักใต้ `experimental` เป็น schema validation error จริง เพราะ schema ข้างบนคือ `z.strictObject`
+
+<SpotTheBug code={`// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  experimental: {
+    rustCompiler: true,
+    contentIntellisense: true,
+  },
+});
+`} lang="js">
+`contentIntellisense` เป็นของจริงและยัง experimental อยู่ใน 7.3.5 — ส่วนนั้นไม่มีปัญหา `rustCompiler` ไม่ใช่: Rust compiler เลิกเป็น optional ตั้งแต่ Astro 7 ทำให้มันเป็นคอมไพเลอร์*เดียว*แล้ว flag เลยถูกลบไปพร้อมกับตัวเก่าที่ใช้ JS ที่มันเคยไว้สลับออก เพราะ `experimental` ถูก validate เป็น `z.strictObject` (verify แล้วจาก schema ที่ติดตั้งจริง) key ที่ไม่รู้จักแบบนี้จะทำให้ config validation ล้มเหลวจริง ๆ พิสูจน์ด้วย config เป๊ะ ๆ นี้กับ build จริง:
+
+```text
+[config] Astro found issue(s) with your configuration:
+
+! Invalid or outdated experimental feature.
+  Check for incorrect spelling or outdated Astro version.
+  See https://docs.astro.build/en/reference/experimental-flags/ for a list of all current experiments.
+```
+
+ไม่ใช่ no-op เงียบ ๆ — build ปฏิเสธที่จะเริ่มเลย วิธีแก้ก็แค่ลบบรรทัด `rustCompiler` ทิ้ง
+</SpotTheBug>
 
 ## การเพิ่ม Tailwind (แบบปัจจุบัน)
 
@@ -130,8 +242,38 @@ $ grep -o '<meta[^>]*content-security-policy[^>]*>' dist/client/static-about/ind
 เปิด `security.csp` บนโปรเจกต์ที่ยังใช้ Shiki สำหรับ syntax highlighting จะเจอ build warning จริง: *"Shiki syntax highlighting uses inline styles that are not compatible with Content Security Policy (CSP)."* Shiki ลงสีโค้ดด้วย inline `style` attribute ต่อ token ซึ่ง `style-src` ที่เข้มงวดจะบล็อกไว้ เว้นแต่จะเพิ่ม hash ของ Shiki เองหรือสลับไปใช้ Prism (`markdown.syntaxHighlight: 'prism'`) ซึ่งใช้ CSS class แทน inline style
 </Callout>
 
+## อ่านโค้ดที่ AI เขียน
+
+`astro.config.mjs` ที่ AI generate มา — หรือคำตอบทั้งหมดแบบ "นี่คือวิธี config Astro" — ควรเช็คกับสิ่งที่ 7.3.5 validate จริง:
+
+- มัน nest อะไรใต้ `experimental` ที่ไม่ใช่หนึ่งในหก flag จริงที่พิสูจน์ข้างบนหรือเปล่า (`clientPrerender`, `contentIntellisense`, `chromeDevtoolsWorkspace`, `incrementalBuild`, `svgOptimizer`, `collectionStorage`)? flag ที่ล้าสมัยจาก blog post Astro 4/5 เป็น startup error จริง พิสูจน์แล้วข้างบน ไม่ใช่แค่ warning
+- มันยัง nest `cache`, `routeRules`, หรือ `logger` ใต้ `experimental` อยู่หรือเปล่า? พวกนี้เป็น key ระดับบนสุดตั้งแต่ Astro 7 แล้ว
+- มันเพิ่ม `@astrojs/tailwind` เข้า `integrations` หรือเปล่า? นั่นคือ integration ก่อนยุค Tailwind v4 Astro ปัจจุบันใช้ Vite plugin `@tailwindcss/vite` แทน ติดตั้งผ่าน `astro add tailwind`
+- มันแนะนำ `@astrojs/db` สำหรับ database layer หรือเปล่า? มันถูก npm deprecate แล้ว — verify ตรง ๆ: `npm view @astrojs/db deprecated` คืนค่า *"This package is deprecated. Use a database client (Drizzle, Kysely, etc.) directly instead."*
+- hook ของ integration อ่าน `dir` (output directory) ใน `astro:config:setup` แทนที่จะเป็น `astro:build:done` หรือเปล่า? พิสูจน์แล้วข้างบน: `dir` มีความหมายก็ต่อเมื่อ build ผลิต output จริงแล้วเท่านั้น — `astro:config:setup` รันก่อนอะไรจะ build เลยด้วยซ้ำ
+
+## Mental Model
+
+`astro.config.mjs` ไม่ใช่ถุงรวม setting แบบแบน ๆ — มันใกล้เคียงกับคำอธิบาย pipeline มากกว่า: `integrations` (และ `adapter`) คือพฤติกรรมสำเร็จรูปที่ hook เข้ากับจุดเฉพาะใน build lifecycle (`astro:config:setup`, `astro:build:done`, … พิสูจน์แล้วข้างบนด้วย logging integration จริง) ในขณะที่ `vite` คือทางออกดิบที่อยู่ข้างใต้ทั้งหมดนั้น `experimental` เป็นพื้นที่ชั่วคราวที่ validate แบบ `strictObject` อย่างชัดเจน — พิสูจน์แล้วข้างบน key ที่ไม่รู้จักตรงนั้นจะล้มเหลวเสียงดัง ไม่ใช่ถูกเมินเงียบ ๆ ก็เพื่อให้ flag ที่ล้าสมัยจาก tutorial เก่าไม่ทำอะไรแบบเงียบ ๆ
+
+## ข้อแลกเปลี่ยน
+
+| | Official integration (`astro add x`) | Raw Vite plugin (`vite.plugins`) |
+|---|---|---|
+| **การติดตั้ง** | คำสั่งเดียว แก้ config ให้ | `npm install` ด้วยมือ + ต่อเข้า `vite.plugins` เอง |
+| **รู้จัก Astro ไหม** | ใช่ — hook `astro:config:setup`, register content collection ได้ ฯลฯ | ไม่ — เป็น Vite plugin API ธรรมดาเท่านั้น |
+| **ครอบคลุมอะไร** | UI framework, MDX, sitemap, adapter, Tailwind | อะไรก็ได้ใน ecosystem ที่ compatible กับ Vite/Rollup |
+| **ความเสี่ยงตกรุ่น** | ต่ำ — ดูแลตาม release cadence ของ Astro เอง | ขึ้นกับว่าคนเขียน plugin ตาม Vite 8/Rolldown ทันไหม |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"flag `experimental` ทั้งหมดจาก tutorial Astro 4/5 ยังใช้ได้ อาจแค่มี warning"** พิสูจน์แล้วข้างบน: key `experimental` ที่ไม่รู้จักเป็น config error จริงบน 7.3.5 (`z.strictObject`) ไม่ใช่ warning — build ปฏิเสธที่จะเริ่มเลย
+- **"`astro add` ติดตั้ง npm package อะไรก็ได้เข้า config"** พิสูจน์แล้วข้างบนด้วย `--help` output จริง: มันรู้จักแค่ลิสต์ recipe ตายตัว อะไรนอกจากนั้นต้อง `npm install` เองบวกแก้ config เอง
+- **"hook ของ integration อ่าน output `dist/` ที่เสร็จแล้วได้ตั้งแต่ build เพิ่งเริ่ม"** พิสูจน์แล้วข้างบน: `astro:build:done` — ไม่ใช่ `astro:config:setup` — คือตัวที่ fire หลังจาก output มีอยู่จริง พร้อม `dir` จริงชี้ไปที่มัน
+- **"`@astrojs/tailwind` ยังเป็นวิธีที่ถูกต้องในการเพิ่ม Tailwind"** มันคือ integration ก่อนยุค v4 Astro ปัจจุบัน `astro add tailwind` ติดตั้ง Vite plugin `@tailwindcss/vite` แทน
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`astro.config.mjs` ตั้งค่าโปรเจกต์ผ่าน `defineConfig` — field สำคัญคือ `site` (URL ที่ deploy จริง จำเป็นสำหรับ absolute URL), `base` (path prefix), `output`, `adapter` และ `integrations` **integrations** (`@astrojs/*` เพิ่มด้วย `npx astro add`) ขยาย build ด้วย UI framework, MDX, sitemap และ adapter Astro รันบน **Vite** จึงลงไปที่ key `vite` เพื่อใช้ raw plugin ได้ — และ Tailwind ปัจจุบันเป็น Vite plugin ที่เพิ่มด้วย `astro add tailwind` ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า ใน Astro 7 key `cache`, `routeRules` และ `logger` อยู่ระดับบนสุด (flag `experimental` หายไปแล้ว), `compressHTML` default เป็น `'jsx'` และ `@astrojs/db` ถูกถอดออก
+`astro.config.mjs` ตั้งค่าโปรเจกต์ผ่าน `defineConfig` — field สำคัญคือ `site` (URL ที่ deploy จริง จำเป็นสำหรับ absolute URL), `base` (path prefix), `output`, `adapter` และ `integrations` **integrations** (`@astrojs/*` เพิ่มด้วย `npx astro add` — ลิสต์ recipe ตายตัว พิสูจน์แล้วข้างบน ไม่ใช่ตัวติดตั้ง generic) ขยาย build ด้วยการ hook เข้ากับจุดใน lifecycle อย่าง `astro:config:setup` กับ `astro:build:done` (พิสูจน์แล้วข้างบนด้วย logging integration จริง) Astro รันบน **Vite** จึงลงไปที่ key `vite` เพื่อใช้ raw plugin ได้ — และ Tailwind ปัจจุบันเป็น Vite plugin ที่เพิ่มด้วย `astro add tailwind` ไม่ใช่ integration `@astrojs/tailwind` แบบเก่า ใน Astro 7 key `cache`, `routeRules` และ `logger` อยู่ระดับบนสุด สิ่งที่เหลืออยู่ใต้ `experimental` คือลิสต์สั้น ๆ ของจริง (`clientPrerender`, `contentIntellisense`, `chromeDevtoolsWorkspace`, `incrementalBuild`, `svgOptimizer`, `collectionStorage`, พิสูจน์แล้วข้างบน) ที่ validate อย่างเข้มงวด — flag ที่ไม่รู้จักเป็น startup error จริง ไม่ใช่ no-op เงียบ ๆ `compressHTML` default เป็น `'jsx'` และ `@astrojs/db` ถูก npm deprecate แล้ว
 </Callout>
 
 export const quizConfig = [
@@ -144,6 +286,7 @@ export const quizConfig = [
       'เปิด TypeScript',
     ],
     answer: 1,
+    explain: 'site ประกาศ URL ที่ deploy จริง อะไรก็ตามที่ออก absolute URL (sitemap, canonical tag, RSS) ถูกสร้างจากมัน',
   },
   {
     q: 'วิธีที่ง่ายที่สุดในการเพิ่ม integration ทางการอย่าง React คือ?',
@@ -154,6 +297,7 @@ export const quizConfig = [
       'import React ในทุกหน้า',
     ],
     answer: 1,
+    explain: 'astro add เป็นตัวติดตั้งคำสั่งเดียวสำหรับลิสต์ recipe ตายตัวที่มันรู้จัก (พิสูจน์แล้วข้างบนผ่าน --help) — มันติดตั้ง dependency และแก้ astro.config.mjs ให้',
   },
   {
     q: 'build tool ตัวไหนอยู่ใต้ Astro และเข้าถึงตรง ๆ ยังไง?',
@@ -164,6 +308,7 @@ export const quizConfig = [
       'เข้าถึง tool ที่อยู่ข้างใต้ไม่ได้',
     ],
     answer: 1,
+    explain: 'Astro 7 รันบน Vite 8 (bundler Rolldown); key vite คือทางออกสำหรับ raw Vite config และ plugin ที่ Astro ไม่ได้เปิดให้ตรง ๆ',
   },
   {
     q: 'วิธีที่แนะนำในปัจจุบันสำหรับเพิ่ม Tailwind ใน Astro คือ?',
@@ -174,6 +319,7 @@ export const quizConfig = [
       'Tailwind มีมาให้ในตัว',
     ],
     answer: 1,
+    explain: 'Tailwind v4 ship เป็น Vite plugin (@tailwindcss/vite); astro add tailwind ติดตั้งและต่อให้ @astrojs/tailwind คือ integration เก่าก่อนยุค v4',
   },
   {
     q: 'หลังอัปเกรดเป็น Astro 7 config ของคุณยังมี `experimental: { cache: ... }` จะเกิดอะไรขึ้น?',
@@ -184,6 +330,29 @@ export const quizConfig = [
       'Astro ลดรุ่นลงเป็นเวอร์ชัน 6',
     ],
     answer: 1,
+    explain: 'cache, routeRules, และ logger ย้ายเป็น key ระดับบนสุดใน Astro 7 — การปล่อยไว้ใต้ experimental เป็น config error จริง ไม่ใช่รูปแบบเก่าที่ถูกเมินเงียบ ๆ',
+  },
+  {
+    q: '```js\n// astro.config.mjs\nexport default defineConfig({\n  experimental: {\n    rustCompiler: true,\n    contentIntellisense: true,\n  },\n});\n```\nบน astro@7.3.5 ที่ติดตั้งจริง build จริงจะทำอะไรกับ config นี้?',
+    options: [
+      'build ตามปกติ เมิน flag rustCompiler ที่ไม่รู้จักไป',
+      'ปฏิเสธที่จะเริ่ม: "Invalid or outdated experimental feature" — พิสูจน์แล้วข้างบน เพราะ experimental เป็น strictObject และ rustCompiler ถูกถอดออก ไม่ใช่เปลี่ยนชื่อ',
+      'ปิด Rust compiler เงียบ ๆ',
+      'มีแค่ contentIntellisense ที่ทำให้ error ไม่ใช่ rustCompiler',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย build จริง: key ที่ไม่รู้จักใต้ config experimental ที่ validate แบบ strictObject เป็น startup error จริงที่ระบุปัญหาตรง ๆ ไม่ใช่ warning หรือถูกข้ามเงียบ ๆ',
+  },
+  {
+    q: '```js\n// my-log-integration.mjs\nexport default function myLogIntegration() {\n  return {\n    name: \'my-log-integration\',\n    hooks: {\n      \'astro:build:done\': ({ logger, dir }) => {\n        logger.info(`build:done, output at ${dir}`);\n      },\n    },\n  };\n}\n```\n`astro:build:done` fire ตอนไหน และ `dir` ชี้ไปที่อะไร?',
+    options: [
+      'ก่อน build เริ่ม; dir คือ source directory',
+      'หลัง build ทั้งหมดเสร็จ พร้อม dir ที่ชี้ไปที่ output directory จริง — พิสูจน์แล้วข้างบนด้วย logger output จริง',
+      'ทุกครั้งที่ไฟล์เปลี่ยนใน dev mode',
+      'ไม่ fire เลยถ้าไม่ได้ config adapter',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วย astro build จริง: astro:build:done fire ครั้งเดียว ตอนจบเลย และ dir คือตำแหน่ง output ที่เขียนเสร็จแล้วจริง ๆ — มีประโยชน์สำหรับการประมวลผล build output ต่อ',
   },
 ];
 

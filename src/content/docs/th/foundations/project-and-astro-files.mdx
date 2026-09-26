@@ -9,27 +9,101 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## โครงสร้างโปรเจกต์
 
-โปรเจกต์ Astro ทั่วไปมีโครงสร้างเล็ก ๆ ที่เป็น convention:
+โปรเจกต์ Astro ทั่วไปมีโครงสร้างเล็ก ๆ ที่เป็น convention ตรงนี้พิสูจน์ด้วยของจริง ไม่ใช่แค่เล่าใหม่ — scaffold จริงจาก `npm create astro@latest -- --template minimal` บน Astro 7.3.5:
+
+```text
+$ npm create astro@latest -- --template minimal --no-install --no-git --yes ./mysite
+$ find mysite -not -path '*/node_modules*' -not -path '*/.git*' | sort
+mysite
+mysite/.vscode
+mysite/.vscode/extensions.json
+mysite/.vscode/launch.json
+mysite/AGENTS.md
+mysite/CLAUDE.md
+mysite/README.md
+mysite/astro.config.mjs
+mysite/package.json
+mysite/public
+mysite/public/favicon.ico
+mysite/public/favicon.svg
+mysite/src
+mysite/src/pages
+mysite/src/pages/index.astro
+mysite/tsconfig.json
+```
+
+```text
+$ cat mysite/package.json
+{
+  "name": "mysite",
+  "type": "module",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "astro": "^7.3.5"
+  },
+  "allowScripts": {
+    "esbuild": true
+  }
+}
+```
+
+`engines.node` คือ `>=22.12.0` — verify ตรง ๆ จาก package ที่ publish จริง (`npm view astro engines` → `{ node: '>=22.12.0', npm: '>=9.6.5', pnpm: '>=7.1.0' }`) Astro จะไม่รันบน Node เวอร์ชันเก่ากว่านั้น มีสองอย่างที่น่าสังเกตใน scaffold แบบ *minimal*: ไม่มี `src/content.config.ts`, `src/layouts/`, หรือ `src/components/` เลย — พวกนี้จะโผล่มาเมื่อคุณเพิ่ม content collections และ component เข้าไป ไม่ได้จำเป็นต้องมีตั้งแต่แรก — และ template ตอนนี้ก็มา with **`AGENTS.md`/`CLAUDE.md`** ที่เป็น quick reference สำหรับ coding agent (background dev server, ลิงก์ doc) ไม่ใช่แค่ doc สำหรับคนอ่านอีกต่อไป
+
+โปรเจกต์ที่ใหญ่ขึ้นและโตขึ้นเรื่อย ๆ จะเติมโครงสร้างที่เหลือให้เต็ม:
 
 ```text
 my-site/
-├── astro.config.mjs      # config: integrations, adapter, output mode
+├── astro.config.mjs        # config: integrations, adapter, output mode
 ├── src/
-│   ├── pages/            # file-based routing — แต่ละไฟล์คือหนึ่ง route
-│   ├── components/       # component แบบ .astro (และ framework) ที่ reuse ได้
-│   ├── layouts/          # เชลล์ของหน้าที่ใช้ร่วมกัน
-│   ├── content.config.ts # config ของ content collections (Astro 5+)
+│   ├── pages/               # file-based routing — แต่ละไฟล์คือหนึ่ง route
+│   ├── components/          # component แบบ .astro (และ framework) ที่ reuse ได้
+│   ├── layouts/              # เชลล์ของหน้าที่ใช้ร่วมกัน
+│   ├── content.config.ts    # config ของ content collections (build-time)
+│   ├── live.config.ts       # config ของ live collections (ข้อมูล request-time)
+│   ├── middleware.ts        # รันก่อนทุก request
+│   ├── actions/index.ts     # server Actions (defineAction)
+│   ├── fetch.ts             # Astro 7+: advanced routing entrypoint (reserved)
+│   ├── env.d.ts             # ambient types: App.Locals, ImportMetaEnv
 │   └── styles/
-└── public/               # static assets ที่ serve ตรง ๆ (favicon, robots.txt)
+└── public/                  # static assets ที่ serve ตรง ๆ (favicon, robots.txt)
 ```
+
+| Path | บทบาท | Reserved ใน Astro 7 ไหม? |
+|---|---|---|
+| `src/pages/` | File-based routing — แต่ละไฟล์กลายเป็นหนึ่ง route | ใช่ — ตัวโฟลเดอร์เองเป็นแกนหลัก |
+| `src/content.config.ts` | ประกาศ content collections แบบ build-time พร้อม Zod schema | ใช่ — ชื่อไฟล์พิเศษ, auto-import ให้ |
+| `src/live.config.ts` | ประกาศ collection แบบ **live** (ข้อมูล request-time, ต้องมี adapter) | ใช่ — ใหม่ใน 7.0, ชื่อไฟล์พิเศษ |
+| `src/middleware.ts` | `onRequest` — รันก่อนทุก request | ใช่ — ชื่อไฟล์พิเศษ |
+| `src/actions/index.ts` | export object `server` ของ Actions | ใช่ — path พิเศษ |
+| `src/fetch.ts` | advanced-routing entrypoint, auto-import ถ้ามีไฟล์นี้ | **ใช่ — ชื่อ reserved ใหม่ใน Astro 7.0** (ดูข้างล่าง) |
+| `public/` | copy ไปยัง output ตรง ๆ serve ที่ root โดยไม่ผ่านการประมวลผล | ใช่ — ตัวโฟลเดอร์เอง |
+| `.astro/` | types ที่ generate ให้ (`astro sync`) — `.astro/types.d.ts`, `.astro/content.d.ts` | ไม่ใช่ของ user; ห้าม hand-edit เด็ดขาด |
 
 สองโฟลเดอร์ที่เป็นแกนหลัก:
 
 - **`src/pages/`** คือ **file-based routing**: `src/pages/index.astro` → `/`, `src/pages/about.astro` → `/about`, `src/pages/blog/[slug].astro` → `/blog/:slug` ตำแหน่งของไฟล์ *คือ* route
 - **`public/`** ถูก copy ไปยัง output ตรง ๆ — ไฟล์ในนี้ถูก serve ที่ root โดยไม่ผ่านการประมวลผล
+
+### `src/fetch.ts` — ชื่อ reserved ใหม่ใน Astro 7
+
+Astro 7.0 เพิ่ม **advanced routing** เข้ามา และ `src/fetch.ts` คือชื่อไฟล์พิเศษของมัน — Astro import ไฟล์นี้อัตโนมัติเพื่อ config พฤติกรรม routing เหมือนที่มัน auto-import `src/middleware.ts` อยู่แล้ว อ้างตรง ๆ จาก v7 upgrade guide ทางการ:
+
+<Callout title="ชื่อไฟล์ที่ถูกสงวนไว้: src/fetch.ts">
+"Astro v7.0 introduces advanced routing, which uses `src/fetch.ts` (or `src/fetch.js`) as a special file name, similar to `src/middleware.ts`. Astro will automatically import this file to configure routing behavior. If your project already has a `src/fetch.ts` file used for other purposes, Astro will attempt to process it as an advanced routing configuration, which may cause unexpected errors." ถ้าคุณมีไฟล์ที่ไม่เกี่ยวข้องอยู่ที่ path นั้นแล้ว วิธีแก้ตาม guide คือเปลี่ยนชื่อไฟล์ หรือตั้ง `fetchFile: './src/router.ts'` (หรือ `fetchFile: null` เพื่อปิด advanced routing ไปเลย) ใน `astro.config.mjs`
+</Callout>
 
 ## กายวิภาคของไฟล์ .astro
 
@@ -70,8 +144,108 @@ export const fileDiagram = `flowchart LR
 
 template `.astro` คือ *HTML ที่ valid บวกกับ expression คล้าย JSX* ถ้าคุณวาง HTML ธรรมดาลงในไฟล์ `.astro` ก็ทำงานได้เลย คุณเพิ่มความ dynamic ด้วย `{ }` (expression), `{condition && <div/>}` (conditional) และ `{items.map(...)}` (loop) — syntax แบบ expression เดียวกับที่เห็นในตัวอย่าง landing ต่างจาก JSX ตรงที่คุณใช้ชื่อ attribute แบบ HTML มาตรฐาน (`class` ไม่ใช่ `className`)
 
+## `astro.config.mjs` กับ `.ts`
+
+ไฟล์ config เป็น `astro.config.mjs`, `.js`, หรือ `.ts` ก็ได้ — ตัวโหลด config ของ Astro resolve ได้ทั้งสามแบบ (verify ตรง ๆ จาก package ที่ติดตั้งจริง: `astro/dist/core/config/config.d.ts` เขียนไว้ว่า resolve `astro.config.js|mjs|ts`) `.mjs` คือสิ่งที่ scaffold ทุกอันสร้างให้ (ไม่ต้อง compile แยก ทำงานได้ทันที) แต่ `.ts` ก็รองรับเต็มที่ถ้าอยากได้ config code ที่ type-check พร้อม import จาก module `.ts` ของตัวเอง — Astro transpile ให้แบบ on the fly ไม่มีความต่างเชิงความสามารถว่า config อะไรได้บ้าง เป็นแค่เรื่อง "อยากให้ตัวไฟล์เองถูก type-check หรือเปล่า"
+
+## Env files
+
+Astro โหลด `.env` (และ `.env.production`, `.env.development`) ผ่านระบบ env ในตัวของ Vite และแบ่งตัวแปรเป็นสองระดับการมองเห็นตามชื่อ:
+
+```text
+# .env
+SECRET_KEY=sk_live_abc123
+PUBLIC_SITE_NAME=MySite
+```
+
+- **ไม่มี prefix `PUBLIC_`** → ใช้ได้ในโค้ดฝั่ง server เท่านั้น (`import.meta.env.SECRET_KEY`)
+- **prefix `PUBLIC_`** → ถูก inline เข้าไปในโค้ดฝั่ง client ด้วย แบบ static (`import.meta.env.PUBLIC_SITE_NAME`)
+
+พิสูจน์ด้วย build จริง — `<script>` (ฝั่ง client) ที่อ่านทั้งสองตัว:
+
+```astro
+---
+// src/pages/env-test.astro
+---
+<html><body>
+<script>
+  console.log('secret from client:', import.meta.env.SECRET_KEY);
+  console.log('public from client:', import.meta.env.PUBLIC_SITE_NAME);
+</script>
+</body></html>
+```
+
+```html
+<!-- the real built <script> content, dist/client/env-test/index.html -->
+<script type="module">console.log(`secret from client:`,void 0),console.log(`public from client:`,`MySite`);</script>
+```
+
+ตัวแปรที่ไม่มี `PUBLIC_` ไม่ได้รั่วออกไป — แต่ก็ไม่ error ด้วย มันถูกแทนที่แบบ static ด้วย `void 0` (`undefined`) ตอน build เงียบ ๆ snippet ที่ AI generate มาแล้วอ่าน secret จากโค้ดฝั่ง client ไม่ได้ไม่ปลอดภัยเพราะบังเอิญที่นี่ — มันแค่พังเฉย ๆ แบบเงียบ ๆ อีกเรื่องที่เจอจริงคือ: `.env` **ไม่ถูกโหลดเข้าไปใน `astro.config.mjs`** เอง — ใช้ `process.env` (ที่ shell/CI เติมให้) แทนถ้า config ต้องการค่าตอน evaluate config
+
+## อ่านโค้ดที่ AI เขียน
+
+โครงสร้างโปรเจกต์หรือ config snippet ที่ AI generate มา ควรเทียบกับ scaffold จริงข้างบนอีกที:
+
+- มันสร้าง convention `src/utils/` หรือ `src/lib/` แล้วบอกว่า "จำเป็นต้องมี" หรือเปล่า? มีแค่ `src/pages/` กับ `public/` เท่านั้นที่เป็นแกนหลัก ที่เหลือ (`components/`, `layouts/`, `lib/`) เป็น convention ไม่ใช่สิ่งที่ Astro บังคับ
+- มันอ่าน env var ที่ไม่มี prefix `PUBLIC_` อยู่ใน `<script>` tag หรือ client component แล้วคาดว่าจะได้ค่าจริงหรือเปล่า? พิสูจน์แล้วข้างบน: มันกลายเป็น `undefined` เงียบ ๆ ใน output ที่ build แล้ว ไม่ใช่ secret ที่รั่ว และก็ไม่ error ด้วย — bug ที่แนบเนียนมาก
+- มันประกาศ `output: 'hybrid'` หรือเปล่า? option นี้ถูกลบใน Astro v5 — `'static'` ครอบคลุมสิ่งที่ hybrid เคยทำ (ดูบท rendering-modes)
+- มันเพิ่มไฟล์ `src/fetch.ts` สำหรับอะไรที่ไม่เกี่ยวกับ routing (fetch wrapper, API client) โดยไม่พูดถึง `fetchFile` เลยหรือเปล่า? ใน Astro 7 ชื่อไฟล์นั้นถูก auto-import สำหรับ advanced routing และ "may cause unexpected errors" ตามที่ upgrade guide อ้างไว้ข้างบน
+- มันใช้ `astro.config.ts` แล้วอ้างว่า `.mjs` "ไม่รองรับ TypeScript config" หรือเปล่า? ทั้งสองแบบเป็น entrypoint ที่ใช้ได้จริงทั้งคู่ `.ts` แค่ทำให้ไฟล์ตัวเองถูก type-check ไม่ได้ปลดล็อกอะไรที่ `.mjs` ทำไม่ได้
+
+<SpotTheBug code={`// src/components/Analytics.astro
+---
+const key = import.meta.env.ANALYTICS_SECRET_KEY;
+---
+<script define:vars={{ key }}>
+  fetch('https://analytics.example.com/init', {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+</script>
+`}>
+ชื่อตัวแปรไม่มี prefix `PUBLIC_` เลย ตามกติกาของ Astro มันจึงเป็น server-only — แต่ `define:vars` serialize ค่า `key` จาก frontmatter เข้าไปใน scope ของ client `<script>` โดยตรง นั่นไม่ได้ผ่านการแยก client/server ของ Astro เลย: `define:vars` รันหลังจากค่าถูก resolve บน server แล้ว ดังนั้นไม่ว่า `ANALYTICS_SECRET_KEY` จะเป็นค่าอะไร ก็จะถูกฝังลงไปใน HTML ที่ส่งจริง เป็นตัวหนังสือธรรมดา อ่านได้เต็ม ๆ ผ่าน "view source" พิสูจน์ด้วย build จริง (`ANALYTICS_SECRET_KEY=sk_live_shouldnotleak` ใน `.env`) — secret ตัวจริงไปโผล่ใน `dist/client/analytics-test/index.html`:
+
+```html
+<!DOCTYPE html><script>(function(){const key = "sk_live_shouldnotleak";
+
+  fetch('https://analytics.example.com/init', {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+})();</script>
+```
+
+(เทียบกับการอ่าน `import.meta.env.ANALYTICS_SECRET_KEY` ตรง ๆ ใน `<script>` block โดยไม่มี `define:vars` — พิสูจน์แล้วก่อนหน้านี้ในบทนี้ว่ามันจะกลายเป็น `undefined` แทน เพราะ script ฝั่ง client แบบนั้นถูกประมวลผลเป็น module ของตัวเอง มีแค่ env var ที่ prefix `PUBLIC_` เท่านั้นที่ถูก inline) วิธีแก้: อย่าส่ง secret ผ่าน `define:vars` เด็ดขาด ถ้า client ต้องใช้ token จริง ๆ ให้สร้าง token แบบ short-lived ที่จำกัดสิทธิ์บน server แล้วส่ง *อันนั้น* แทน
+</SpotTheBug>
+
+## Mental Model
+
+ไฟล์ `.astro` คือโปรแกรมสองตัวที่เชื่อมกันด้วย fence `---` หนึ่งอัน: โปรแกรมฝั่ง server (frontmatter) ที่รันครั้งเดียวแล้วผลิตข้อมูล กับโปรแกรม template ที่เปลี่ยนข้อมูลนั้นเป็น HTML ไม่มีอะไรใน frontmatter ข้ามไปฝั่ง client เว้นแต่คุณจะตั้งใจส่งให้ `<script>` เอง — และแม้จะส่งแล้ว ก็มีแค่ค่า env ที่ prefix `PUBLIC_` กับ payload ของ `define:vars` แบบชัดเจนเท่านั้นที่ข้ามไปได้ พิสูจน์แล้วทั้งสองแบบข้างบน (แบบหนึ่งกลายเป็น `undefined` เงียบ ๆ อีกแบบรั่วเป็นตัวหนังสือธรรมดา)
+
+## ข้อแลกเปลี่ยน
+
+| | config `.mjs` | config `.ts` |
+|---|---|---|
+| **scaffold สร้างให้** | ใช่ เสมอ | ไม่ — ต้อง opt-in เอง |
+| **type-check ตัวไฟล์ config เอง** | ไม่ | ใช่ |
+| **ยัง import module `.ts` ของตัวเองได้ไหม** | ได้ | ได้ |
+| **ขั้นตอน build เพิ่ม** | ไม่มี | ไม่มี — Astro transpile ให้ |
+
+| | env var ที่ไม่มี `PUBLIC_` | env var ที่มี prefix `PUBLIC_` |
+|---|---|---|
+| **โค้ดฝั่ง server** | ใช้ได้ | ใช้ได้ |
+| **โค้ดฝั่ง client** | ถูกแทนที่แบบ static ด้วย `undefined` — พิสูจน์แล้วข้างบน | inline เป็นค่าจริง |
+| **ใช้สำหรับ** | secret, database URL, API key | feature flag, ชื่อไซต์ที่เปิดเผย, public API base URL |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ทุกโปรเจกต์ Astro ต้องมี `content.config.ts`, `middleware.ts`, และ `actions/index.ts`"** scaffold แบบ minimal จริงข้างบนไม่มีไฟล์พวกนี้เลยสักไฟล์ — พวกมันเป็น *ชื่อไฟล์พิเศษที่ Astro รู้จักถ้ามี* ไม่ใช่ไฟล์ที่มันบังคับให้มี
+- **"`astro.config.ts` ปลดล็อก config option ที่ `.mjs` ทำไม่ได้"** ทั้งสองแบบ resolve ผ่าน loader เดียวกัน `.ts` แค่เพิ่ม type-check ให้ตัวไฟล์ config เอง
+- **"env var ที่ไม่มี `PUBLIC_` เข้าถึงจากโค้ดฝั่ง client ไม่ได้ ดังนั้นถ้าอ้างถึงตรงนั้นจะถูกจับได้ทันที"** พิสูจน์แล้วข้างบน: มันไม่ถูกจับเลย — มันกลายเป็น `undefined` เงียบ ๆ ใน script ที่ build แล้ว ซึ่งอ่านเหมือน "feature พัง" ไม่ใช่ "build ล้มเหลว"
+- **"ค่าใน `.env` ใช้ได้ตอนที่ `astro.config.mjs` เองกำลัง evaluate"** ไม่จริง — การโหลด `.env` เกิดผ่าน Vite สำหรับโค้ดแอปของคุณ ไม่ใช่สำหรับไฟล์ config เอง ให้ใช้ `process.env` แทนตรงนั้น
+
 <Callout title="สรุปบรรทัดเดียว">
-โปรเจกต์ Astro route ด้วยไฟล์ใน **`src/pages/`** และ serve `public/` ตรง ๆ ไฟล์ **`.astro`** มีสองส่วนแบ่งด้วย `---`: **component script** (frontmatter) ที่รันบน *server* — imports, top-level `await` ดึงข้อมูล, props, logic ซึ่งไม่มีอะไรถูกส่งไป browser — และ **template** (HTML บวก `{ }` expression) ที่กลายเป็น HTML ที่ render แล้ว เป็น superset ของ HTML ดังนั้น HTML ธรรมดาก็ทำงานได้เลย
+โปรเจกต์ Astro route ด้วยไฟล์ใน **`src/pages/`** และ serve `public/` ตรง ๆ ชื่อไฟล์พิเศษอื่น ๆ (`content.config.ts`, `live.config.ts`, `middleware.ts`, `actions/index.ts` และของใหม่ใน Astro 7 คือ `src/fetch.ts` สำหรับ advanced routing) จะถูกรู้จัก *ถ้ามีอยู่* ไม่ใช่สิ่งที่บังคับต้องมี — verify ตรง ๆ จาก scaffold minimal จริงของ `npm create astro@latest` ข้างบน ไฟล์ **`.astro`** มีสองส่วนแบ่งด้วย `---`: **component script** (frontmatter, server-only, ใช้ top-level `await` ได้) และ **template** (HTML บวก `{ }` expression) config จะเป็น `.mjs`, `.js`, หรือ `.ts` ก็ได้ — ความสามารถเหมือนกัน `.ts` แค่ถูก type-check เพิ่ม env var แบ่งตามชื่อ: มีแค่ตัวที่ prefix `PUBLIC_` เท่านั้นที่ไปถึงโค้ด client (ตัวที่ไม่มี prefix จะกลายเป็น `undefined` เงียบ ๆ ตรงนั้น พิสูจน์แล้วข้างบน) — และ `.env` เองก็ไม่ถูกโหลดเข้าไปใน `astro.config.mjs`
 </Callout>
 
 export const quizFiles = [
@@ -84,6 +258,7 @@ export const quizFiles = [
       'route ถูกกำหนดใน database',
     ],
     answer: 1,
+    explain: 'src/pages/ คือ file-based routing — path ของไฟล์ใต้โฟลเดอร์นี้กลายเป็น URL ไม่มี route registry แยกต่างหากให้ดูแล',
   },
   {
     q: 'อะไรรันใน frontmatter (code เหนือ `---` ตัวที่สอง) ของไฟล์ .astro?',
@@ -94,6 +269,7 @@ export const quizFiles = [
       'ไม่มีอะไร — เป็น comment',
     ],
     answer: 1,
+    explain: 'frontmatter คือโค้ดฝั่ง server ล้วน ๆ — imports, ดึงข้อมูล, logic — ที่ไม่เคยถูกส่งไป client เลย ต่างจาก <script> block ใน template',
   },
   {
     q: 'ทำไมคุณถึงใช้ top-level `await` ใน component script ของ .astro ได้?',
@@ -104,6 +280,7 @@ export const quizFiles = [
       'ใช้ไม่ได้ — await ไม่ถูกอนุญาต',
     ],
     answer: 1,
+    explain: 'frontmatter รันบน server (ตอน build หรือต่อ request) จึง await fetch หรือ DB call ตรง ๆ ได้เลย ไม่ต้องมี useEffect หรือ loading state',
   },
   {
     q: 'template .astro ในเชิง syntax คืออะไร?',
@@ -114,6 +291,29 @@ export const quizFiles = [
       'Markdown',
     ],
     answer: 1,
+    explain: 'วาง HTML ธรรมดาลงใน template .astro ก็ทำงานได้เลย แล้วเสริมด้วย { } expression, {cond && <x/>}, และ {list.map(...)} — พร้อมชื่อ attribute HTML จริง ไม่ใช่ className แบบ JSX',
+  },
+  {
+    q: '```html\n<script type="module">console.log(`secret from client:`,void 0),console.log(`public from client:`,`MySite`);</script>\n```\nนี่คือ output จริงของหน้าที่ `<script>` อ่านทั้ง `import.meta.env.SECRET_KEY` และ `import.meta.env.PUBLIC_SITE_NAME` เกิดอะไรขึ้นกับ `SECRET_KEY`?',
+    options: [
+      'ค่าจริงรั่วเข้าไปใน client bundle',
+      'มันถูกแทนที่แบบ static ด้วย `undefined` ตอน build — เงียบ ๆ ไม่มี build error',
+      'build ล้มเหลว',
+      'มันถูกเปลี่ยนชื่อเป็น PUBLIC_SECRET_KEY อัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: มีแค่ env var ที่ prefix PUBLIC_ เท่านั้นที่ถูก inline สำหรับโค้ด client ตัวที่ไม่มี prefix ที่ถูกอ้างถึงใน <script> จะกลายเป็น void 0 (undefined) — ไม่รั่ว แต่ก็ไม่ error ด้วย นั่นแหละคือเหตุผลที่มันพลาดง่ายมาก',
+  },
+  {
+    q: '```astro\n---\nconst key = import.meta.env.ANALYTICS_SECRET_KEY;\n---\n<script define:vars={{ key }}>\n  fetch(\'https://analytics.example.com/init\', { method: \'POST\', body: JSON.stringify({ key }) });\n</script>\n```\nโค้ดนี้ทำให้ `ANALYTICS_SECRET_KEY` รั่วไปยัง client ไหม ทั้งที่มันไม่มี prefix `PUBLIC_`?',
+    options: [
+      'ไม่ — ตัวแปรที่ไม่มี PUBLIC_ ปลอดภัยใน <script> เสมอ',
+      'ใช่ — `define:vars` serialize ค่าที่ resolve บน server แล้วตรง ๆ ลงไปใน HTML ที่ส่งจริง เป็นตัวหนังสือธรรมดา ไม่ว่าชื่อ env var จะเป็นอะไรก็ตาม',
+      'เฉพาะตอน development เท่านั้น',
+      'ไม่ — Astro ตัด secret ออกจาก define:vars ให้อัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'define:vars รันหลังจากค่าถูก resolve ฝั่ง server แล้ว มันจึงฝังไม่ว่า frontmatter คำนวณอะไรออกมาก็ตาม ลงใน scope ของ client script เป็นตัวหนังสือธรรมดา — กติกา PUBLIC_ inlining (ซึ่งควบคุมแค่ <script> ที่อ่าน import.meta.env ตรง ๆ) ไม่เกี่ยวกับเรื่องนี้เลย',
   },
 ];
 

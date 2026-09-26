@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## สองวิธีในการผลิต HTML ของหน้า
 
@@ -29,9 +30,13 @@ export const modeDiagram = `flowchart TB
 
 ค่า default คือ static คุณ opt โปรเจกต์ (หรือ route เดียว) เข้าสู่ on-demand rendering เมื่อหน้านั้นจำเป็นต้องใช้ข้อมูลตอน request จริง ๆ
 
+<Callout title='"hybrid" เป็นคำเก่า ถูกถอดออกใน Astro v5'>
+Astro 4.x มี output mode สามแบบ: `'static'`, `'hybrid'`, และ `'server'` อ้างตรง ๆ จาก v5 upgrade guide ทางการ: "Astro v5.0 merges the `output: 'hybrid'` and `output: 'static'` configurations into one single configuration (now called `'static'`) that works the same way as the previous hybrid option. It is no longer necessary to specify `output: 'hybrid'` in your Astro config to use server-rendered pages. The new `output: 'static'` has this capability included." ถ้าคุณยังเห็น `output: 'hybrid'` อยู่ใน config (ของเก่าที่คุณเขียนเอง หรือ snippet ที่ AI generate จาก doc ก่อน v5) มันเป็น config error จริงบน 7.3.5 — ลบบรรทัดนั้นทิ้งไปเลย `'static'` (default) ทำสิ่งที่ hybrid เคยทำอยู่แล้ว ผ่าน `prerender` ต่อ route
+</Callout>
+
 ## ควบคุมทีละ route ด้วย `prerender`
 
-คุณไม่ได้เลือก mode เดียวสำหรับทั้งเว็บ ในโปรเจกต์ที่เปิด server ไว้ **แต่ละ route ตัดสินใจ** เองด้วย `export const prerender`:
+คุณไม่ได้เลือก mode เดียวสำหรับทั้งเว็บ ในโปรเจกต์ที่เปิด server ไว้ (`output: 'static'` พร้อม adapter หรือ `output: 'server'`) **แต่ละ route ตัดสินใจ** เองด้วย `export const prerender`:
 
 ```astro
 ---
@@ -45,7 +50,42 @@ const user = await getUser(Astro.request);  // needs the incoming request
 - `export const prerender = true` → build route นี้เป็นไฟล์ static (แม้จะอยู่ในโปรเจกต์ที่เปิด server)
 - `export const prerender = false` → render route นี้แบบ on-demand (แม้จะอยู่ในโปรเจกต์ที่ส่วนใหญ่เป็น static)
 
-นี่คือทางสายกลางที่ทรงพลัง: เว็บที่ 95% เป็นไฟล์ static พร้อม route แบบ on-demand ไม่กี่ตัว (dashboard, form handler) โดยแต่ละตัว render เฉพาะเมื่อจำเป็น มักเรียกว่า **hybrid** rendering
+นี่คือทางสายกลางที่ทรงพลัง: เว็บที่ 95% เป็นไฟล์ static พร้อม route แบบ on-demand ไม่กี่ตัว (dashboard, form handler) โดยแต่ละตัว render เฉพาะเมื่อจำเป็น Astro 4.x เรียกการผสมนี้ว่า **hybrid** output วันนี้มันก็แค่สิ่งที่ `'static'` ทำเมื่อมีอย่างน้อยหนึ่ง route opt out ด้วย `prerender = false` (ดู callout ข้างบน)
+
+### พิสูจน์: route ไหนถูก prerender จริง ๆ
+
+`astro build` จริงจะ print ออกมาตรง ๆ ว่า route ไหนถูก prerender เป็นไฟล์ static — อะไรก็ตามที่ *ไม่* อยู่ในลิสต์นั้น ในโปรเจกต์ที่เปิด server ไว้ กำลังถูก render แบบ on-demand แทน สาม route: หนึ่งที่ตั้งใจให้ static ชัดเจน หนึ่งที่ตั้งใจให้ on-demand ชัดเจน และหนึ่งที่ใช้ default:
+
+```astro
+---
+// src/pages/mixed/static-about.astro
+export const prerender = true;
+---
+<html><body><h1>Static about page</h1></body></html>
+```
+
+```astro
+---
+// src/pages/mixed/dashboard.astro
+export const prerender = false;
+const cookieHeader = Astro.request.headers.get('cookie');
+---
+<html><body><h1>Dashboard for request with cookie: {cookieHeader}</h1></body></html>
+```
+
+```text
+$ npx astro build --outDir dist
+ prerendering static routes 
+  ├─ /mixed/static-about/index.html (+13ms)
+  ├─ /index.html (+1ms)
+✓ Completed in 27ms.
+
+[build] Rearranging server assets...
+[build] Server built in 467ms
+[build] Complete!
+```
+
+`/mixed/static-about/index.html` อยู่ในลิสต์ "prerendering static routes" — ไฟล์ HTML จริงที่ถูกเขียนไปที่ `dist/` ส่วน `/mixed/dashboard` ไม่โผล่ในนั้นเลย: มันถูก compile เข้าไปใน server entry แทน เพื่อ render ใหม่ทุกครั้งที่มี request build log เองนี่แหละคือหลักฐานว่าแต่ละ route ได้ mode ไหนจริง ๆ ไม่ใช่แค่สิ่งที่ source file ประกาศไว้
 
 ## Adapters: on-demand รันได้ยังไง
 
@@ -61,15 +101,75 @@ export default defineConfig({
 });
 ```
 
-adapter แปลง server rendering ของ Astro ให้เป็น format ของ platform (Cloudflare Worker, Node server, Vercel function) ถ้าไม่มี adapter feature แบบ on-demand (SSR routes, server islands, Actions endpoints) จะรันไม่ได้ — เป็น error ที่เจอบ่อยตอน deploy ครั้งแรก: *"an adapter is required"*
+adapter แปลง server rendering ของ Astro ให้เป็น format ของ platform (Cloudflare Worker, Node server, Vercel function) ถ้าไม่มี adapter feature แบบ on-demand (SSR routes, server islands, Actions endpoints) จะรันไม่ได้ — เป็น error ที่เจอบ่อยตอน deploy ครั้งแรก: *"an adapter is required"* บท [SSR & adapters](/astro/th/server-side/ssr-and-adapters/) พูดถึงการเลือกและ config adapter แบบละเอียด
 
 ## build ผลิตอะไรออกมา
 
-`astro build` รัน component script ของคุณ, render HTML, bundle CSS และ island JavaScript ใด ๆ แล้วเขียน output ไปที่ `dist/` สำหรับ static site นั่นคือโฟลเดอร์ของไฟล์ `.html` และ asset ที่คุณโยนลง CDN ไหนก็ได้ สำหรับ hybrid/server site `dist/` ยังมี server entry ที่ adapter รันด้วย ไม่ว่าทางไหน browser ก็ได้รับ HTML ที่เสร็จแล้วบวกเฉพาะ island JS — คำมั่นพื้นฐานที่ build ส่งมอบให้
+`astro build` รัน component script ของคุณ, render HTML, bundle CSS และ island JavaScript ใด ๆ แล้วเขียน output ไปที่ `dist/` สำหรับ static site นั่นคือโฟลเดอร์ของไฟล์ `.html` และ asset ที่คุณโยนลง CDN ไหนก็ได้ สำหรับเว็บที่เปิด server ไว้ `dist/` ยังมี server entry ที่ adapter รันด้วย ไม่ว่าทางไหน browser ก็ได้รับ HTML ที่เสร็จแล้วบวกเฉพาะ island JS — คำมั่นพื้นฐานที่ build ส่งมอบให้
+
+## `Astro.request`/cookies/session ทำอะไรบนหน้าที่ถูก prerender
+
+route ที่ prerender รันครั้งเดียว ตอน build time — ไม่มี request ที่เข้ามาจริงให้อ่านอะไรที่เฉพาะเจาะจงกับ request เลย `Astro.cookies`, `Astro.session`, และการอ่าน `Astro.request.headers` ล้วนต้องพึ่ง request จริง ดังนั้นการใช้อันไหนก็ตามบนหน้าที่ยังตั้ง `prerender = true` อยู่ (หรือในโปรเจกต์ `'static'` ที่ไม่มี override ต่อ route) จะเกิด warning จริงที่พิสูจน์ได้ตอน build — ไม่ใช่แค่เงียบ ๆ ไม่ทำอะไร:
+
+```astro
+---
+// src/pages/mixed/static-session.astro
+export const prerender = true;
+const views = await Astro.session?.get('views');
+---
+<html><body><p>{views}</p></body></html>
+```
+
+```text
+$ npx astro build --outDir dist
+[WARN] `Astro.request.headers` was used when rendering the route `src/pages/mixed/static-session.astro'`. `Astro.request.headers` is not available on prerendered pages. If you need access to request headers, make sure that the page is server-rendered using `export const prerender = false;` or by setting `output` to `"server"` in your Astro config to make all your pages server-rendered by default.
+```
+
+นั่นคือ build warning จริง reproduce กับ `Astro.session` โดยตรง (ทั้ง `Astro.session` และ `Astro.cookies` อ่าน header ของ request ข้างใต้เหมือนกัน จึงขึ้น warning เดียวกันเป๊ะ) ค่าที่ได้กลับมาเป็น `undefined` ตอน build — ไม่มี request ให้มี session หรือ cookie เลย วิธีแก้คือตามที่ warning บอกตรง ๆ: `export const prerender = false` บน route นั้น ย้ายมันเข้าไปในกลุ่ม on-demand ที่พิสูจน์ไว้ข้างบน
 
 <Callout title="สรุปบรรทัดเดียว">
-Astro render HTML ของ route แบบ **static** (ครั้งเดียวตอน build → ไฟล์บน CDN) หรือ **on-demand** (แต่ละ request บน server สำหรับข้อมูลตอน request) ค่า default คือ static คุณ opt แต่ละ route เข้าหรือออกด้วย `export const prerender` — เปิดทางให้เว็บแบบ **hybrid** ที่ส่วนใหญ่เป็น static พร้อม route dynamic ไม่กี่ตัว on-demand rendering ต้องมี **adapter** (Cloudflare/Node/Vercel/…) เพื่อรัน server code แต่ละ request ลืม adapter เมื่อไหร่ก็เจอ deploy error คลาสสิก "an adapter is required"
+Astro render HTML ของ route แบบ **static** (ครั้งเดียวตอน build → ไฟล์บน CDN) หรือ **on-demand** (แต่ละ request บน server สำหรับข้อมูลตอน request) ค่า default คือ static คุณ opt แต่ละ route เข้าหรือออกด้วย `export const prerender` — พิสูจน์แล้วข้างบนด้วย build log จริงที่โชว์ตรง ๆ ว่า route ไหนไปโผล่ใน `dist/` เป็นไฟล์ เทียบกับ route ไหนถูก compile เข้า server entry output แบบสามโหมด `'hybrid'` ถูกถอดออกใน Astro v5 — `'static'` บวก `prerender = false` ต่อ route ทำสิ่งที่มันเคยทำ on-demand rendering ต้องมี **adapter** (Cloudflare/Node/Vercel/…) เพื่อรัน server code แต่ละ request ลืม adapter เมื่อไหร่ก็เจอ deploy error คลาสสิก "an adapter is required" `Astro.request.headers`/`Astro.cookies`/`Astro.session` ล้วนต้องการ request จริง ดังนั้นการใช้บน route ที่ prerender จะเกิด build warning จริง พิสูจน์แล้วข้างบน ไม่ใช่ความล้มเหลวแบบเงียบ ๆ
 </Callout>
+
+## อ่านโค้ดที่ AI เขียน
+
+snippet เกี่ยวกับ rendering mode ที่ AI generate มา ควรเช็คกับสิ่งที่ยังเป็นจริงใน Astro 7:
+
+- มันตั้ง `output: 'hybrid'` หรือเปล่า? นั่นคือ config error จริงบน 7.3.5 — ถูกถอดออกใน v5 พิสูจน์แล้วข้างบนด้วยข้อความ upgrade guide เป๊ะ ๆ `'static'` (default) ครอบคลุมมันอยู่แล้ว
+- หน้าไหนอ่าน `Astro.cookies`, `Astro.session`, หรือ `Astro.request.headers` โดยไม่มี `export const prerender = false` อยู่ใกล้ ๆ เลย และไม่มี adapter/`output: 'server'` ใน config หรือเปล่า? พิสูจน์แล้วข้างบน: นั่นคือ build-time warning จริง ("not available on prerendered pages") และค่าที่ได้กลับมาคือ `undefined` — ไม่ใช่ข้อมูลตอน request ที่ snippet คาดว่าจะได้
+- มันอ้างว่า route "กลายเป็น on-demand อัตโนมัติ" เพราะ import อะไรที่เกี่ยวกับ request หรือเปล่า? rendering mode ถูกควบคุม *แค่* ด้วย `export const prerender` (หรือ `output` ของทั้งโปรเจกต์) เท่านั้น — การ import `Astro.cookies` ไม่ได้พลิก mode ให้ มันแค่ warn (แล้วคืนอะไรที่ใช้ไม่ได้) ถ้า mode ยังไม่ใช่ on-demand อยู่แล้ว
+- มันปฏิบัติกับ "static" และ "on-demand" เหมือนเป็นตัวเลือกทั้งเว็บแบบ all-or-nothing หรือเปล่า? พิสูจน์แล้วข้างบน: โปรเจกต์เดียวผสมทั้งสองแบบได้ ตัดสินใจทีละ route
+
+<SpotTheBug code={`---
+// src/pages/account/settings.astro
+const user = Astro.cookies.get('session_id');
+// no export const prerender anywhere in this file
+---
+<h1>Settings for {user?.value}</h1>
+`}>
+เมื่อไม่มี `export const prerender = false` ในไฟล์นี้เลย และไม่มีอะไรใน config ของโปรเจกต์บังคับ `output: 'server'` route นี้จะ prerender โดย default — render ตอน build time ครั้งเดียว ไม่มี request ให้อ่าน cookie เลย นี่คือ warning `Astro.request.headers`-บนหน้าที่ถูก prerender ที่พิสูจน์แล้วข้างบนเป๊ะ ๆ (`Astro.cookies.get` อ่าน request header ข้างใน) และ `user` จะได้ `undefined` กลับมาสำหรับทุกคนที่เข้าชม ตอน build time ครั้งเดียว ตลอดไป — ไม่ใช่ต่อผู้เข้าชมแบบที่โค้ดสื่อ วิธีแก้: เพิ่ม `export const prerender = false` เพื่อให้ route นี้ render ต่อ request จริง ๆ `Astro.cookies` จะได้มี request จริงให้อ่าน
+</SpotTheBug>
+
+## Mental Model
+
+rendering mode ของ route ตอบคำถามเดียว: "HTML ของหน้านี้ขึ้นกับว่าใครถามหรือเปล่า หรือมันเป็นไฟล์เดียวกันสำหรับทุกคน?" ถ้าเหมือนกันสำหรับทุกคน ก็ prerender ครั้งเดียวแล้ว serve ไฟล์นั้นตลอดไป — นั่นคือสิ่งที่ default ทำ ทันทีที่หน้าต้องรู้อะไรเกี่ยวกับ request ที่เข้ามาจริง ๆ (cookie, session, query param ที่เปลี่ยนคำตอบ) มันต้องรัน *ระหว่าง* request นั้น ไม่ใช่ล่วงหน้า — นั่นคือ `prerender = false` การพิสูจน์ข้างบนแสดงทั้งสองทิศทางของความผิดพลาด: prerender บางอย่างที่ต้องการ request (ได้ `undefined` เงียบ ๆ, warning) และไม่รู้ว่า static output ยังพก route แบบ on-demand ไม่กี่ตัวไปด้วยกันได้
+
+## ข้อแลกเปลี่ยน
+
+| | Prerendered (`prerender = true` / default static) | On-demand (`prerender = false`) |
+|---|---|---|
+| **รันตอนไหน** | ครั้งเดียว ตอน build time | ทุก request |
+| **อ่าน `Astro.cookies`/`Astro.session`/request headers ได้ไหม** | ไม่ได้ — warn แล้วคืนอะไรที่ใช้ไม่ได้ พิสูจน์แล้วข้างบน | ได้ |
+| **Hosting** | static host/CDN ไหนก็ได้ | ต้องมี adapter + runtime |
+| **Latency** | เร็วที่สุด — เป็นไฟล์ | ขึ้นกับ cold start ของ server/edge, DB call ฯลฯ |
+| **เหมาะกับ** | content ที่เหมือนกันสำหรับทุกคนที่เข้าชม | ข้อมูลต่อ user หรือต่อ request |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`output: 'hybrid'` ยังเป็นวิธีผสม static กับ dynamic route อยู่"** มันถูกถอดออกใน Astro v5 — พิสูจน์แล้วข้างบนด้วยข้อความ upgrade guide เป๊ะ ๆ `'static'` บวก `prerender = false` ต่อ route คือวิธีปัจจุบัน (และวิธีเดียว)
+- **"อ่าน `Astro.cookies` บนหน้า static แค่คืน `undefined` เงียบ ๆ"** พิสูจน์แล้วข้างบน: มันส่ง build-time warning จริงด้วย ที่ระบุ route ตรง ๆ และอธิบายวิธีแก้ — มันดัง ไม่ได้เงียบ ถ้าคุณดู build output อยู่
+- **"โปรเจกต์เป็นได้แค่ static site หรือ server-rendered site อย่างใดอย่างหนึ่ง ไม่ใช่ทั้งคู่"** พิสูจน์แล้วข้างบนด้วย build log จริง: โปรเจกต์เดียวผลิตทั้งไฟล์ `.html` ที่ prerender และ route on-demand ที่ compile เข้า server entry เคียงข้างกัน
+- **"ตั้ง `prerender = false` เป็นวิธีเดียวที่ adapter จะเข้ามาเกี่ยวข้อง"** server islands กับ Actions ก็ต้องมี adapter เหมือนกัน แม้บนเว็บที่ static ล้วน (`prerender = true` ทุกหน้า)
 
 export const quizModes = [
   {
@@ -81,6 +181,7 @@ export const quizModes = [
       'เหมือนกัน',
     ],
     answer: 1,
+    explain: 'Static output ถูก build ครั้งเดียวแล้ว serve เป็นไฟล์; on-demand output รันบน server ทุก request ซึ่งเป็นสิ่งที่ทำให้มันใช้ข้อมูลตอน request ได้ เช่น cookie หรือ user ที่ login อยู่',
   },
   {
     q: 'คุณจะทำให้ route เดียว render แบบ on-demand ในโปรเจกต์ที่ส่วนอื่นเป็น static ยังไง?',
@@ -91,6 +192,7 @@ export const quizModes = [
       'ทำไม่ได้',
     ],
     answer: 1,
+    explain: 'export const prerender = false เลือก route เดียวเข้าสู่ on-demand rendering ไม่ว่า default ของโปรเจกต์จะเป็นอะไร — พิสูจน์แล้วข้างบนด้วย build log จริงที่โชว์ route นั้นหายไปจากลิสต์ prerender',
   },
   {
     q: 'adapter มีไว้ทำอะไร?',
@@ -101,6 +203,7 @@ export const quizModes = [
       'จัดการ CSS',
     ],
     answer: 1,
+    explain: 'adapter แปลง server rendering ของ Astro ให้เป็น format ของ platform เป้าหมายเอง (Worker, Node server, serverless function) เพื่อให้ on-demand route, server island, และ Actions รันที่นั่นได้จริง',
   },
   {
     q: 'คุณ deploy เว็บที่มี SSR route แต่ไม่ได้ตั้งค่า adapter จะเกิดอะไรขึ้น?',
@@ -111,6 +214,29 @@ export const quizModes = [
       'ทั้งเว็บ build ไม่ผ่านแม้แต่หน้า static',
     ],
     answer: 1,
+    explain: 'on-demand rendering ไม่มี runtime ให้รันเลยถ้าไม่มี adapter — "an adapter is required" คือ error คลาสสิกที่เกิดจากตรงนี้',
+  },
+  {
+    q: '```text\n[WARN] `Astro.request.headers` was used when rendering the route `src/pages/mixed/static-session.astro\'`. `Astro.request.headers` is not available on prerendered pages...\n```\nwarning จริงนี้ขึ้นตอน build หน้าที่อ่าน `Astro.session` โดยมี `prerender = true` เกิดอะไรขึ้นจริง ๆ?',
+    options: [
+      'build ล้มเหลว',
+      'หน้ายัง prerender เป็นไฟล์ static, การอ่าน session คืน undefined, และ build warn เพราะไม่มี request จริงตอน build time',
+      'Astro พลิก route ให้เป็น on-demand อัตโนมัติ',
+      'warning เป็นแค่เรื่องความสวยงาม ค่า session ถูกต้องสำหรับ user ที่ request หน้านั้นจริง ๆ',
+    ],
+    answer: 1,
+    explain: 'การ prerender รันครั้งเดียวตอน build time โดยไม่มี request เข้ามา ดังนั้นอะไรก็ตามที่มาจาก request (cookie, session, header) ไม่มีอะไรจริงให้อ่าน Astro warn แทนที่จะสำเร็จแบบเงียบ ๆ พิสูจน์แล้วข้างบน แต่ไม่ได้เปลี่ยน rendering mode ของ route ให้คุณ',
+  },
+  {
+    q: '```js\n// astro.config.mjs\nimport { defineConfig } from \'astro/config\';\nexport default defineConfig({ output: \'hybrid\' });\n```\nบน Astro 7.3.5 config นี้จะเกิดอะไรขึ้น?',
+    options: [
+      'ทำงานเหมือน hybrid mode ของ Astro 4 เป๊ะ',
+      'config error — `hybrid` ถูกถอดออกใน v5; `\'static\'` (default) มี prerender = false ต่อ route รองรับอยู่แล้ว',
+      'มัน fallback ไปเป็น server mode เงียบ ๆ',
+      'มันเป็นทางเลือกที่ใช้ได้จริงในปัจจุบัน เทียบเท่า static',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนผ่านข้อความ v5 upgrade guide เป๊ะ ๆ: hybrid ถูก merge เข้ากับ static ใน Astro v5 ดังนั้นนี่คือ config error จริงบน 7.3.5 ไม่ใช่ตัวเลือกเก่าที่ยังใช้ได้',
   },
 ];
 

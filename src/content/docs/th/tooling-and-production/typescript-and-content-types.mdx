@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## TypeScript มีมาให้ในตัว
 
@@ -61,20 +62,100 @@ export const typesDiagram = `flowchart LR
 
 type เหล่านี้อยู่ในโฟลเดอร์ `.astro/` ที่ generate ให้ ซึ่ง Astro ดูแลให้เอง (refresh โดย dev server และ `astro sync`) คุณไม่ต้องแก้เอง แค่ได้ autocomplete และความปลอดภัยฟรีจาก schema ที่คุณเขียนไว้แล้ว
 
-## การ type Astro.locals
+### `astro sync` และสิ่งที่ไปโผล่ใน `.astro/` จริง ๆ
 
-เมื่อใช้ middleware แนบข้อมูลระดับ request (เช่น user ปัจจุบัน) ไว้ที่ `Astro.locals` คุณกำหนด type ให้ locals ด้วยการประกาศ interface `App.Locals` มักอยู่ใน `src/env.d.ts`:
+`astro sync` (ที่ `astro dev`/`astro check`/`astro build` เรียกโดยอัตโนมัติด้วย) อ่าน config ของ collection แล้วเขียน TypeScript จริงที่ check ได้ — ไม่ใช่แค่ declaration ที่บอกเจตนา พิสูจน์ตรง ๆ จาก `astro sync` จริงบน collection ตายตัวของ probe คอร์สนี้ (`blog`, `authors`) `.astro/content.d.ts` ที่ generate มีกลไก `CollectionEntry`/`InferEntrySchema` จริง ๆ อยู่ในนั้น:
+
+```ts
+// .astro/content.d.ts (generated — never hand-edit)
+export type CollectionEntry<C extends CollectionKey> = Flatten<DataEntryMap[C]>;
+// ...
+type InferEntrySchema<C extends keyof DataEntryMap> = import('astro/zod').infer<
+  ContentConfig['collections'][C]['schema']
+>;
+```
+
+สองชื่อที่ควรจำหน้าได้: **`CollectionEntry<'blog'>`** คือ type ของหนึ่ง entry เต็ม ๆ (id, ชื่อ collection และ `data`); **`InferEntrySchema<'blog'>`** คือแค่ shape ของ `data` เดี่ยว ๆ infer มาจาก Zod schema ตรง ๆ (มีประโยชน์เวลา helper function ต้องการแค่ shape ของ frontmatter ไม่ใช่ทั้ง entry wrapper):
+
+```ts
+import type { CollectionEntry } from 'astro:content';
+
+function renderTitle(entry: CollectionEntry<'blog'>) {
+  return entry.data.title;   // typed as string, straight from the schema
+}
+```
+
+ก่อนที่ `astro sync` จะรันเลยสักครั้ง `astro/types/content.d.ts` ship fallback แบบ static ให้ (`export type CollectionEntry<C> = any;`) เพื่อให้โปรเจกต์ compile ได้อยู่ — แต่ fallback นั้นตั้งใจให้ไม่มี type เลย นั่นแหละคือเหตุผลที่ `astro check`/`astro build` รัน `sync` ก่อนเสมอ แทนที่จะเชื่อว่า `.astro/` มีอะไรอยู่แล้วก่อนหน้านั้น
+
+## Type `Astro.locals` ด้วย `App.Locals`
+
+เมื่อใช้ middleware แนบข้อมูลระดับ request (เช่น user ปัจจุบัน) ไว้ที่ `Astro.locals` คุณกำหนด type ให้ locals ด้วยการประกาศ interface `App.Locals` มักอยู่ใน `src/env.d.ts` ambient declaration แบบนี้ไม่ได้ scope อยู่แค่ไฟล์เดียวในโปรเจกต์จริง — ทุกไฟล์ `.ts`/`.astro` เห็น `App.Locals` ตัวเดียวกันที่ merge กันแล้ว — คอร์สนี้เลยใช้ **shape เดียวทุกที่ที่โชว์** ตรงกับบท [middleware & sessions](/astro/th/server-side/middleware-and-sessions/) เป๊ะ:
 
 ```ts
 // src/env.d.ts
+type User = { id: string; name: string };
+
 declare namespace App {
   interface Locals {
-    user: { id: string; name: string } | null;
+    user: User | null;
+    requestId: string;
   }
 }
 ```
 
-ตอนนี้ `Astro.locals.user` มี type ทุกที่ — ใน middleware, page และ endpoint
+ตอนนี้ `Astro.locals.user` และ `Astro.locals.requestId` มี type ทุกที่ — ใน middleware, page และ endpoint
+
+## Type `Astro.params`/`Astro.props` จาก `getStaticPaths`
+
+`getStaticPaths` ของ dynamic route คืน `{ params, props }` ต่อหน้าที่ generate และ `InferGetStaticPropsType` (verify แล้วใน `astro/dist/types/public/common.d.ts`) ดึง type จริงของ `props` มาจากตัว function เอง แทนที่จะ retype เองด้วยมือ:
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import type { InferGetStaticPropsType } from 'astro';
+
+export async function getStaticPaths() {
+  return [
+    { params: { slug: 'hello-world' }, props: { title: 'Hello World', views: 42 } },
+  ];
+}
+
+type Props = InferGetStaticPropsType<typeof getStaticPaths>;
+const { title, views } = Astro.props;   // title: string, views: number — inferred, not retyped by hand
+const { slug } = Astro.params;          // slug is typed from the route's own [slug] segment
+---
+<h1>{title} ({views} views) — /{slug}</h1>
+```
+
+## `astro:env` typed vars
+
+การประกาศ schema ใต้ key config `env` (stable แล้ว ไม่ได้อยู่ใต้ `experimental` — verify แล้วจาก schema ที่ติดตั้งจริง) ทำให้ Astro generate real export ที่มีชื่อจริงให้ `astro:env/client` และ `astro:env/server` — ไม่ใช่ `Record<string, string>` แบบ generic พิสูจน์ด้วย `astro sync` จริงกับ config เป๊ะ ๆ นี้:
+
+```js
+// astro.config.mjs
+import { defineConfig, envField } from 'astro/config';
+
+export default defineConfig({
+  env: {
+    schema: {
+      API_URL: envField.string({ context: 'client', access: 'public' }),
+      API_SECRET: envField.string({ context: 'server', access: 'secret' }),
+    },
+  },
+});
+```
+
+```ts
+// .astro/env.d.ts (generated — never hand-edit)
+declare module 'astro:env/client' {
+	export const API_URL: string;
+}
+declare module 'astro:env/server' {
+	export const API_SECRET: string;
+}
+```
+
+`API_URL` import ได้จาก `astro:env/client` (และเพราะเป็น `context: 'client'` ปลอดภัยในโค้ด browser); `API_SECRET` มีอยู่แค่ใน `astro:env/server` — import มันจาก module ที่รันฝั่ง client เป็น module-resolution error จริง โดยการออกแบบ ไม่ใช่การรั่วตอน runtime แบบ `.env` var ที่ไม่มี prefix
 
 ## type-check ด้วย astro check
 
@@ -88,8 +169,48 @@ editor type-check ให้ระหว่างเขียน แต่ไฟ�
 }
 ```
 
+## อ่านโค้ดที่ AI เขียน
+
+snippet `.astro`/`env.d.ts`/`astro:env` ที่ AI generate มา ควรเช็คกับ type ที่ generate จริง:
+
+- มันประกาศ `App.Locals` ไม่เหมือนกันในมากกว่าหนึ่งไฟล์ของโปรเจกต์เดียวกันหรือเปล่า (เช่นไฟล์หนึ่งบอก `user: { id: string }` อีกไฟล์บอก `user: SomeOtherShape`)? ambient declaration merge กันทั้งโปรเจกต์ — พิสูจน์แล้วข้างบน คอร์สนี้ตั้งใจใช้ shape เดียวกันเป๊ะทุกที่ที่โชว์ `App.Locals` เพื่อเลี่ยงการชนแบบนั้นโดยเฉพาะ
+- มันเขียน type ของ return value `getCollection('blog')` เองด้วยมือ แทนที่จะใช้ `CollectionEntry<'blog'>` หรือเปล่า? type ที่ generate ไว้ (พิสูจน์แล้วข้างบน จาก `.astro/content.d.ts` จริง) มีอยู่แล้ว การเขียนซ้ำเองด้วยมือจะ drift ทันทีที่ schema เปลี่ยน
+- มัน import จาก `astro:env/client` ในไฟล์ที่ import อะไรที่ server-only ด้วย หรือกลับกัน? `astro:env/client` กับ `astro:env/server` เป็นสอง virtual module แยกกันโดยการออกแบบ (พิสูจน์แล้วข้างบน) — var ที่ประกาศ `context: 'server'` ไม่มีอยู่บน client module เลย ดังนั้น import จากตรงนั้นเป็น module-resolution error จริง ไม่ใช่การรั่วตอน runtime ที่ต้องจับทีหลัง
+- มันอ้างว่า `astro/tsconfigs/base` คือตัวเลือกที่เข้มงวด/แนะนำหรือเปล่า? `strict` หรือ `strictest` ต่างหากที่จับ bug ได้จริง `base` คือตัวที่หลวมที่สุดในสามตัว
+- หน้า `getStaticPaths` retype shape ของ `props` ตัวเองด้วยมือ แทนที่จะใช้ `InferGetStaticPropsType<typeof getStaticPaths>` หรือเปล่า? เวอร์ชันที่เขียนเองด้วยมือ drift ออกจากสิ่งที่ `getStaticPaths` คืนจริงได้เงียบ ๆ ส่วนเวอร์ชันที่ infer มา drift ไม่ได้
+
+<SpotTheBug code={`// src/env.d.ts
+declare namespace App {
+  interface Locals {
+    user: { id: string; role: string } | null;
+  }
+}
+`}>
+โปรเจกต์นี้มี `src/env.d.ts` ที่ประกาศ `App.Locals` ด้วย `user: User | null; requestId: string` อยู่แล้ว (โชว์ไว้ก่อนหน้าในบทนี้ ตรงกับบท middleware & sessions) การเพิ่ม `declare namespace App { interface Locals { user: ...} }` *ตัวที่สอง* ที่มี `user` shape ต่างออกไป (ตรงนี้คือ `{ id: string; role: string }` แทน `{ id: string; name: string }`) ไม่ได้ override ตัวแรก — TypeScript merge declaration ชื่อเดียวกันทั้งโปรเจกต์ และ type ที่ประกาศไม่ตรงกันสองแบบสำหรับ property `user` เดียวกันบน interface ที่ merge แล้วเดียวกัน เป็นการชนกันจริงระดับ type (error แบบ "subsequent property declarations must have the same type") ambient global declaration ไม่ได้ scope ตามไฟล์แบบที่ import เป็น — มี `App.Locals` แค่หนึ่งเดียวต่อโปรเจกต์ ไม่ว่าจะมีกี่ไฟล์มาช่วยประกอบมันก็ตาม
+</SpotTheBug>
+
+## Mental Model
+
+เรื่องราวการ type ของ Astro มีธีมเดียวที่วนซ้ำ: อย่าเขียน type เองด้วยมือถ้ามันสามารถ *generate* จากอะไรที่คุณเขียนไว้แล้วครั้งเดียวได้ (Zod schema, return ของ `getStaticPaths`, `env.schema`) `CollectionEntry`, `InferEntrySchema`, และ `InferGetStaticPropsType` ล้วนเป็นท่าเดียวกัน — ชี้ type helper ไปที่แหล่งความจริงตัวจริง แทนที่จะ copy shape ของมันด้วยมือ เพื่อให้การเปลี่ยน schema กลายเป็นการเปลี่ยน type อัตโนมัติ โดยไม่มีไฟล์ที่สองให้ต้องจำไปแก้
+
+## ข้อแลกเปลี่ยน
+
+| | Type ที่เขียนเอง | Type ที่ Astro generate/infer ให้ |
+|---|---|---|
+| **แหล่งความจริง** | ไม่ว่าคุณ copy มาจากไหน | ตัว schema/function เอง |
+| **drift เมื่อ schema เปลี่ยนไหม** | ใช่ — เงียบ ๆ จนกว่าอะไรจะพัง | ไม่ — type อัปเดตตามไปด้วย |
+| **การ setup** | ไม่มี | `astro sync` (อัตโนมัติใน dev/build/check) |
+| **เหมาะกับ** | ข้อมูลที่ไม่ได้มาจาก schema จริง ๆ | content collection, props ของ getStaticPaths, astro:env |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"แต่ละบท/ไฟล์ประกาศ `App.Locals` เวอร์ชันของตัวเองได้"** พิสูจน์แล้วข้างบน: ambient declaration merge กันทั้งโปรเจกต์ และสองไฟล์ที่ประกาศ type ไม่ตรงกันสำหรับ property เดียวกันคือการชนจริง ไม่ใช่การ override
+- **"`CollectionEntry<'blog'>` เป็นแค่ documentation ของ shape ไม่ใช่ type ที่ generate จริง"** พิสูจน์แล้วข้างบนด้วยการอ่าน `.astro/content.d.ts` ที่ generate จริง: มันคือ TypeScript ที่ check ได้จริง generate สด ๆ จาก Zod schema โดย `astro sync`
+- **"`astro:env/client` กับ `astro:env/server` เป็น module เดียวกัน แค่จัดตาม convention"** เป็นคนละ virtual module (พิสูจน์แล้วข้างบนด้วย `.astro/env.d.ts` ที่ generate จริง) — var ที่ `context: 'server'` ไม่มีอยู่บน client module จริง ๆ
+- **"การเลือก TypeScript preset (`base`/`strict`/`strictest`) แทบไม่มีผล"** `base` ตั้งใจให้หลวมที่สุดในสามตัว `strict`/`strictest` เปิด check ที่จับ bug ได้จริง — พิสูจน์จากชื่อที่เป็นการไล่ระดับจริง ไม่ใช่แค่ label การตลาด
+
 <Callout title="สรุปหนึ่งบรรทัด">
-Astro มี **TypeScript ในตัว** (extend `astro/tsconfigs/strict`) type props ของ component ด้วย interface `Props` และ type ข้อมูล request บน `Astro.locals` ผ่าน interface `App.Locals` ฟีเจอร์เด่น: Astro **generate type จาก Zod schema ของ content** ดังนั้น `getCollection`/`getEntry` คืน entry ที่มี type ครบ พร้อม autocomplete และ error เมื่อเข้าถึง field ผิด รัน **`astro check`** (ควรเป็น `astro check && astro build`) เพื่อ type-check ไฟล์ `.astro` และหยุด build ที่พัง
+Astro มี **TypeScript ในตัว** (extend `astro/tsconfigs/strict` หรือ `strictest` — `base` คือตัวที่หลวมที่สุดในสาม) type props ของ component ด้วย interface `Props` และ type ข้อมูล request บน `Astro.locals` ผ่าน interface `App.Locals` **หนึ่งเดียวทั้งโปรเจกต์** (ambient declaration merge กันทั้งโปรเจกต์ — พิสูจน์แล้วข้างบน การประกาศตัวที่สองที่ไม่ตรงกันคือการชนจริง ไม่ใช่การ override) ฟีเจอร์เด่น: Astro **generate type จาก Zod schema ของ content** (`CollectionEntry`, `InferEntrySchema` พิสูจน์แล้วข้างบนตรงจาก `.astro/content.d.ts` ที่ generate จริง) ดังนั้น `getCollection`/`getEntry` คืน entry ที่มี type ครบ `InferGetStaticPropsType<typeof getStaticPaths>` ทำแบบเดียวกันให้ props ของ dynamic route และ `env.schema` ที่ประกาศไว้ generate named export จริงให้ `astro:env/client`/`astro:env/server` (พิสูจน์แล้วข้างบน) แทนที่จะเป็นถุง string ที่ไม่มี type รัน **`astro check`** (ควรเป็น `astro check && astro build`) เพื่อ type-check ไฟล์ `.astro` และหยุด build ที่พัง
 </Callout>
 
 export const quizTypes = [
@@ -102,6 +223,7 @@ export const quizTypes = [
       'ในไฟล์ .d.ts แยกต่อ component',
     ],
     answer: 1,
+    explain: 'interface Props ใน frontmatter คือสิ่งที่ astro check เอาไปเช็คทุกจุดที่เรียกใช้ component นั้น',
   },
   {
     q: 'type ของ `getCollection(\'blog\')` มาจากไหน?',
@@ -112,6 +234,7 @@ export const quizTypes = [
       'เป็น `any` เสมอ',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วยการอ่าน .astro/content.d.ts ที่ generate จริง: CollectionEntry และ InferEntrySchema generate ตรงจาก Zod schema ไม่ใช่ดูแลเองด้วยมือ',
   },
   {
     q: 'type ข้อมูลที่แนบไว้ที่ `Astro.locals` (เช่นโดย middleware) ยังไง?',
@@ -122,6 +245,7 @@ export const quizTypes = [
       'ส่งเป็น prop ทุกที่',
     ],
     answer: 1,
+    explain: 'App.Locals คือ ambient interface ที่ type Astro.locals ทั้งโปรเจกต์ — แต่พิสูจน์แล้วข้างบนว่ามันคือ interface ที่ merge แล้วหนึ่งเดียว ไม่ใช่หนึ่งต่อไฟล์',
   },
   {
     q: '`astro check` ทำอะไร?',
@@ -132,6 +256,29 @@ export const quizTypes = [
       'deploy เว็บ',
     ],
     answer: 1,
+    explain: 'astro check คือ tool ที่ type-check ไฟล์ .astro จริง ๆ (tsc เฉย ๆ ทำไม่ได้) — ต่อไว้ก่อน astro build เพื่อหยุด deploy ที่มี type error จริง',
+  },
+  {
+    q: '```ts\n// src/env.d.ts (already exists, elsewhere in this project)\ntype User = { id: string; name: string };\ndeclare namespace App {\n  interface Locals {\n    user: User | null;\n    requestId: string;\n  }\n}\n```\nไฟล์ที่สองเพิ่ม:\n```ts\ndeclare namespace App {\n  interface Locals {\n    user: { id: string; role: string } | null;\n  }\n}\n```\nจะเกิดอะไรขึ้น?',
+    options: [
+      'declaration ตัวที่สอง override ตัวแรกเงียบ ๆ',
+      'เกิดการชนกันจริงระดับ type — TypeScript merge declaration ทั้งสองทั้งโปรเจกต์ และ type ที่ไม่ตรงกันสองแบบสำหรับ `user` ชนกัน',
+      'Astro เลือกไฟล์ที่แก้ล่าสุด',
+      'ไม่มีอะไรเกิดขึ้น — App.Locals scope ตามไฟล์',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: ambient namespace/interface declaration merge กันทั้งโปรเจกต์ สองไฟล์ที่ประกาศ type ต่างกันสำหรับ property Locals.user เดียวกัน คือการชนกันจริงตอน compile ไม่ใช่การ override — นี่คือเหตุผลที่คอร์สนี้ใช้ shape เดียวกันเป๊ะทุกที่',
+  },
+  {
+    q: '```js\n// astro.config.mjs\nexport default defineConfig({\n  env: {\n    schema: {\n      API_URL: envField.string({ context: \'client\', access: \'public\' }),\n      API_SECRET: envField.string({ context: \'server\', access: \'secret\' }),\n    },\n  },\n});\n```\nหลัง `astro sync` `.astro/env.d.ts` ที่ generate มีอะไรอยู่จริง ๆ?',
+    options: [
+      'Record<string, string> ตัวเดียวสำหรับ env var ทั้งหมด',
+      'สอง virtual module แยกกัน astro:env/client (มีแค่ API_URL) กับ astro:env/server (มีแค่ API_SECRET) แต่ละอันมี named export จริง',
+      'ไม่มีอะไรเลยจนกว่าจะเขียน .d.ts เอง',
+      'ตัวแปรทั้งสองใช้ได้จากทั้งสอง module',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบนด้วยไฟล์ที่ generate จริง: astro:env/client กับ astro:env/server เป็นคนละ module ที่มี named export ที่ type ตรงกับ context ที่ประกาศไว้ของแต่ละตัว — ตัวแปรที่ server-only import จาก client module ไม่ได้เลย',
   },
 ];
 

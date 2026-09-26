@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The production build
 
@@ -41,6 +42,32 @@ export const deployDiagram = `flowchart TB
   static --> cdn["any CDN / static host"]
   ssr --> runtime["adapter runtime: Workers, Node, serverless"]`;
 
+## The current adapters, and Cloudflare's two modes
+
+Every official adapter's latest version, verified with `npm view <pkg> version` against the real npm registry (not remembered from a changelog):
+
+| Adapter | Package | Latest version |
+|---|---|---|
+| Node | `@astrojs/node` | `11.1.6` |
+| Cloudflare | `@astrojs/cloudflare` | `14.3.3` |
+| Vercel | `@astrojs/vercel` | `11.0.11` |
+| Netlify | `@astrojs/netlify` | `8.2.6` |
+
+Cloudflare is worth a second look because it covers **both** deploy targets this lesson describes, from one package: a purely static Astro site can deploy to **Cloudflare Pages/Workers as static assets** with no adapter at all (just files, served from Cloudflare's CDN); the moment a route needs on-demand rendering, `adapter: cloudflare()` turns the *same* project into a Cloudflare Worker that runs your server code per request — the adapter is what adds the "assets" binding and worker entry (`dist/_worker.js/index.js`) to the Cloudflare deploy config, not something a static-only deploy needs.
+
+## `astro preview`'s real limits
+
+`astro preview` starts a local server for your **build output** — but whether it can actually run on-demand routes depends entirely on whether the adapter you're using ships its own preview server. Straight from Astro's own reference: *"If an adapter is set in the configuration, the preview server is provided by the adapter. Adapters are not required to provide a preview server, so this feature may not be available depending on your adapter of choice."* Verified directly against each adapter's own published `exports` map:
+
+| Adapter | Ships a preview entrypoint? |
+|---|---|
+| `@astrojs/node` | Yes (`./preview.js`) |
+| `@astrojs/cloudflare` | Yes (`./entrypoints/preview`) |
+| `@astrojs/vercel` | No |
+| `@astrojs/netlify` | No |
+
+On Vercel or Netlify, `astro preview` still runs, but it can only serve the static parts of your build — there's no local preview of the on-demand routes for those two, by design; you preview those with the platform's own local dev tool (`vercel dev`, `netlify dev`) instead. `astro preview` also explicitly says it "is not designed to be run in production," regardless of adapter.
+
 ## Set site and base correctly
 
 Two config values bite people at deploy time:
@@ -53,8 +80,13 @@ Two config values bite people at deploy time:
 Astro is content-first, and its ecosystem reflects that:
 
 - **Starlight** — an official documentation-site framework built on Astro (it's what this course is built with): sidebars, search, i18n, and dark mode out of the box.
-- **Integrations directory** — a large catalog of official and community integrations: UI frameworks, CMS connectors, image services, analytics, and adapters for every major host. (One official package left in Astro 7: `@astrojs/db` is no longer maintained — reach for `node:sqlite`, Drizzle, or a hosted database instead.)
-- **Content-focused patterns** — combined with content collections, Astro is a natural fit for blogs, docs, marketing sites, and headless-CMS front-ends, where you get a fast static (or hybrid) site with typed content.
+- **Integrations directory** — a large catalog of official and community integrations: UI frameworks, CMS connectors, image services, analytics, and adapters for every major host.
+- **Content-focused patterns** — combined with content collections, Astro is a natural fit for blogs, docs, marketing sites, and headless-CMS front-ends, where you get a fast static (or on-demand) site with typed content.
+
+Two packages worth a specific warning, both verified directly against their real npm metadata rather than a blog post's memory of them:
+
+- **`@astrojs/db`** — `npm view @astrojs/db deprecated` returns: *"This package is deprecated. Use a database client (Drizzle, Kysely, etc.) directly instead."* Reach for `node:sqlite`, Drizzle, or a hosted database (Turso, Neon, PlanetScale) instead.
+- **`astro-integration-kit`** — also npm-deprecated (`npm view astro-integration-kit deprecated` points at its own migration guide). If a generated snippet reaches for it to build a custom integration, check whether the helper it's using has since landed in Astro core itself before adding the extra dependency.
 
 Reach for a framework like **Starlight** when it matches your use case rather than rebuilding docs infrastructure by hand — the same "compose, don't reinvent" instinct that runs through Astro.
 
@@ -69,12 +101,53 @@ Most projects upgrade in an afternoon. The checklist:
 5. **Markdown plugins**: if you use remark/rehype plugins, install `@astrojs/markdown-remark` and set `markdown: { processor: unified() }`; otherwise enjoy Sätteri.
 6. **Vite 8**: review the Vite 8 migration notes for any Vite-specific plugin you configured under the `vite` key.
 7. **Rename `src/fetch.ts`** if you had an unrelated file by that name (or set `fetchFile`).
-8. **Removed APIs**: `@astrojs/db` (switch to `node:sqlite`, Drizzle, or a hosted DB), the `astro:transitions` event constants (use the string event names such as `'astro:before-preparation'`), and `getContainerRenderer` now imported from `@astrojs/react/container-renderer`.
+8. **Removed APIs**: `@astrojs/db` (switch to `node:sqlite`, Drizzle, or a hosted DB), the `astro:transitions` event constants (use the string event names such as `'astro:before-preparation'`), and `getContainerRenderer` now imported from a framework-specific subpath (`@astrojs/preact/container-renderer` if you use Preact — the exact subpath matches whichever `@astrojs/<framework>` package the project actually installs, verified in the testing lesson).
 
 Then `astro check && astro build` — the build is noticeably faster, which is the reward.
 
+## Reading AI-generated code
+
+A generated "here's how to deploy Astro" answer is worth checking against what's actually true on 7.3.5:
+
+- Does it say an adapter is optional for server islands or Actions on an otherwise-static site? Proven above (and in the rendering-modes lesson): those features need on-demand rendering to run at all, which needs an adapter, even if every *page* route is prerendered.
+- Does it recommend `@astrojs/db` or `astro-integration-kit` without a caveat? Both are npm-deprecated — proven above with their real deprecation notices, not a guess about their popularity.
+- Does it claim `astro preview` is a valid lightweight production server? Proven above with the CLI's own words: *"not designed to be run in production."*
+- Does it assume `astro preview` exercises on-demand routes the same way regardless of adapter? Proven above: only Node and Cloudflare ship a preview entrypoint; Vercel and Netlify don't, so `astro preview` only serves static output on those two.
+- Does it suggest Cloudflare *always* needs `adapter: cloudflare()` to deploy? A purely static site deploys to Cloudflare Pages/Workers as static assets with zero adapter — the adapter is specifically for on-demand rendering, proven above.
+
+<SpotTheBug code={`// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel';
+
+export default defineConfig({
+  adapter: vercel(),
+});
+`} lang="js">
+Nothing here is a config error — but a team relying on `astro preview` to manually verify an on-demand route before deploying to Vercel is trusting a step that, proven above, doesn't actually run that route: `@astrojs/vercel`'s package `exports` has no preview entrypoint, so `astro preview` on this config only serves the static parts of the build. The fix isn't a code change to this file — it's a process one: use `vercel dev` (or deploy to a Vercel preview environment) to actually exercise on-demand routes before shipping, since `astro preview` silently can't.
+</SpotTheBug>
+
+## Mental Model
+
+A deploy target is really two separate questions Astro answers independently: "where do the files go" (any static host, for the HTML/CSS/JS `dist/client` produces) and "who runs the server code" (the adapter, translating Astro's on-demand rendering into that one platform's own runtime shape). Cloudflare answering both — plain static assets *or* a Worker, from the same package — is the clearest illustration that these are genuinely separate axes, not one combined "hosting provider" decision.
+
+## Trade-offs
+
+| | Static deploy | On-demand deploy |
+|---|---|---|
+| **Adapter needed** | No | Yes |
+| **Hosts** | Any CDN/static host, including Cloudflare Pages with zero adapter | Cloudflare Workers, Node, Vercel, Netlify Functions |
+| **`astro preview` exercises it locally?** | Always | Only on adapters that ship a preview entrypoint (Node, Cloudflare — proven above; not Vercel/Netlify) |
+| **Best for** | Content that's the same for everyone | Auth, forms, live/request-time data |
+
+## Common Misconceptions
+
+- **"`astro preview` is a fine way to smoke-test the production build before deploying, on any adapter."** Proven above: on Vercel and Netlify specifically, it can't run the on-demand routes at all — only the static parts. It also explicitly isn't meant for production traffic on any adapter.
+- **"Cloudflare deployment always needs `adapter: cloudflare()`."** A fully static site deploys to Cloudflare as plain static assets with no adapter — the adapter is only for on-demand rendering on that same platform.
+- **"`@astrojs/db` is just less popular than Drizzle, not actually deprecated."** Proven above with the real npm deprecation notice on the package itself.
+- **"An Astro 6 → 7 upgrade mostly means fixing your own code."** Most of the checklist above is deleting things that no longer exist (`experimental` flags, `astro:transitions` constants) rather than fixing bugs in your code.
+
 <Callout title="The one-line takeaway">
-`astro build` writes `dist/`: just **HTML files** for a static site (deployable to any CDN — Cloudflare Pages, Netlify, S3), or a **server entry + assets** for on-demand, which needs the matching **adapter** and a runtime. Set **`site`** to your real deployed URL (absolute URLs depend on it) and **`base`** to the subpath you're served from (a mismatch 404s your assets). The ecosystem is content-first: **Starlight** for docs, plus a large integrations directory — compose with it rather than rebuilding. Upgrading 6 → 7 is mostly `npx @astrojs/upgrade`, deleting stabilised `experimental` flags, and fixing what the strict compiler and JSX whitespace now flag.
+`astro build` writes `dist/`: just **HTML files** for a static site (deployable to any CDN — Cloudflare Pages, Netlify, S3, or Cloudflare's own static-assets mode with zero adapter, proven above), or a **server entry + assets** for on-demand, which needs the matching **adapter** and a runtime. Set **`site`** to your real deployed URL (absolute URLs depend on it) and **`base`** to the subpath you're served from (a mismatch 404s your assets). `astro preview` only exercises on-demand routes on adapters that ship a preview entrypoint (Node, Cloudflare — proven above; not Vercel/Netlify) and is never meant for production traffic on any of them. The ecosystem is content-first: **Starlight** for docs, plus a large integrations directory — but `@astrojs/db` and `astro-integration-kit` are both npm-deprecated, proven above. Upgrading 6 → 7 is mostly `npx @astrojs/upgrade`, deleting stabilised `experimental` flags and removed APIs, and fixing what the strict compiler and JSX whitespace now flag.
 </Callout>
 
 export const quizDeploy = [
@@ -87,6 +160,7 @@ export const quizDeploy = [
       'Only with an adapter',
     ],
     answer: 1,
+    explain: 'A purely static build is just files (HTML/CSS/JS) — deployable anywhere that serves files, no runtime or adapter needed.',
   },
   {
     q: 'When is an adapter required for deployment?',
@@ -97,6 +171,7 @@ export const quizDeploy = [
       'Never',
     ],
     answer: 1,
+    explain: 'On-demand rendering, server islands, and Actions all need a live runtime to execute server code per request — that runtime is what the adapter provides.',
   },
   {
     q: 'Your deployed site under example.com/docs/ has all its CSS and links returning 404. What is the likely cause?',
@@ -107,6 +182,7 @@ export const quizDeploy = [
       'The build failed silently',
     ],
     answer: 1,
+    explain: 'A mismatched base is the classic cause of assets 404ing under a subpath deploy — the built HTML references paths that assume a different base.',
   },
   {
     q: 'What is Starlight?',
@@ -117,6 +193,7 @@ export const quizDeploy = [
       'An Astro adapter',
     ],
     answer: 1,
+    explain: 'Starlight is the official docs framework built on Astro — sidebars, search, i18n, and dark mode out of the box, and it\'s what this course itself is built with.',
   },
   {
     q: 'Which of these is part of a typical Astro 6 → 7 upgrade?',
@@ -127,6 +204,29 @@ export const quizDeploy = [
       'Replacing content collections with `Astro.glob()`',
     ],
     answer: 1,
+    explain: 'The 6 → 7 upgrade is mostly deleting stabilised experimental flags, fixing what the strict Rust compiler now rejects, and reviewing compressHTML\'s new JSX-style whitespace default.',
+  },
+  {
+    q: 'A project deploys to Vercel with `adapter: vercel()`. A teammate says "I ran `astro preview` and the on-demand routes worked, so we\'re safe to ship." What is actually true, proven above?',
+    options: [
+      'They are correct — astro preview always exercises on-demand routes',
+      '`@astrojs/vercel` ships no preview entrypoint, so astro preview could only have served the static parts — the on-demand routes were never actually exercised locally',
+      'astro preview always fails completely for on-demand adapters',
+      'astro preview is identical to a production Vercel deploy',
+    ],
+    answer: 1,
+    explain: 'Proven above with the real exports map of @astrojs/vercel: no preview entrypoint exists, so astro preview cannot run on-demand routes for it — use vercel dev or an actual preview deployment to verify those.',
+  },
+  {
+    q: 'A generated deployment guide recommends `@astrojs/db` for "a lightweight embedded database." What does the real npm registry say?',
+    options: [
+      'It is actively maintained and recommended',
+      'It is deprecated: "Use a database client (Drizzle, Kysely, etc.) directly instead."',
+      'It was renamed to @astrojs/database',
+      'It requires a paid Astro Studio account',
+    ],
+    answer: 1,
+    explain: 'Proven above via npm view @astrojs/db deprecated: the package itself carries a real deprecation notice pointing away from it.',
   },
 ];
 

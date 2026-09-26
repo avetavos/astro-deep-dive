@@ -9,27 +9,101 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The project layout
 
-A typical Astro project has a small, conventional structure:
+A typical Astro project has a small, conventional structure. Here it is proven, not paraphrased — the real scaffold from `npm create astro@latest -- --template minimal` on Astro 7.3.5:
+
+```text
+$ npm create astro@latest -- --template minimal --no-install --no-git --yes ./mysite
+$ find mysite -not -path '*/node_modules*' -not -path '*/.git*' | sort
+mysite
+mysite/.vscode
+mysite/.vscode/extensions.json
+mysite/.vscode/launch.json
+mysite/AGENTS.md
+mysite/CLAUDE.md
+mysite/README.md
+mysite/astro.config.mjs
+mysite/package.json
+mysite/public
+mysite/public/favicon.ico
+mysite/public/favicon.svg
+mysite/src
+mysite/src/pages
+mysite/src/pages/index.astro
+mysite/tsconfig.json
+```
+
+```text
+$ cat mysite/package.json
+{
+  "name": "mysite",
+  "type": "module",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "astro": "^7.3.5"
+  },
+  "allowScripts": {
+    "esbuild": true
+  }
+}
+```
+
+`engines.node` is `>=22.12.0` — verified straight from the published package (`npm view astro engines` → `{ node: '>=22.12.0', npm: '>=9.6.5', pnpm: '>=7.1.0' }`); Astro won't run on an older Node. Two things worth noticing in a *minimal* scaffold: there's no `src/content.config.ts`, `src/layouts/`, or `src/components/` yet — those appear as you add content collections and components, they're not required to exist — and the template now ships **`AGENTS.md`/`CLAUDE.md`** with a coding-agent-oriented quick reference (background dev server, doc links), not just human-facing docs.
+
+A larger, growing project fills in the rest of the reserved layout:
 
 ```text
 my-site/
-├── astro.config.mjs      # config: integrations, adapter, output mode
+├── astro.config.mjs        # config: integrations, adapter, output mode
 ├── src/
-│   ├── pages/            # file-based routing — each file is a route
-│   ├── components/       # reusable .astro (and framework) components
-│   ├── layouts/          # shared page shells
-│   ├── content.config.ts # content collections config (Astro 5+)
+│   ├── pages/               # file-based routing — each file is a route
+│   ├── components/          # reusable .astro (and framework) components
+│   ├── layouts/              # shared page shells
+│   ├── content.config.ts    # content collections config (build-time)
+│   ├── live.config.ts       # live collections config (request-time data)
+│   ├── middleware.ts        # runs before every request
+│   ├── actions/index.ts     # server Actions (defineAction)
+│   ├── fetch.ts             # Astro 7+: advanced routing entrypoint (reserved)
+│   ├── env.d.ts             # ambient types: App.Locals, ImportMetaEnv
 │   └── styles/
-└── public/               # static assets served as-is (favicon, robots.txt)
+└── public/                  # static assets served as-is (favicon, robots.txt)
 ```
+
+| Path | Role | Reserved in Astro 7? |
+|---|---|---|
+| `src/pages/` | File-based routing — each file becomes a route | Yes — the folder itself is load-bearing |
+| `src/content.config.ts` | Declares build-time content collections and their Zod schemas | Yes — special filename, auto-imported |
+| `src/live.config.ts` | Declares **live** collections (request-time data, needs an adapter) | Yes — new in 7.0, special filename |
+| `src/middleware.ts` | `onRequest` — runs before every request | Yes — special filename |
+| `src/actions/index.ts` | Exports the `server` object of Actions | Yes — special path |
+| `src/fetch.ts` | Advanced-routing entrypoint, auto-imported if present | **Yes — new reserved name in Astro 7.0** (see below) |
+| `public/` | Copied to the output verbatim, served at the root, unprocessed | Yes — the folder itself |
+| `.astro/` | Generated types (`astro sync`) — `.astro/types.d.ts`, `.astro/content.d.ts` | Not user-owned; never hand-edit |
 
 Two folders are load-bearing:
 
 - **`src/pages/`** is **file-based routing**: `src/pages/index.astro` → `/`, `src/pages/about.astro` → `/about`, `src/pages/blog/[slug].astro` → `/blog/:slug`. The file's location *is* the route.
 - **`public/`** is copied to the output verbatim — files here are served at the root, unprocessed.
+
+### `src/fetch.ts` — the new reserved name in Astro 7
+
+Astro 7.0 introduced **advanced routing**, and `src/fetch.ts` is its special filename — Astro imports it automatically to configure routing behavior, the same way it already auto-imports `src/middleware.ts`. Straight from the official v7 upgrade guide:
+
+<Callout title="Reserved file name: src/fetch.ts">
+"Astro v7.0 introduces advanced routing, which uses `src/fetch.ts` (or `src/fetch.js`) as a special file name, similar to `src/middleware.ts`. Astro will automatically import this file to configure routing behavior. If your project already has a `src/fetch.ts` file used for other purposes, Astro will attempt to process it as an advanced routing configuration, which may cause unexpected errors." If you already have an unrelated file at that path, the guide's fix is either to rename it, or set `fetchFile: './src/router.ts'` (or `fetchFile: null` to disable advanced routing entirely) in `astro.config.mjs`.
+</Callout>
 
 ## Anatomy of a .astro file
 
@@ -70,8 +144,108 @@ Because the script runs on the server, you can `await` at the top level — fetc
 
 An `.astro` template is *valid HTML plus JSX-like expressions*. If you paste plain HTML into a `.astro` file, it just works. You add dynamism with `{ }` (expressions), `{condition && <div/>}` (conditionals), and `{items.map(...)}` (loops) — the same expression syntax you saw in the landing example. Unlike JSX, you use standard HTML attribute names (`class`, not `className`).
 
+## `astro.config.mjs` vs `.ts`
+
+The config file can be `astro.config.mjs`, `.js`, or `.ts` — Astro's config loader resolves any of the three (verified directly in the installed package: `astro/dist/core/config/config.d.ts` documents resolving `astro.config.js|mjs|ts`). `.mjs` is what every scaffold generates (no separate compile step, works immediately), but `.ts` is fully supported if you want type-checked config code with imports from your own `.ts` modules — Astro transpiles it on the fly. There's no functional difference in what you can configure; it's purely "do you want the file itself type-checked."
+
+## Env files
+
+Astro loads `.env` (and `.env.production`, `.env.development`) via Vite's built-in env support, and splits variables into two visibility levels by name:
+
+```text
+# .env
+SECRET_KEY=sk_live_abc123
+PUBLIC_SITE_NAME=MySite
+```
+
+- **No `PUBLIC_` prefix** → available in server-side code only (`import.meta.env.SECRET_KEY`).
+- **`PUBLIC_` prefix** → statically inlined into client-side code too (`import.meta.env.PUBLIC_SITE_NAME`).
+
+Proven with a real build — a `<script>` (client-side) reading both:
+
+```astro
+---
+// src/pages/env-test.astro
+---
+<html><body>
+<script>
+  console.log('secret from client:', import.meta.env.SECRET_KEY);
+  console.log('public from client:', import.meta.env.PUBLIC_SITE_NAME);
+</script>
+</body></html>
+```
+
+```html
+<!-- the real built <script> content, dist/client/env-test/index.html -->
+<script type="module">console.log(`secret from client:`,void 0),console.log(`public from client:`,`MySite`);</script>
+```
+
+The non-`PUBLIC_` variable didn't leak — but it also didn't error. It was statically replaced with `void 0` (`undefined`) at build time, silently. A generated snippet that reads a secret from client code isn't insecure by accident here; it's just broken, and quietly. One more real gotcha: `.env` files are **not loaded inside `astro.config.mjs`** itself — reach for `process.env` (populated by your shell/CI) if config needs a value at config-evaluation time.
+
+## Reading AI-generated code
+
+A generated Astro project layout or config snippet is worth double-checking against the real scaffold above:
+
+- Does it invent a `src/utils/` or `src/lib/` convention and call it "required"? Only `src/pages/` and `public/` are load-bearing; everything else (`components/`, `layouts/`, `lib/`) is convention, not enforced by Astro.
+- Does it read a non-`PUBLIC_`-prefixed env var inside a `<script>` tag or client component and expect the real value? Proven above: it silently becomes `undefined` in the built output, not a leaked secret and not a build error either — a subtle, silent bug.
+- Does it declare `output: 'hybrid'`? That option was removed in Astro v5 — `'static'` covers what hybrid used to do (see the rendering-modes lesson).
+- Does it add a `src/fetch.ts` file for something unrelated to routing (a `fetch` wrapper, an API client) without mentioning `fetchFile`? In Astro 7 that filename is auto-imported for advanced routing and "may cause unexpected errors," per the upgrade guide quoted above.
+- Does it use `astro.config.ts` and claim `.mjs` "doesn't support TypeScript config"? Both are valid entrypoints; `.ts` just gets its own file type-checked, it doesn't unlock anything `.mjs` can't configure.
+
+<SpotTheBug code={`// src/components/Analytics.astro
+---
+const key = import.meta.env.ANALYTICS_SECRET_KEY;
+---
+<script define:vars={{ key }}>
+  fetch('https://analytics.example.com/init', {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+</script>
+`}>
+The variable name has no `PUBLIC_` prefix, so it is server-only by Astro's rule — but `define:vars` explicitly serializes the frontmatter value `key` into the client `<script>`'s scope. That doesn't trigger Astro's client/server split at all: `define:vars` runs *after* the value is already resolved on the server, so whatever `ANALYTICS_SECRET_KEY` actually is gets baked into the shipped HTML in plain text, fully readable via "view source." Proven with a real build (`ANALYTICS_SECRET_KEY=sk_live_shouldnotleak` in `.env`) — the literal secret ends up in `dist/client/analytics-test/index.html`:
+
+```html
+<!DOCTYPE html><script>(function(){const key = "sk_live_shouldnotleak";
+
+  fetch('https://analytics.example.com/init', {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+})();</script>
+```
+
+(Contrast this with reading `import.meta.env.ANALYTICS_SECRET_KEY` directly *inside* a `<script>` block with no `define:vars` — proven earlier in this lesson, that gets statically replaced with `undefined` instead, because that form of client script is processed as its own module with only `PUBLIC_`-prefixed env vars inlined.) The fix: never pass a secret through `define:vars`; if the client genuinely needs a token, mint a short-lived, scoped one server-side and pass *that*.
+</SpotTheBug>
+
+## Mental Model
+
+A `.astro` file is two programs glued together by one `---` fence: a server program (the frontmatter) that runs once and produces data, and a template program that turns that data into HTML. Nothing in the frontmatter crosses to the client unless you deliberately hand it to a `<script>` — and even then, only `PUBLIC_`-prefixed env values and explicit `define:vars` payloads make that crossing, proven above both ways (one silently becomes `undefined`, the other leaks in plain text).
+
+## Trade-offs
+
+| | `.mjs` config | `.ts` config |
+|---|---|---|
+| **Generated by scaffolds** | Yes, always | No — opt-in |
+| **Type-checking of the config file itself** | No | Yes |
+| **Can still import your own `.ts` modules** | Yes | Yes |
+| **Extra build step** | None | None — Astro transpiles it |
+
+| | Non-`PUBLIC_` env var | `PUBLIC_`-prefixed env var |
+|---|---|---|
+| **Server-side code** | Available | Available |
+| **Client-side code** | Statically replaced with `undefined` — proven above | Inlined as its real value |
+| **Use for** | Secrets, database URLs, API keys | Feature flags, public site name, public API base URLs |
+
+## Common Misconceptions
+
+- **"Every Astro project needs a `content.config.ts`, `middleware.ts`, and `actions/index.ts`."** The real minimal scaffold above has none of them — they're special *filenames Astro recognizes if present*, not files it requires.
+- **"`astro.config.ts` unlocks config options `.mjs` can't do."** Both resolve through the same loader; `.ts` only adds type-checking of the config file itself.
+- **"An env var without `PUBLIC_` is inaccessible from client code, so referencing it there is caught immediately."** Proven above: it's not caught at all — it silently becomes `undefined` in the built script, which reads as "the feature is broken," not "the build failed."
+- **"`.env` values are available while `astro.config.mjs` itself is evaluating."** They're not — `.env` loading happens through Vite for your app code, not for the config file; use `process.env` there instead.
+
 <Callout title="The one-line takeaway">
-An Astro project routes by files in **`src/pages/`** and serves `public/` verbatim. A **`.astro` file** has two parts split by `---`: the **component script** (frontmatter) that runs on the *server* — imports, top-level `await` data fetching, props, logic, none of which ships to the browser — and the **template** (HTML plus `{ }` expressions) that becomes the rendered HTML. It's a superset of HTML, so plain HTML just works.
+An Astro project routes by files in **`src/pages/`** and serves `public/` verbatim; other special filenames (`content.config.ts`, `live.config.ts`, `middleware.ts`, `actions/index.ts`, and, new in Astro 7, `src/fetch.ts` for advanced routing) are recognized *if present*, not required — verified against the real `npm create astro@latest` minimal scaffold above. A **`.astro` file** has two parts split by `---`: the **component script** (frontmatter, server-only, top-level `await` allowed) and the **template** (HTML plus `{ }` expressions). Config can be `.mjs`, `.js`, or `.ts` — same capabilities, `.ts` just gets type-checked. Env vars split by name: only `PUBLIC_`-prefixed ones reach client code (unprefixed ones silently become `undefined` there, proven above) — and `.env` itself isn't loaded inside `astro.config.mjs`.
 </Callout>
 
 export const quizFiles = [
@@ -84,6 +258,7 @@ export const quizFiles = [
       'Routes are defined in the database',
     ],
     answer: 1,
+    explain: 'src/pages/ is file-based routing — a file\'s path under it becomes the URL. There is no separate route registry to maintain.',
   },
   {
     q: 'What runs in the frontmatter (the code above the second `---`) of a .astro file?',
@@ -94,6 +269,7 @@ export const quizFiles = [
       'Nothing — it is a comment',
     ],
     answer: 1,
+    explain: 'The frontmatter is server-only code — imports, data fetching, logic — that never ships to the client, unlike a <script> block in the template.',
   },
   {
     q: 'Why can you use top-level `await` in a .astro component script?',
@@ -104,6 +280,7 @@ export const quizFiles = [
       'You cannot — await is not allowed',
     ],
     answer: 1,
+    explain: 'The frontmatter executes on the server (build time or per-request), so it can await a fetch or DB call directly with no useEffect/loading-state dance.',
   },
   {
     q: 'What is a .astro template, syntactically?',
@@ -114,6 +291,29 @@ export const quizFiles = [
       'Markdown',
     ],
     answer: 1,
+    explain: 'Plain HTML pasted into a .astro template just works; you layer on { } expressions, {cond && <x/>}, and {list.map(...)} — with real HTML attribute names, not JSX\'s className.',
+  },
+  {
+    q: '```html\n<script type="module">console.log(`secret from client:`,void 0),console.log(`public from client:`,`MySite`);</script>\n```\nThis is the real built output of a page whose `<script>` read both `import.meta.env.SECRET_KEY` and `import.meta.env.PUBLIC_SITE_NAME`. What happened to `SECRET_KEY`?',
+    options: [
+      'It leaked its real value into the client bundle',
+      'It was statically replaced with `undefined` at build time — silently, with no build error',
+      'The build failed',
+      'It was automatically renamed to PUBLIC_SECRET_KEY',
+    ],
+    answer: 1,
+    explain: 'Proven above: only PUBLIC_-prefixed vars are inlined for client code. A non-prefixed one referenced in a <script> becomes void 0 (undefined) — no leak, but also no error, which is exactly why it is easy to miss.',
+  },
+  {
+    q: '```astro\n---\nconst key = import.meta.env.ANALYTICS_SECRET_KEY;\n---\n<script define:vars={{ key }}>\n  fetch(\'https://analytics.example.com/init\', { method: \'POST\', body: JSON.stringify({ key }) });\n</script>\n```\nDoes this leak `ANALYTICS_SECRET_KEY` to the client, given it has no `PUBLIC_` prefix?',
+    options: [
+      'No — non-PUBLIC_ vars are always safe in a <script>',
+      'Yes — `define:vars` serializes the already-resolved server value straight into the shipped HTML, in plain text, regardless of the env var\'s name',
+      'Only in development mode',
+      'No — Astro strips secrets from define:vars automatically',
+    ],
+    answer: 1,
+    explain: 'define:vars runs after the value is resolved server-side, so it bakes whatever the frontmatter computed into the client script\'s scope as plain text — the PUBLIC_ inlining rule (which only governs a <script> reading import.meta.env directly) never enters into it.',
   },
 ];
 
