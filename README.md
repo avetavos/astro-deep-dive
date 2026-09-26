@@ -31,12 +31,18 @@ represents; the line is kept (inert) in the written file.
   real frontmatter fence) and the SECOND line is `// src/components/Card.astro`.
   This is the form the real corpus already uses in ~11 places today. Prefer
   this form for any component that has a script section.
-- `` ```ts ``/`` ```js ``/`` ```mjs `` — first line `// <path>`, path
-  ending `.ts`/`.js`/`.mjs` and starting `src/`, or exactly
-  `astro.config.mjs`. This also covers `*.test.ts` fences (run by `--test`)
-  and the special singleton files (`src/content.config.ts`,
-  `src/middleware.ts`, `src/actions/index.ts`, `src/live.config.ts`,
-  `src/env.d.ts`).
+- `` ```ts ``/`` ```js ``/`` ```mjs ``/`` ```tsx ``/`` ```jsx `` — first
+  line `// <path>`, path ending `.ts`/`.js`/`.mjs`/`.tsx`/`.jsx` and
+  starting `src/`, or exactly `astro.config.mjs`. This also covers
+  `*.test.ts` fences (run by `--test`) and the special singleton files
+  (`src/content.config.ts`, `src/middleware.ts`, `src/actions/index.ts`,
+  `src/live.config.ts`, `src/env.d.ts`). `tsx`/`jsx` were added for
+  framework-island fences (islands module): the probe now also has
+  `@astrojs/preact`/`preact` (plus `nanostores`/`@nanostores/preact`)
+  installed and `preact()` wired into the generated `astro.config.mjs`, so
+  a `.tsx` island fence type-checks. A React-only fence (no `@astrojs/react`
+  in the probe by design — this site is Preact) stays a **fragment** (no
+  path line) or `@expect-error`; see islands/framework-integrations.mdx.
 - A trailing ` — comment` after the path itself is tolerated on either form
   (seen already in the corpus, e.g. `// astro.config.mjs — enabling
   on-demand rendering on Cloudflare`).
@@ -98,10 +104,15 @@ these; `--build` swaps the lesson's own config in and restores these after.
   fixed probe configs above, not from the lesson's own schema. Full,
   schema-accurate validation of a lesson's own collection is only available
   via `--build`.
-- A relative import to a file type this harness doesn't collect (e.g. a
-  `.jsx` framework component — only `astro`/`ts`/`js`/`mjs` fences are
-  collected, per spec) correctly surfaces as an unresolved module — a real,
-  reportable gap in the lesson, not a harness bug.
+- A relative import to a file type this harness doesn't collect (only
+  `astro`/`ts`/`js`/`mjs`/`tsx`/`jsx` fences are collected) correctly
+  surfaces as an unresolved module — a real, reportable gap in the lesson,
+  not a harness bug.
+- `--build <module>/<lesson>` writes only that ONE lesson's own fences to
+  their real paths, so a lesson that intentionally reuses a sibling
+  lesson's component (cross-lesson resolution, real in default check mode)
+  can 404 under `--build` alone — a known gap of that one mode, not of
+  check mode or the real site build.
 - If a lesson defines two fences at the identical destination path (e.g. a
   static vs. "on-demand" variant of the same route, shown deliberately side
   by side), the later one in document order wins for both `astro check` and

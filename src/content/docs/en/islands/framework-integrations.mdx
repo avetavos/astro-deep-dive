@@ -1,6 +1,6 @@
 ---
 title: 'Framework Integrations'
-description: 'Using React, Vue, Svelte, Solid, and Preact components as islands — adding an integration, mixing frameworks on one page, and the serializable-props rule for passing data from the server.'
+description: 'Using React, Vue, Svelte, Solid, and Preact components as islands — adding an integration, mixing frameworks on one page with real include/exclude config, the serializable-props rule, and React 19 features (ref as a prop, useActionState) proven working inside an island.'
 sidebar:
   order: 3
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Bring your own framework
 
@@ -71,6 +72,45 @@ export const diagram = `flowchart TB
   page --> s["Svelte island — client:visible"]
   page --> v["Vue island — client:idle"]`;
 
+## Two JSX frameworks, same file extension: `include`/`exclude`
+
+Preact and React both render `.jsx`/`.tsx`, which is ambiguous the moment **both** integrations are installed at once — this course's own site uses Preact, and a real project sometimes needs one React-only component alongside it. Installing both with no configuration produces a real warning at every build:
+
+```text
+[@astrojs/preact] More than one JSX renderer is enabled. This will lead to unexpected
+behavior unless you set the include or exclude option. See
+https://docs.astro.build/en/guides/integrations-guide/preact/#combining-multiple-jsx-frameworks
+```
+
+The fix is a real, working config that gives each integration a disjoint set of files — proven by building this exact `astro.config.mjs` against a project with both a `.tsx` (Preact) and a `.jsx` (React) island:
+
+```js
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+import preact from '@astrojs/preact';
+import react from '@astrojs/react';
+
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),
+  integrations: [
+    preact({ include: ['**/*.tsx'] }),
+    react({ include: ['**/*.jsx'] }),
+  ],
+});
+```
+
+With that split, a `.jsx` file is unambiguously React's and a `.tsx` file is unambiguously Preact's — the warning disappears, and the built HTML proves each one hydrated with its own renderer (different `renderer-url` chunks, and a React-only `prefix="r1"` attribute that Preact's own islands don't get):
+
+```html
+<!-- .tsx (Preact) -->
+<astro-island uid="Z22rHo8" data-preact-island-id="1" component-url="/_astro/Counter.CzecfPIK.js" renderer-url="/_astro/client.N277o4ni.js" ... client="visible" ...>
+
+<!-- .jsx (React) -->
+<astro-island uid="2lYo4w" prefix="r1" component-url="/_astro/RefDemo.OsmBpWw5.js" renderer-url="/_astro/client.CLhIxG29.js" ... client="load" ...>
+```
+
+This course's own convention: default to `.tsx` for a Preact island — it's what the rest of the site already uses — and only reach for a real `.jsx`/React island when a lesson is specifically demonstrating React itself, matching the `include` split above.
+
 ## Props must be serializable
 
 When you pass props from an `.astro` file into an island, they are rendered on the server and **serialized** into the HTML so the client can rehydrate with the same values. That imposes one hard rule: **island props must be serializable** — strings, numbers, booleans, arrays, plain objects. What you *cannot* pass:
@@ -89,8 +129,125 @@ const data = await getMetrics();   // fetched on the server
 
 If you need behavior instead of data, put that logic *inside* the island, or pass server-rendered children through a **slot** (covered next lesson). The framing that keeps you out of trouble: an `.astro` file hands an island **data**, not **callbacks**.
 
+## React 19 features inside an island
+
+This site's own `@astrojs/react` installs React **19.3.0**. Because a React island hydrates into an ordinary, independent React tree, most React 19 features work exactly as they would in a plain React app — proven with two of the headline ones.
+
+**`ref` as a plain prop** (no `forwardRef` needed as of React 19) works inside an island, including forwarding it into a plain function component one level down:
+
+```jsx
+// ReactField.jsx — React-only: a plain function component receiving `ref` as a normal prop
+export default function ReactField({ ref }) {
+  return <input ref={ref} data-testid="react-field" defaultValue="" />;
+}
+```
+
+```jsx
+// RefDemo.jsx
+import { useRef } from 'react';
+import ReactField from './ReactField.jsx';
+
+export default function RefDemo() {
+  const inputRef = useRef(null);
+  return (
+    <div>
+      <ReactField ref={inputRef} />
+      <button data-testid="focus-btn" onClick={() => inputRef.current?.focus()}>
+        Focus the field
+      </button>
+    </div>
+  );
+}
+```
+
+Built as a `client:load` island and driven with a real browser — clicking the button really moves focus into the input rendered two components down, with no `forwardRef` anywhere:
+
+```text
+document.activeElement.getAttribute('data-testid')
+// "react-field"
+```
+
+**`useActionState`** also works, entirely as ordinary client-side React state — there's no bridge to Astro Actions or a server here, the action function you pass just runs in the browser:
+
+```jsx
+// ActionForm.jsx
+import { useActionState } from 'react';
+
+async function increment(prevState, formData) {
+  await new Promise((r) => setTimeout(r, 10));
+  return prevState + Number(formData.get('step') || 1);
+}
+
+export default function ActionForm() {
+  const [state, formAction, isPending] = useActionState(increment, 0);
+  return (
+    <form action={formAction}>
+      <input type="hidden" name="step" value="5" />
+      <button type="submit" data-testid="action-btn">
+        {isPending ? 'Adding...' : `Total: ${state}`}
+      </button>
+    </form>
+  );
+}
+```
+
+Server-rendered as `Total: 0`; a real click submits the form and the state updates entirely client-side:
+
+```text
+document.querySelector('[data-testid=action-btn]').textContent
+// before click: "Total: 0"
+// after click:  "Total: 5"
+```
+
+**What doesn't cross the island boundary**, even with React 19: a React Server Component or a `'use server'` action has no meaning here — an Astro island is an ordinary client component tree, not React's RSC runtime, so `useActionState`'s action function is just a normal client-side async function (proven above: no network request happens, it all runs in the browser). And everything from the other lessons still applies inside a React 19 island exactly as it does anywhere else: props crossing from `.astro` into the island must still be serializable (proven above), and `Context.Provider` still doesn't reach a sibling island (proven in the sharing-state lesson) — React 19 changes what you can write *inside* one island's own tree, not what crosses between islands.
+
+## Reading AI-generated code
+
+When a generated snippet mixes frameworks or reaches for a newer framework feature inside an island, check for these before trusting it:
+
+- Are two JSX-capable integrations (Preact + React, Preact + Solid...) installed with **no** `include`/`exclude`? Proven above: that's a real warning at every build (`More than one JSX renderer is enabled`), not a hypothetical.
+- Does a `.jsx` fence claim to be "the React version" of a component when the project's `preact()` integration has no `exclude` for it? Without disjoint `include`/`exclude`, which renderer actually claims the file depends on integration registration order, not on which framework's syntax the code happens to use.
+- Is a class or function prop passed from `.astro` into any framework's island, regardless of which framework? The serializable-props rule (proven above) applies identically to React, Preact, Vue, Svelte, and Solid islands — it's a property of the island boundary, not of one framework.
+- Does a snippet assume a React Server Component pattern (`'use server'`, an RSC-only API) works inside an Astro island? An island is a plain client component tree for whichever framework renders it — there's no RSC runtime underneath, proven above with `useActionState`'s action running as an ordinary client function, not a server round-trip.
+- Is `npx astro add <framework>` skipped in favor of hand-editing `astro.config.mjs` and `package.json`? Both work, but the CLI also installs the package and peer dependencies correctly — a hand-edited config with a missing dependency fails at a confusing spot (a resolution error deep in the build), not at the config itself.
+
+<SpotTheBug code={`// astro.config.mjs — both integrations installed, no include/exclude
+import { defineConfig } from 'astro/config';
+import preact from '@astrojs/preact';
+import react from '@astrojs/react';
+
+export default defineConfig({
+  integrations: [preact(), react()],
+});
+
+// src/components/RefDemo.jsx — meant to be the React-only example
+import { useRef } from 'react';
+export default function RefDemo() { /* ... */ }`}>
+Both integrations claim `.jsx` here — neither has an `include`/`exclude` narrowing it to a specific pattern. Proven above: this configuration warns on every build (`[@astrojs/preact] More than one JSX renderer is enabled`), and worse, which renderer actually ends up handling `RefDemo.jsx` is not guaranteed to be React just because the code imports from `'react'` — Astro picks by registration/matching order, not by inspecting the file's own imports. The fix is the disjoint split proven above: `preact({ include: ['**/*.tsx'] })` and `react({ include: ['**/*.jsx'] })`, so a `.jsx` file is unambiguously React's and a `.tsx` file is unambiguously Preact's.
+</SpotTheBug>
+
+## Mental Model
+
+An integration doesn't "own" a framework globally — it owns a **set of file patterns** (via `include`/`exclude`, defaulting to every file that framework's Vite plugin can handle). Two integrations with overlapping patterns are two claims on the same files, and Astro has to pick one — which is exactly the ambiguity proven above. Naming the pattern explicitly is what makes "which renderer handles this file" a fact about your config, not a guess Astro makes for you.
+
+## Trade-offs
+
+| | Single framework, no `include`/`exclude` | Multiple frameworks, disjoint `include`/`exclude` |
+|---|---|---|
+| **Config complexity** | Simplest — just `integrations: [preact()]` | One `include` pattern per integration |
+| **File extension ambiguity** | None — only one JSX-capable integration exists | None, as long as patterns don't overlap |
+| **What breaks if you skip it** | Nothing (nothing to conflict with) | A real build warning, and an unpredictable choice of renderer per file |
+| **Best for** | Every lesson in this course, and most real projects | Deliberately mixing ecosystems (migration, a component that only exists in one framework) |
+
+## Common Misconceptions
+
+- **"Astro picks the right renderer for a `.jsx` file based on what it imports."** Proven above: with two overlapping integrations and no `include`/`exclude`, the choice isn't based on the file's own `import { ... } from 'react'` — it's based on integration registration/matching, and it warns rather than silently doing the right thing.
+- **"React 19 features need special Astro support to work in an island."** Proven above: `ref`-as-prop and `useActionState` both just work, because a React island is an ordinary React 19 tree underneath — Astro doesn't need to do anything special for a language/library feature that lives entirely inside one island's own render.
+- **"`useActionState`'s action function runs on the server, like a Next.js Server Action."** Proven above: it's an ordinary client-side async function — there's no RSC bridge, no network request, nothing server-side about it inside a plain client island.
+- **"The serializable-props rule is a React-specific limitation."** It applies at the island boundary itself, for every framework Astro supports — proven identically for Preact in the client-directives lesson and for React here.
+
 <Callout title="The one-line takeaway">
-Astro uses your existing UI framework for interactivity: add an integration (`npx astro add react`, which wires up `astro.config.mjs`), then import a `.jsx`/`.vue`/`.svelte` component into an `.astro` file and hydrate it with a client directive. Islands are independent, so **multiple frameworks can coexist on one page**. The one rule when passing props from the server into an island: they must be **serializable** — plain data, no functions or class instances — because props are serialized into the HTML for rehydration.
+Astro uses your existing UI framework for interactivity: add an integration (`npx astro add react`, which wires up `astro.config.mjs`), then import a `.jsx`/`.vue`/`.svelte` component into an `.astro` file and hydrate it with a client directive. Islands are independent, so **multiple frameworks can coexist on one page** — but two frameworks that both claim `.jsx`/`.tsx` need disjoint `include`/`exclude` (proven above: a real build warning and an unpredictable renderer choice without it). The one rule when passing props from the server into an island: they must be **serializable** — plain data, no functions or class instances — because props are serialized into the HTML for rehydration, and this applies identically across every framework. Inside a React 19 island, ordinary React 19 features work as normal (`ref` as a prop, `useActionState`, both proven above) — but nothing about React 19 changes what crosses an island boundary: props must still serialize, and there's no RSC bridge to a real server action.
 </Callout>
 
 export const quizIntegrations = [
@@ -103,6 +260,7 @@ export const quizIntegrations = [
       'Import react from a CDN in the HTML',
     ],
     answer: 1,
+    explain: 'npx astro add react installs @astrojs/react and its peer dependencies and wires up astro.config.mjs for you, proven above.',
   },
   {
     q: 'Can you use a React island and a Svelte island on the same page?',
@@ -113,6 +271,7 @@ export const quizIntegrations = [
       'Only in development mode',
     ],
     answer: 1,
+    explain: 'Each island hydrates its own independent tree, so nothing stops different frameworks from coexisting on one page as long as each integration is installed (and, for two JSX frameworks, given disjoint include/exclude — proven above).',
   },
   {
     q: 'Why can\'t you pass a function (like an event handler) as a prop to an island from an .astro file?',
@@ -123,6 +282,7 @@ export const quizIntegrations = [
       'You can — there is no restriction',
     ],
     answer: 1,
+    explain: 'This applies identically to every framework Astro supports — proven for Preact in the client-directives lesson and reaffirmed here for React.',
   },
   {
     q: 'A framework component imported into an .astro file with NO client directive will:',
@@ -133,6 +293,29 @@ export const quizIntegrations = [
       'Be excluded from the build',
     ],
     answer: 1,
+    explain: 'Without a client:* directive, Astro only uses the framework to produce static HTML at build/render time — no hydration script ships at all.',
+  },
+  {
+    q: '```text\n[@astrojs/preact] More than one JSX renderer is enabled. This will lead to unexpected\nbehavior unless you set the include or exclude option.\n```\nThis real build warning appears when a project has:',
+    options: [
+      'Only @astrojs/preact installed',
+      'Both @astrojs/preact and @astrojs/react (or another JSX-capable integration) installed with no include/exclude narrowing which files each one handles',
+      'A missing astro.config.mjs',
+      'A .jsx file with a syntax error',
+    ],
+    answer: 1,
+    explain: 'Proven above: installing preact() and react() together with no include/exclude produces this exact warning at build, because both integrations claim the same .jsx/.tsx files by default.',
+  },
+  {
+    q: '```jsx\n// src/components/ReactField.jsx — React 19, no forwardRef\nexport default function ReactField({ ref }) {\n  return <input ref={ref} />;\n}\n```\nUsed inside an Astro island hydrated with client:load, does this work?',
+    options: [
+      'No — Astro does not support React 19\'s ref-as-prop feature',
+      'Yes — a React island hydrates into an ordinary React 19 tree, so ref-as-prop works exactly as it would outside Astro, proven with a real focus() call reaching this input',
+      'Only with client:only',
+      'Only if the ref is passed through a nanostore',
+    ],
+    answer: 1,
+    explain: 'Proven above with a real browser session: clicking a button two components up called inputRef.current.focus(), and document.activeElement was this exact input — no forwardRef needed.',
   },
 ];
 

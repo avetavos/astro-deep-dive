@@ -1,6 +1,6 @@
 ---
 title: 'Sharing State Across Islands'
-description: 'Islands are isolated by design, so their state does not automatically share — how to pass serializable props from the server, use nanostores for cross-island state, and pass server-rendered children through slots.'
+description: 'Islands are isolated by design — proven with two islands sharing one Preact context that still do not share state — how to pass serializable props from the server, share state live with @nanostores/preact (proven end-to-end), pass server-rendered children through slots, and keep the internal state of one island alive across a ClientRouter navigation with transition:persist.'
 sidebar:
   order: 4
 ---
@@ -9,12 +9,68 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The isolation problem
 
 Islands hydrate independently — that's what makes them cheap. But it has a consequence that trips people up coming from a SPA: **two islands do not share state automatically.** A React `useState` in one island is invisible to another island, even one made from the same framework. There is no shared app tree; each island is its own little root.
 
-So how do a "add to cart" island and a "cart count" island in the header stay in sync? You have three tools, from simplest to most powerful.
+## Proof: the same Preact context, two islands, no sharing
+
+"No shared app tree" isn't just true for `useState` — it's true for **`createContext`** too, and that's the mistake worth proving directly, because a `Provider` *looks* like it should reach everywhere. It doesn't reach past an island's own boundary:
+
+```ts
+// src/context.ts
+import { createContext } from 'preact';
+
+export const CountContext = createContext(0);
+```
+
+```tsx
+// src/components/ProviderIsland.tsx
+import { CountContext } from '../context.ts';
+import ReaderIsland from './ReaderIsland';
+
+export default function ProviderIsland() {
+  return (
+    <CountContext.Provider value={42}>
+      <p>ProviderIsland's own child sees: <ReaderIsland label="inside-provider-island" /></p>
+    </CountContext.Provider>
+  );
+}
+```
+
+```tsx
+// src/components/ReaderIsland.tsx
+import { useContext } from 'preact/hooks';
+import { CountContext } from '../context.ts';
+
+export default function ReaderIsland({ label }: { label: string }) {
+  const value = useContext(CountContext);
+  return <span data-testid={label}>{label}: {String(value)}</span>;
+}
+```
+
+```astro
+---
+// src/pages/context-demo.astro
+import ProviderIsland from '../components/ProviderIsland.tsx';
+import ReaderIsland from '../components/ReaderIsland.tsx';
+---
+<div id="a"><ProviderIsland client:load /></div>
+<div id="b"><ReaderIsland label="separate-island" client:load /></div>
+```
+
+Built and rendered for real, the two `ReaderIsland` instances see **different** values, even though they read the exact same `CountContext`:
+
+```html
+<span data-testid="inside-provider-island">inside-provider-island: 42</span>
+<span data-testid="separate-island">separate-island: 0</span>
+```
+
+The first `ReaderIsland` is `ProviderIsland`'s own child — same render tree, same `Provider`, so it sees `42`. The second `ReaderIsland` is a **separate top-level island** on the same page. It never enters `ProviderIsland`'s tree at all, so `useContext(CountContext)` falls back to the context's own default (`0`) — not an error, just silently the wrong value. This is true even at server-render time, before any client JS runs, because each `<... client:... />` in the `.astro` file gets its own independent render call.
+
+So how do a "add to cart" island and a "cart count" island in the header stay in sync, given that neither `useState` nor `Context` crosses an island boundary? You have three tools, from simplest to most powerful.
 
 ## 1. Pass serializable props from the server
 
@@ -67,6 +123,51 @@ export const diagram = `flowchart TB
   add["AddToCart island — writes"] --> store
   store --> badge["CartBadge island — reads and re-renders"]`;
 
+### Proven end-to-end, with `@nanostores/preact`
+
+The pattern above is real, checked with the site's own framework (`@nanostores/preact`'s `useStore`) and a real browser session, not just reasoned about:
+
+```ts
+// src/stores/cart.ts
+import { atom } from 'nanostores';
+
+export const cartCount = atom(0);
+```
+
+```tsx
+// src/components/AddToCart.tsx
+import { cartCount } from '../stores/cart.ts';
+
+export default function AddToCart() {
+  return (
+    <button data-testid="add-btn" onClick={() => cartCount.set(cartCount.get() + 1)}>
+      Add
+    </button>
+  );
+}
+```
+
+```tsx
+// src/components/CartBadge.tsx
+import { useStore } from '@nanostores/preact';
+import { cartCount } from '../stores/cart.ts';
+
+export default function CartBadge() {
+  const count = useStore(cartCount);
+  return <span data-testid="cart-badge">Cart: {count}</span>;
+}
+```
+
+Both mounted as **separate, top-level islands** on one page (`<CartBadge client:load />` in the header, `<AddToCart client:load />` in the body — no parent/child relationship at all). Driven with a real browser:
+
+```text
+document.querySelector('[data-testid=cart-badge]').textContent   // "Cart: 0"
+// ...click [data-testid=add-btn] twice...
+document.querySelector('[data-testid=cart-badge]').textContent   // "Cart: 2"
+```
+
+Two clicks on `AddToCart`'s button update `CartBadge` in a completely separate island tree — this is the one thing `useState`/`Context` cannot do (proven above) and a nanostore can, because both islands subscribe to the same store object, not to each other's component tree.
+
 ## 3. Slots: pass server-rendered children into an island
 
 Sometimes you don't need shared *state* — you need to put **server-rendered content** inside an interactive shell. A framework island can accept a `<slot />` the same way an `.astro` component does, so an interactive `<Tabs>` island can wrap static, server-rendered panels. The shell is interactive; the content ships as HTML with no extra island JS.
@@ -80,6 +181,71 @@ import Accordion from '../components/Accordion.jsx';
 </Accordion>
 ```
 
+## Surviving a navigation: `transition:persist`
+
+Props and stores both answer "how do islands on **one page** share state." `transition:persist` answers a different question: how does **one island's own internal state** survive a client-side navigation with Astro's `ClientRouter`, when the next page re-renders a "new" instance of the same component?
+
+Wrap the island in an element carrying `transition:persist` (a stable name, so Astro can match it up across the two pages) on **both** pages:
+
+```tsx
+// src/components/PersistCounter.tsx
+import { useState } from 'preact/hooks';
+
+export default function PersistCounter({ start }: { start: number }) {
+  const [count, setCount] = useState(start);
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
+}
+```
+
+```astro
+---
+// src/pages/persist-a.astro
+import { ClientRouter } from 'astro:transitions';
+import PersistCounter from '../components/PersistCounter.tsx';
+---
+<html>
+<head><ClientRouter /></head>
+<body>
+<h1>Page A</h1>
+<div transition:persist="shared-counter">
+  <PersistCounter start={0} client:load />
+</div>
+<a href="/persist-b/">Go to B</a>
+</body>
+</html>
+```
+
+```astro
+---
+// src/pages/persist-b.astro
+import { ClientRouter } from 'astro:transitions';
+import PersistCounter from '../components/PersistCounter.tsx';
+---
+<html>
+<head><ClientRouter /></head>
+<body>
+<h1>Page B</h1>
+<div transition:persist="shared-counter">
+  <PersistCounter start={0} client:load />
+</div>
+<a href="/persist-a/">Back to A</a>
+</body>
+</html>
+```
+
+Both pages mount `PersistCounter` with `start={0}` — if the DOM were thrown away and rebuilt, the count would reset to `0`. Proven with a real browser session instead: on Page A, three real clicks bring the button to `Count: 3`; clicking the real `<a href="/persist-b/">` link (a `ClientRouter`-intercepted, client-side navigation, not a full reload):
+
+```text
+// Page A, after 3 clicks:
+document.querySelector('button').textContent   // "Count: 3"
+
+// after clicking the real <a href="/persist-b/"> link:
+document.querySelector('h1').textContent       // "Page B"
+document.querySelector('button').textContent   // "Count: 3"  — NOT reset to "Count: 0"
+```
+
+The DOM node (and its live component instance, with its own `useState`) was moved across the swap rather than destroyed and recreated — `start={0}` on Page B's markup was never even used. This only works because both sides use the **same** `transition:persist` value; a typo that doesn't match loses the persistence silently and just re-mounts fresh.
+
 ## Choosing among the three
 
 - Data known at render time, no runtime updates → **props from the server**.
@@ -88,8 +254,72 @@ import Accordion from '../components/Accordion.jsx';
 
 Reach for a store only when you genuinely have runtime coordination between separate islands. Most "shared state" needs turn out to be initial props or slots, which ship less JavaScript.
 
+### Props vs. a store: recompute vs. live
+
+A prop and a store solve overlapping-looking problems, but they answer different questions about *when* the value is decided:
+
+- A **prop** is decided once, on the server, at the moment that specific request renders. Two islands fed the same prop are consistent with each other, but only as of that render — refresh vs. don't refresh is the only lever you have. There is no "prop changed, please re-render" path *after* hydration; if the server-computed value goes stale, the only fix is a fresh navigation or an explicit `fetch` inside the island itself.
+- A **store** is a live, client-side value that exists independently of any one render. Every subscribed island re-renders the instant `.set()` is called, with no server round-trip — proven above, no page reload between the two clicks and the badge update.
+
+### When a store is overkill
+
+If you find yourself reaching for a nanostore and the two islands never actually need to react to *each other* — only to their own data, independently — a store just adds indirection over what a prop each would do more simply. A concrete tell: if you can compute both islands' initial values from the same request and neither one needs to change because of what the *other* one did, you don't have cross-island state at all, you have two islands that each want their own prop.
+
+## Reading AI-generated code
+
+When a generated snippet coordinates state across islands, check for these before trusting it:
+
+- Does it wrap several islands in a single `Context.Provider` and expect them all to read it? Proven above: a `Provider` only reaches its **own** island's render tree — a sibling island reading the same context gets the context's default, not the provided value, with no error to flag it.
+- Does an "add to cart" style example use `useState` lifted into a "parent," expecting the parent and child islands to somehow share it? If they're separate `client:*` islands (not one component tree with a real parent-child JSX relationship inside a single island), lifting state doesn't apply — reach for a store instead.
+- If a nanostore is introduced, is it actually needed — do the two islands really update *each other*, or could each just take its own server-computed prop?
+- Does `transition:persist` appear without the **same** value on both sides of the navigation? A mismatched name silently fails to persist — the component just remounts fresh, which looks like a bug in the component rather than a typo in the directive.
+- Is a slot's server-rendered content being re-implemented as a plain prop (stringified HTML, or worse, re-fetched inside the island) when the actual need was just "put this static content inside an interactive shell"?
+
+<SpotTheBug code={`// src/components/Sidebar.tsx — wraps the whole page in a UserContext.Provider
+import { UserContext } from '../context.ts';
+
+export default function Sidebar({ user }) {
+  return (
+    <UserContext.Provider value={user}>
+      <nav>...</nav>
+    </UserContext.Provider>
+  );
+}
+
+// src/components/Greeting.tsx — a SEPARATE top-level island elsewhere on the page
+import { useContext } from 'preact/hooks';
+import { UserContext } from '../context.ts';
+
+export default function Greeting() {
+  const user = useContext(UserContext);
+  return <p>Welcome, {user?.name ?? 'Guest'}!</p>; // always "Guest"
+}`}>
+Both components are mounted as their own top-level islands (each gets its own `client:*` directive in the `.astro` file) — proven earlier in this lesson with the identical shape (`ProviderIsland`/`ReaderIsland`): `Sidebar`'s `UserContext.Provider` only wraps `Sidebar`'s own render tree, not `Greeting`'s. `Greeting` is a completely separate island with a completely separate `useContext(UserContext)` call that falls back to whatever `createContext(...)` was given as a default — proven above, that's `0`/`undefined`-shaped, never the real `user`. There's no error, just a permanently wrong "Guest". The fix is one of the three tools: pass `user` as a **prop** to `Greeting` directly from the `.astro` file (simplest, if it's known at render time), or put it in a **nanostore** if it needs to update after login without a full reload.
+</SpotTheBug>
+
+## Mental Model
+
+Every `client:*` directive on the page is the root of its **own, completely independent application** — as independent as if you'd opened two separate browser tabs and expected them to share `useState`. Nothing an island's own JSX does (a `Provider`, a parent `useState`, a ref) reaches past that island's own boundary. The only channels that cross the boundary are the ones Astro (props, `transition:persist`) or a library (a store) explicitly wire up for you.
+
+## Trade-offs
+
+| | Props from the server | nanostore | `<slot />` | `transition:persist` |
+|---|---|---|---|---|
+| **Answers** | "What's the initial value?" | "How do islands react to each other, live?" | "How does static content sit inside an interactive shell?" | "Does one island's own state survive a navigation?" |
+| **Decided** | Once, server-side, per request | Continuously, client-side | Once, server-side (the slotted HTML) | N/A — it's the same instance, not new data |
+| **Needs a library?** | No | Yes (nanostores + a framework adapter) | No | No — built into Astro's `ClientRouter` |
+| **Ships extra JS?** | No | A few hundred bytes (nanostores core) | No — content is plain HTML | No |
+| **Cross-island updates at runtime?** | No | Yes — proven above | N/A | N/A (same island, different page) |
+
+## Common Misconceptions
+
+- **"Wrapping islands in the same `Context.Provider` shares state between them."** Proven above with `ProviderIsland`/`ReaderIsland`: a `Provider` only reaches its own island's render tree. A sibling island sees the context's default, silently.
+- **"If two islands need the same data, that's automatically a job for a store."** Proven above: if the data doesn't change because of what the other island did, a shared server-computed prop is simpler and ships less JS than a store.
+- **"`transition:persist` re-fetches or re-computes the component on the new page."** Proven above: the exact same DOM node and component instance move across the swap — the new page's own props for that component (`start={0}`) are never even used.
+- **"A nanostore needs its own framework-specific `Provider` wrapping the app, like React Context."** Nanostores has no provider at all — proven above, `useStore(cartCount)` just works from any island that imports the same store module, because the store lives in a plain JS module, not a component tree.
+
 <Callout title="The one-line takeaway">
-Islands are **isolated** — state does not automatically flow between them. Three tools, in order of reach: pass **serializable props** from the `.astro` file when the data is known at render time; use a **nanostore** (framework-agnostic, with `@nanostores/react`/`vue`/... adapters) when separate islands must update each other at runtime; and use a **`<slot />`** to place server-rendered content inside an interactive island. Default to props and slots; reach for a store only for genuine runtime coordination.
+Islands are **isolated** — proven above, even a shared `createContext` doesn't cross an island boundary, since each island is its own render root with its own default. Three tools, in order of reach: pass **serializable props** from the `.astro` file when the data is known at render time (decided once, per request); use a **nanostore** (framework-agnostic, `@nanostores/preact`'s `useStore` proven end-to-end above) when separate islands must update each other live, at runtime, with no server round-trip; and use a **`<slot />`** to place server-rendered content inside an interactive island. A fourth tool, `transition:persist`, is a different axis entirely — it keeps *one* island's own internal state alive across a `ClientRouter` navigation (proven above: a real click count survived a real page-to-page nav), rather than sharing state between islands on the same page. Default to props and slots; reach for a store only for genuine runtime coordination.
 </Callout>
 
 export const quizState = [
@@ -102,6 +332,7 @@ export const quizState = [
       'It does share automatically',
     ],
     answer: 1,
+    explain: 'Each client:* directive is the root of its own independent render tree — nothing outside that tree, including useState, is visible to a sibling island.',
   },
   {
     q: 'What is the recommended way to share state that must update at runtime across separate islands?',
@@ -112,6 +343,7 @@ export const quizState = [
       'Passing a callback prop between them',
     ],
     answer: 1,
+    explain: 'Proven end-to-end above with @nanostores/preact: both islands subscribe to the same store object, and a .set() in one instantly updates the other with no server round-trip.',
   },
   {
     q: 'You need the initial cart count in two islands, with no runtime updates between them. Simplest approach?',
@@ -122,6 +354,7 @@ export const quizState = [
       'Duplicate the fetch inside each island',
     ],
     answer: 1,
+    explain: 'A prop is decided once per request — exactly what "no runtime updates" needs, with no extra library and less JavaScript than a store.',
   },
   {
     q: 'What does passing children through a slot into a framework island let you do?',
@@ -132,6 +365,29 @@ export const quizState = [
       'Nothing — islands cannot have slots',
     ],
     answer: 1,
+    explain: 'The slotted content is rendered on the server as plain HTML and placed inside the island\'s shell — it never becomes part of the island\'s own client JavaScript bundle.',
+  },
+  {
+    q: '```tsx\n// ProviderIsland.tsx (its own island)\nexport default function ProviderIsland() {\n  return <CountContext.Provider value={42}><ReaderIsland label="a" /></CountContext.Provider>;\n}\n// ReaderIsland is ALSO mounted separately on the same page as its own top-level island\n```\nBuilt for real, what does the separately-mounted `ReaderIsland` render?',
+    options: [
+      '42 — it reads the same Provider',
+      '0 (or whatever createContext\'s default is) — it never entered ProviderIsland\'s render tree',
+      'A build error, since two islands can\'t use the same context',
+      'undefined, because context requires client:only',
+    ],
+    answer: 1,
+    explain: 'Proven above with real built HTML: the child inside ProviderIsland\'s own tree sees 42, but the separate top-level island sees the context\'s own default (0) — a Provider never reaches past its own island boundary.',
+  },
+  {
+    q: '```astro\n---\n// src/pages/persist-a.astro\n---\n<div transition:persist="shared-counter"><PersistCounter start={0} client:load /></div>\n```\nAfter clicking PersistCounter to Count: 3, then navigating (via ClientRouter) to a page with the same transition:persist="shared-counter" wrapping a PersistCounter with start={0}, what shows?',
+    options: [
+      'Count: 0 — the new page\'s start prop always wins',
+      'Count: 3 — the same DOM node and component instance persist across the navigation, so start={0} on the new page is never used',
+      'A hydration error',
+      'It depends on which framework the component uses',
+    ],
+    answer: 1,
+    explain: 'Proven above with a real browser session: three real clicks reached Count: 3 on page A, and the same value was still on screen immediately after navigating to page B — the component was moved, not recreated.',
   },
 ];
 

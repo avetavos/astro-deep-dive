@@ -1,6 +1,6 @@
 ---
 title: 'Server Islands'
-description: 'server:defer render component บน server แต่ defer ไว้ — หน้าออกทันทีพร้อม fallback แล้วดึง HTML จริงมาสลับใส่ ทำให้ cache เปลือกและ defer ส่วนที่ personalize หรือช้าได้.'
+description: 'server:defer render component บน server แต่ defer ไว้ — HTML จริงที่ build ออกมา (preload link, fetch script, fallback swap), การเข้ารหัส props ด้วย AES-GCM, cache header จริง (ไม่มีเลยโดย default), build error จริงตอนไม่มี adapter และพิสูจน์ว่า cookie ไปถึง server island จริง.'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ปัญหาที่ server islands แก้
 
@@ -54,6 +55,105 @@ export const diagram = `flowchart TB
   fetch --> srv["island renders on the server (cookies, session, db)"]
   srv --> swap["real HTML swapped in over the fallback"]`;
 
+## HTML จริงที่ build ออกมา
+
+fallback content, การ fetch และการสลับไม่ใช่มายากลของ framework ที่ซ่อนอยู่ — build หน้าจริงที่มี `Avatar` แบบ `server:defer` (fallback เป็น `GenericAvatar`) แล้วอ่าน output จริง เห็นทั้งสามอย่างครบ เรียงตามลำดับ เป็น HTML ธรรมดา:
+
+```astro
+---
+// src/components/GenericAvatar.astro
+---
+<img src="/generic-avatar.png" alt="Generic avatar" width="48" height="48" />
+```
+
+```astro
+---
+// src/components/Avatar.astro
+const cookie = Astro.request.headers.get('cookie');
+const userId = cookie?.match(/uid=(\\w+)/)?.[1] ?? null;
+---
+<div data-testid="avatar-real">
+  {userId ? <p>Welcome back, user {userId}</p> : <p>Anonymous (no uid cookie forwarded)</p>}
+</div>
+```
+
+```astro
+---
+// src/pages/server-island-demo.astro
+import Avatar from '../components/Avatar.astro';
+import GenericAvatar from '../components/GenericAvatar.astro';
+---
+<html><body>
+<h1>Server island demo</h1>
+<Avatar server:defer>
+  <GenericAvatar slot="fallback" />
+</Avatar>
+</body></html>
+```
+
+```html
+<!DOCTYPE html><html><link rel="preload" as="fetch" href="/_server-islands/Avatar?e=FDA01BAC8D95CB8E26A560DAB87l7Jmcc5evsrWx2DYJJRT%2BfX1KJFY%3D&amp;p=&amp;s=" crossorigin="anonymous"><body><h1>Server island demo</h1><script>async function replaceServerIsland(id, r) { let s = document.querySelector(`script[data-island-id="${id}"]`); if (!s || r.status !== 200 || r.headers.get('content-type')?.split(';')[0].trim() !== 'text/html') return; let html = await r.text(); while (s.previousSibling && s.previousSibling.nodeType !== 8 && s.previousSibling.data !== '[if astro]>server-island-start<![endif]') s.previousSibling.remove(); s.previousSibling?.remove(); s.before(document.createRange().createContextualFragment(html)); s.remove(); }</script><!--[if astro]>server-island-start<![endif]--><img src="/generic-avatar.png" alt="Generic avatar" width="48" height="48"><script type="module" data-astro-rerun data-island-id="f07047c9-f26d-45fe-a9ea-1ac642bcc610">const headers = new Headers({});
+let response = await fetch("/_server-islands/Avatar?e=FDA01BAC8D95CB8E26A560DAB87l7Jmcc5evsrWx2DYJJRT%2BfX1KJFY%3D&p=&s=", { headers });replaceServerIsland("f07047c9-f26d-45fe-a9ea-1ac642bcc610", response);</script></body></html>
+```
+
+สี่ชิ้นจริง เรียงตามลำดับที่ปรากฏจริง:
+
+1. `<link rel="preload" as="fetch">` ใน `<head>` — browser เริ่ม fetch endpoint ของ server island ก่อนจะไปถึง body ด้วยซ้ำ โดยไม่บล็อก render
+2. script runtime `replaceServerIsland` ที่ใช้ร่วมกัน — ประมาณ 15 บรรทัดเท่าเดิม ไม่ว่าหน้าจะมี server island กี่ตัว
+3. markup fallback ของ `GenericAvatar` อยู่ตรงตำแหน่งที่ `Avatar` จะมาแทนที่ — นี่คือสิ่งที่ paint ก่อน
+4. `<script type="module" data-island-id="...">` ที่ใช้ URL เดิมกับที่ preload fetch ไว้ แล้วเรียก `replaceServerIsland(id, response)` เพื่อสลับ fallback เป็น HTML จริงเมื่อมาถึง
+
+## การเข้ารหัส props
+
+props (และ slot content) ที่ส่งให้ server island ไม่ได้ถูกส่งไป browser แบบ plain text — URL ข้างบน (`?e=...&p=&s=...`) ถูกเข้ารหัสจริง ไม่ใช่แค่ obfuscate เอกสารจริงของ Astro (`astro/dist/core/encryption.js`) ใช้ **AES-GCM** ด้วย key 256-bit ที่ generate ใหม่ทุก build เก็บไว้ฝั่ง server; ตามเอกสารทางการ (`docs.astro.build/en/guides/server-islands/#reusing-the-encryption-key`):
+
+> Astro uses cryptography to encrypt props passed to server islands, protecting sensitive data from accidental exposure. This encryption relies on a new, random key that is generated on each build and embedded in the server bundle.
+
+key ใหม่ทุก build แปลว่า CDN ที่ cache หน้าข้ามการ deploy หรือ rolling deployment ที่ server instance เก่ากับใหม่อยู่ด้วยกันชั่วคราว อาจเจอปัญหา decrypt ไม่ตรงกัน ทางแก้คือ `astro create-key` ที่ generate key คงที่ให้ตั้งเป็น environment variable `ASTRO_KEY` เพื่อให้ทุก build (และทุก backend instance) เข้ารหัส/ถอดรหัสด้วย key เดียวกัน
+
+## Cache header บน response — พิสูจน์แล้ว และไม่ใช่อย่างที่อาจคิด
+
+`curl -D -` จริงกับ endpoint `_server-islands` ที่ build ออกมา (header อย่างเดียว จาก build ที่รันจริง):
+
+```text
+$ curl -s -D - "http://127.0.0.1:4601/_server-islands/Avatar?e=...&p=&s=" -o /dev/null
+HTTP/1.1 200 OK
+content-type: text/html
+x-robots-tag: noindex
+Date: Sat, 26 Sep 2026 02:35:38 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+```
+
+**ไม่มี `Cache-Control` header เลย** โดย default — มีแค่ `x-robots-tag: noindex` (กัน search engine index endpoint fragment ดิบ ๆ) Astro ไม่ cache response ของ server island ให้เอง ถ้า fragment นั้น cache ได้ ต้องตั้ง `Cache-Control` เองข้างใน component (เช่น `Astro.response.headers.set('Cache-Control', ...)`) เหมือนกับ route on-demand อื่น ๆ
+
+## server islands ต้องมี adapter แม้แต่บนไซต์ที่ static ทั้งหมด
+
+ข้อนี้ไม่ใช่คำแนะนำเบา ๆ — ถอด adapter ออกจากโปรเจกต์ `output: 'static'` ที่มี `server:defer` อยู่ที่ไหนสักที่ build จะพังทันที ตั้งแต่ก่อนจะเริ่ม prerender หน้าไหนด้วยซ้ำ:
+
+```text
+[NoAdapterInstalledServerIslands] Cannot use server islands without an adapter. Please install
+and configure the appropriate server adapter for your final deployment.
+  Hint:
+    See https://docs.astro.build/en/guides/on-demand-rendering/ for more information.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/no-adapter-installed-server-islands/
+```
+
+(ทำซ้ำจริงกับ `astro build` ที่ `output: 'static'` ไม่มี `adapter` เลย มีหน้าเดียวที่ใช้ `server:defer`) เพิ่ม `adapter: node({ mode: 'standalone' })` — หรือ adapter ไหนก็ได้ — กลับเข้าไป โปรเจกต์เดียวกันนี้ build ผ่านสะอาดทันที ไม่ต้องเปลี่ยนอะไรในหน้าเลย
+
+## Cookie ข้างใน server island
+
+fetch ของ server island รันแบบ same-origin จาก browser และ `fetch()` แบบ same-origin ส่ง cookie ให้โดย default (ไม่ต้องใส่ option `credentials`) — ดังนั้น `Astro.request.headers.get('cookie')` ข้างใน `Avatar.astro` เห็น cookie ของผู้เยี่ยมชมจริง พิสูจน์ด้วย browser session จริง: ตั้ง `document.cookie = 'uid=99'` แล้ว navigate ใหม่ไปหน้านั้น พอ fetch ที่ defer resolve:
+
+```text
+document.querySelector('[data-testid=avatar-real]').outerHTML
+// "<div data-testid=\"avatar-real\"><p>Welcome back, user 99</p></div>"
+```
+
+— เทียบกับตอนไม่มี cookie เลย ที่ได้ผลลัพธ์แบบ anonymous ทั่วไป (`"Anonymous (no uid cookie forwarded)"` พิสูจน์ก่อนหน้าด้วย `curl` ตรง ๆ ที่ไม่มี header `Cookie`) ไม่ต้องทำอะไรพิเศษเพื่อส่ง cookie เลย มันเป็นแค่ same-origin request ธรรมดาในมุมมองของ browser
+
 ## ใช้เมื่อไหร่ (และเรื่อง adapter ที่ต้องมี)
 
 server islands เป็นเครื่องมือที่ใช่เมื่อหน้าหนึ่ง **cache ได้ ยกเว้นส่วน dynamic เล็ก ๆ**:
@@ -62,10 +162,48 @@ server islands เป็นเครื่องมือที่ใช่เ�
 - หน้าที่ส่วนใหญ่ static แต่มี query ที่ **ช้า** อยู่หนึ่งอันที่คุณไม่อยากให้บล็อก first paint
 - ส่วน auth-gated บนหน้าที่เป็น public และ CDN-cache
 
-จำไว้สองอย่าง อย่างแรก `server:defer` render **บน server** จึงต้องติดตั้ง **adapter** (Cloudflare, Node, Vercel...) — เงื่อนไขเดียวกับ on-demand rendering ทุกแบบ ถ้าไม่มีจะเจอ error "an adapter is required" อย่างที่สอง ไม่ใช่สำหรับ client interactivity — ถ้าส่วนนั้นต้องตอบสนอง click นั่นคือ *client* island (client directive) อาจต้องใช้เพิ่มเติม server island เป็นเรื่องของการ defer output ที่ **render บน server** ไม่ใช่การ hydrate JavaScript
+จำไว้สองอย่าง อย่างแรก `server:defer` render **บน server** จึงต้องติดตั้ง **adapter** (Cloudflare, Node, Vercel...) — เงื่อนไขเดียวกับ on-demand rendering ทุกแบบ ถ้าไม่มีจะเจอ `NoAdapterInstalledServerIslands` build error จริงที่พิสูจน์ข้างบน แม้บนโปรเจกต์ที่ไม่มี adapter และ static ทั้งหมด อย่างที่สอง ไม่ใช่สำหรับ client interactivity — ถ้าส่วนนั้นต้องตอบสนอง click นั่นคือ *client* island (client directive) อาจต้องใช้เพิ่มเติม server island เป็นเรื่องของการ defer output ที่ **render บน server** ไม่ใช่การ hydrate JavaScript
+
+## อ่านโค้ดที่ AI เขียน
+
+ตอนเจอ snippet ที่ generate มาใช้ `server:defer` เช็คสิ่งเหล่านี้ก่อนเชื่อ:
+
+- `server:defer` ถูกใช้บนหน้า/โปรเจกต์ที่ไม่มี adapter ตั้งไว้ไหม? เป็น build error จริงที่เกิดทันที (`NoAdapterInstalledServerIslands` พิสูจน์ข้างบน) ไม่ใช่แค่ warning และไม่ใช่แค่โผล่ตอน runtime
+- component สมมติว่า props ถูกส่งแบบ plain text บนสายเพราะ "มันก็แค่ query string" ไหม? พิสูจน์ข้างบน: param `e`/`p`/`s` เข้ารหัสด้วย AES-GCM จริง ไม่ใช่แค่มีอยู่เฉย ๆ — แต่ก็ไม่ได้ฟรีจากต้นทุนด้วย (key ใหม่ทุก build เว้นแต่ตั้ง `ASTRO_KEY`)
+- comment หรือข้อสมมติไหนอ้างว่า response ของ server island "cache อัตโนมัติ" หรือ "cache ที่ edge เหมือนเปลือก" ไหม? พิสูจน์ข้างบนด้วย `curl -D -` จริง: ไม่มี `Cache-Control` header โดย default เลย — cache ได้แค่เปลือกรอบ ๆ เว้นแต่ component จะตั้ง header เอง
+- `server:defer` ถูกเอามาใช้กับ component ที่ต้องตอบสนอง *click* ไหม? นั่นคือ client interactivity — เป็น client directive ไม่ใช่ server island ทั้งสองแก้ปัญหาคนละแบบ ใช้ร่วมกันได้แต่แทนกันไม่ได้
+- fallback (`slot="fallback"`) render อะไรที่แอบสมมติ cookie/สถานะ auth ไหม (ซึ่งขัดกับจุดประสงค์ของเปลือกที่เร็วและ cache ได้)? fallback คือสิ่งที่ทุกคนเห็นก่อน รวมถึงตอน cache ด้วย มันควรจะกลางๆ โดยดีไซน์ ส่วนที่ personalize มาถึงแค่ตอน fetch ที่ defer เท่านั้น
+
+<SpotTheBug code={`---
+// src/pages/dashboard.astro — a project with output: 'static' and no adapter configured
+import Avatar from '../components/Avatar.astro';
+---
+<Avatar server:defer />`}>
+นี่คือการใช้ `server:defer` ที่ syntax ถูกต้องสมบูรณ์ — bug ไม่ได้อยู่ในไฟล์นี้เลย มันอยู่ใน `astro.config.mjs` ของโปรเจกต์: `output: 'static'` โดยไม่มี `adapter` เลย `server:defer` render บน server เสมอ บน request ของตัวเอง ซึ่งต้องการความสามารถ render แบบ on-demand — build จึงพังทันทีและชัดเจน ทำซ้ำจริงข้างบนแล้ว: `[NoAdapterInstalledServerIslands] Cannot use server islands without an adapter.` ทางแก้ไม่ได้อยู่ใน component นี้ แต่คือเพิ่ม adapter อะไรก็ได้ (`adapter: node({ mode: 'standalone' })`, Cloudflare, Vercel...) เข้าไปใน config แม้ว่าหน้า*อื่น*ทุกหน้าบนไซต์อาจ static เต็มตัวและไม่ต้องการ adapter เลยก็ตาม
+</SpotTheBug>
+
+## Mental Model
+
+server island คือภาพสะท้อนกลับของ client island: client island ส่ง JavaScript เพื่อ defer *ตอนที่ component กลายเป็น interactive*; server island defer *ตอนที่ server render ของ component เกิดขึ้น* — หลังจากเปลือกส่งออกไปแล้ว บน request ของตัวเอง เพื่อไม่ให้ส่วนที่ช้าหรือ personalize บล็อกส่วนที่เร็วและ cache ได้ ทั้งคู่คือ "defer ชิ้นนี้ไว้ ส่งที่เหลือทั้งหมดตอนนี้" — อันหนึ่งอยู่บน timeline ของ client อีกอันอยู่บน timeline ของ server
+
+## ข้อแลกเปลี่ยน
+
+| | หน้า prerendered | หน้า on-demand | server island (`server:defer`) |
+|---|---|---|---|
+| **cache ได้ไหม** | ได้เต็มที่ | ไม่ได้โดย default | เปลือกได้ ส่วน island ได้เฉพาะถ้าตั้ง `Cache-Control` เอง (พิสูจน์ข้างบน) |
+| **เห็น cookie/session ไหม** | ไม่ (build ครั้งเดียว ก่อนมี request ไหนเลย) | ได้ | ได้ — พิสูจน์ข้างบนแล้วว่า cookie จริงไปถึง `Astro.request.headers` |
+| **ต้องมี adapter ไหม** | ไม่ต้อง | ต้อง | ต้อง — พิสูจน์ข้างบนแล้ว แม้ไซต์ที่เหลือจะ static ทั้งหมด |
+| **บล็อก first paint ตรงส่วนที่ช้าไหม** | N/A (ไม่มีอะไร dynamic) | ใช่ ทั้งหน้ารอ | ไม่ — เปลือกออกก่อน island มาทีหลัง สลับเข้าไปทับ fallback |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"response ของ server island เอง cache พร้อมเปลือกด้วย"** พิสูจน์ข้างบนด้วย `curl -D -` จริง: ไม่มี `Cache-Control` header เลยโดย default การ cache fragment เป็นสิ่งที่ต้อง opt-in เอง ข้างในตัว component
+- **"props ที่ส่งให้ server island มองเห็นได้ใน page source เหมือน query string ธรรมดา"** พิสูจน์ข้างบนและยืนยันในซอร์สของ Astro เอง: มันเข้ารหัสด้วย AES-GCM ไม่ใช่ plain text — แม้ key จะใหม่ทุก build เว้นแต่ตั้ง `ASTRO_KEY` ซึ่งสำคัญสำหรับ CDN และ rolling deploy
+- **"ไซต์ที่ static ทั้งหมดไม่ต้องการ adapter เลย"** จริงจนกว่าจะมี `server:defer` ตัวแรก — พิสูจน์ข้างบนแล้วว่า build พังทันที (`NoAdapterInstalledServerIslands`) ทันทีที่มีสักตัวปรากฏในโปรเจกต์ ไม่ว่าที่เหลือจะ static แค่ไหน
+- **"server island เห็น cookie ของผู้เยี่ยมชมไม่ได้เพราะ fetch เป็น request แยกนอกรอบ"** พิสูจน์ข้างบนด้วย browser session จริง: fetch เป็น same-origin ทำให้ browser ส่ง cookie ให้โดย default — `Astro.request.headers.get('cookie')` เห็นเหมือนกับที่หน้าโหลดปกติเห็นทุกอย่าง
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`server:defer` เปลี่ยน `.astro` component เป็น **server island**: เปลือกของหน้า render และออกทันที (จึง cache ได้) ส่วน component ที่ defer ไว้ render **บน server บน request ของตัวเอง** แล้ว HTML ของตัวเองถูกสลับเข้ามาแทน placeholder `slot="fallback"` เมื่อพร้อม นี่คือคำตอบของ "หน้านี้ cache ได้ ยกเว้นส่วนที่ personalize หรือช้าอยู่ส่วนหนึ่ง" — cache เปลือก defer ส่วน dynamic ตัว server island render บน server จึง **ต้องมี adapter** และเป็นเรื่องการ defer output จาก server ไม่ใช่ client interactivity
+`server:defer` เปลี่ยน `.astro` component เป็น **server island**: เปลือกของหน้า render และออกทันที (จึง cache ได้) ส่วน component ที่ defer ไว้ render **บน server บน request ของตัวเอง** — ผ่าน `<link rel="preload">` + fetch + swap จริง พิสูจน์ใน HTML ที่ build ออกมาข้างบน — แล้ว HTML ของตัวเองถูกสลับเข้ามาแทน placeholder `slot="fallback"` เมื่อพร้อม props เข้ารหัสด้วย AES-GCM (key ใหม่ทุก build เว้นแต่ตั้ง `ASTRO_KEY`) ตัว response เอง**ไม่ cache**เว้นแต่จะตั้ง `Cache-Control` เอง และ cookie**ไปถึง**component จริง (same-origin fetch) ตัว server island render บน server จึง **ต้องมี adapter** — เป็น build error จริงทันทีถ้าไม่มี แม้บนโปรเจกต์ที่ static ทั้งหมด — และเป็นเรื่องการ defer output จาก server ไม่ใช่ client interactivity
 </Callout>
 
 export const quizServer = [
@@ -78,6 +216,7 @@ export const quizServer = [
       'cache component ไว้ใน localStorage',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนใน HTML ที่ build จริง: preload link กับ script fetch /_server-islands/<name> หลังเปลือกส่งออกไปแล้ว แล้วสลับ response เข้าไปทับ fallback',
   },
   {
     q: 'use case หลักของ server island คืออะไร?',
@@ -88,6 +227,7 @@ export const quizServer = [
       'แชร์ state ระหว่าง client island',
     ],
     answer: 1,
+    explain: 'server island เป็นเรื่องจังหวะการ render บน server ไม่ใช่ client interactivity หรือ cross-island state — สองเรื่องหลังเป็น client directive กับ store ซึ่งอยู่ในบทอื่น',
   },
   {
     q: 'จะแสดงอะไรระหว่างที่ component server:defer กำลังโหลด?',
@@ -98,6 +238,7 @@ export const quizServer = [
       'มี CSS animation ถูกเพิ่มให้อัตโนมัติ',
     ],
     answer: 1,
+    explain: 'พิสูจน์ใน HTML ที่ build จริงข้างบน: markup fallback คือสิ่งที่ออกมาใน response แรก (ที่ cache ได้) ตรงตำแหน่งที่ component จริงจะมาสลับทีหลัง',
   },
   {
     q: 'server island ต้องมีอะไรถึงจะรันได้?',
@@ -108,6 +249,29 @@ export const quizServer = [
       'nanostore',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนด้วย build จริง: output: static ไม่มี adapter พังทันทีด้วย NoAdapterInstalledServerIslands ทันทีที่มีหน้าไหนใช้ server:defer',
+  },
+  {
+    q: '```text\nHTTP/1.1 200 OK\ncontent-type: text/html\nx-robots-tag: noindex\n```\nนี่คือ response header จริงจาก curl -D - กับ endpoint /_server-islands/ ที่ build แล้ว มีอะไรหายไปที่คุณอาจคิดว่าน่าจะมี?',
+    options: [
+      'content-type',
+      'Cache-Control — response ไม่ cache โดย default ต้องตั้งเองถ้า fragment นั้น cache ได้',
+      'status code',
+      'x-robots-tag',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบนด้วย curl -D - จริง: มีแค่ content-type กับ x-robots-tag: noindex ที่ตั้งให้โดย default การ cache response ของ server island เป็น opt-in ทำเองข้างในตัว component',
+  },
+  {
+    q: 'server island อ่าน Astro.request.headers.get(\'cookie\') เพื่อ personalize output ในเมื่อ fetch ไป /_server-islands/<name> ถูกเรียกโดย script ที่ browser รันหลังเปลือกโหลดเสร็จ cookie ของผู้เยี่ยมชมไปถึงจริงไหม?',
+    options: [
+      'ไม่ — มันเป็น request แยกนอกรอบที่ไม่มี cookie',
+      'ไปถึง — fetch เป็น same-origin และ same-origin fetch ส่ง cookie ให้โดย default พิสูจน์ด้วย browser session จริง',
+      'ต่อเมื่อใส่ credentials: "include" เองเท่านั้น',
+      'เฉพาะใน development mode',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบน: ตั้ง document.cookie แล้ว navigate ใหม่ ได้ "Welcome back, user 99" จาก response ของ fetch ที่ defer จริง โดยไม่ต้องใส่ fetch option เพิ่มเลย',
   },
 ];
 

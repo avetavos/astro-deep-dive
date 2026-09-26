@@ -1,6 +1,6 @@
 ---
 title: 'Client Directives'
-description: 'client directive ทั้งห้าตัว — client:load, client:idle, client:visible, client:media และ client:only — กับวิธีเลือกตัวที่ส่ง JavaScript น้อยที่สุดสำหรับ interactivity ที่ต้องการ.'
+description: 'client directive ทั้งห้าตัว — client:load, client:idle, client:visible, client:media และ client:only — element `<astro-island>` กับ loader script จริงเบื้องหลัง, ตัวเลือก rootMargin/timeout, error ของ client:only ที่พิสูจน์จริง, serializable props และทำไม Preact ถึงเงียบตอน hydration mismatch.'
 sidebar:
   order: 2
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## เปลี่ยน component ให้เป็น island
 
@@ -41,6 +42,202 @@ export const diagram = `flowchart LR
   visible --> media["client:media — when a breakpoint matches"]
   only["client:only — skip server render, client only"]`;
 
+## กลไกจริง: `<astro-island>`
+
+client directive ไม่ใช่แค่แนวคิดตอน build — มันคอมไพล์เป็น custom element จริง ๆ ที่ส่งมาใน HTML ลอง build หน้าที่มี `<Counter start={0} client:visible={{ rootMargin: '200px' }} />` (Preact) แล้วอ่าน output จริง:
+
+```html
+<astro-island uid="Z22rHo8" data-preact-island-id="1" component-url="/_astro/Counter.CzecfPIK.js" component-export="default" renderer-url="/_astro/client.N277o4ni.js" props="{&quot;start&quot;:[0,0]}" ssr client="visible" opts="{&quot;name&quot;:&quot;Counter&quot;,&quot;value&quot;:{&quot;rootMargin&quot;:&quot;200px&quot;}}" await-children>
+```
+
+ทุก attribute ทำงานจริง (ตรวจสอบตรง ๆ กับ `node_modules/astro/dist/runtime/server/astro-island.js` ซึ่งเป็นตัว define custom element ฝั่ง client):
+
+- **`uid`** — id คงที่สำหรับ instance ของ island นี้
+- **`component-url`** / **`renderer-url`** — สอง JS chunk ที่ `astro-island.js` สั่ง `import()`: ตัว component เอง กับ renderer สำหรับ hydrate ของ framework นั้น (`hydrator`) framework ต่างกันบนหน้าเดียวกันได้ `renderer-url` คนละไฟล์ (พิสูจน์ในบท framework-integrations)
+- **`component-export`** — จะใช้ export ไหนของ `component-url` (default คือ `"default"`)
+- **`props`** — prop ที่ serialize แล้ว แท็กเป็น tuple เพื่อให้ `Date`/`Map`/`Set`/`RegExp`/ฯลฯ รอดข้ามไปได้ (`[0, value]` ตรงนี้แปลว่า "ค่าธรรมดา")
+- **`ssr`** — มีอยู่จนกว่า hydration จะรัน `astro-island.js` เอาออกใน `hydrate()`
+- **`client`** — คือชื่อ directive ตรง ๆ (`"visible"`, `"idle"`, `"load"`, `"media"`, `"only"`) `start()` ของ `astro-island.js` อ่าน attribute นี้ตรง ๆ แล้วเรียก `Astro[directive](...)`
+- **`opts`** — ตัวเลือกของ directive เอง ส่งผ่านตรง ๆ — ตรงนี้แหละที่ `{ rootMargin: '200px' }` จากตัวอย่างข้างบนไปถึง พิสูจน์ว่า option มาถึง browser จริง
+- **`await-children`** — บอก `connectedCallback` ให้รอ streaming marker ของ Astro ก่อนเริ่ม เพื่อไม่ให้ child ที่ใช้ slot ที่ยัง stream มาไม่ถึง hydrate ใส่ DOM ที่ยังไม่มี
+
+<Mermaid title="สิ่งที่ astro-island.js ทำจริงตอน connectedCallback" code={islandDiagram} />
+
+export const islandDiagram = `sequenceDiagram
+  participant HTML as astro-island element
+  participant Loader as Astro[client] (e.g. visible.js)
+  participant JS as component-url + renderer-url
+  HTML->>HTML: connectedCallback (waits for await-children)
+  HTML->>Loader: start() reads the "client" attribute, calls Astro[directive]
+  Loader->>Loader: wait for the real trigger (IntersectionObserver, requestIdleCallback, matchMedia...)
+  Loader->>JS: import() component-url and renderer-url
+  JS-->>HTML: hydrate(Component, props, slots)
+  HTML->>HTML: remove "ssr" attribute, dispatch astro:hydrate`;
+
+ตัว trigger ของแต่ละ directive เป็น script เล็ก ๆ ที่ Astro ส่งมาเป็น `self.Astro.<directive>` — คัดจากไฟล์จริงที่ติดตั้งอยู่ (`node_modules/astro/dist/runtime/client/*.js`, astro@7.3.5):
+
+```js
+// node_modules/astro/dist/runtime/client/idle.js
+const idleDirective = (load, options) => {
+  const cb = async () => {
+    const hydrate = await load();
+    await hydrate();
+  };
+  const rawOptions = typeof options.value === "object" ? options.value : void 0;
+  const idleOptions = {
+    timeout: rawOptions?.timeout
+  };
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(cb, idleOptions);
+  } else {
+    setTimeout(cb, idleOptions.timeout || 200);
+  }
+};
+```
+
+```js
+// node_modules/astro/dist/runtime/client/visible.js
+const visibleDirective = (load, options, el) => {
+  const cb = async () => {
+    const hydrate = await load();
+    await hydrate();
+  };
+  const rawOptions = typeof options.value === "object" ? options.value : void 0;
+  const ioOptions = {
+    rootMargin: rawOptions?.rootMargin
+  };
+  const io = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      io.disconnect();
+      cb();
+      break;
+    }
+  }, ioOptions);
+  for (const child of el.children) {
+    io.observe(child);
+  }
+};
+```
+
+```js
+// node_modules/astro/dist/runtime/client/media.js
+const mediaDirective = (load, options) => {
+  const cb = async () => {
+    const hydrate = await load();
+    await hydrate();
+  };
+  if (options.value) {
+    const mql = matchMedia(options.value);
+    if (mql.matches) {
+      cb();
+    } else {
+      mql.addEventListener("change", cb, { once: true });
+    }
+  }
+};
+```
+
+`client:load` กับ `client:only` (`load.js`/`only.js`) ง่ายที่สุดในบรรดาทั้งหมด — `await load(); await hydrate();` ไม่มี gate อะไรเลย — ยืนยันว่า "ทันที" หมายถึงทันทีจริง ๆ ไม่มี observer ไม่มี timer ไม่มีการเช็ค
+
+## ตัวเลือกของ directive: `rootMargin` กับ `timeout`
+
+ทั้ง `client:visible` และ `client:idle` รับ object เป็น argument ได้ ไม่ใช่แค่ flag เฉย ๆ — ตรวจสอบใน `.d.ts` ที่ติดตั้งจริง (`astro/dist/types/public/elements.d.ts`):
+
+```text
+'client:load'?: boolean;
+'client:idle'?: IdleRequestOptions | boolean;
+'client:media'?: string;
+'client:visible'?: ClientVisibleOptions | boolean;
+'client:only'?: boolean | string;
+
+export type ClientVisibleOptions = Pick<IntersectionObserverInit, 'rootMargin'>;
+```
+
+`IdleRequestOptions` คือ type มาตรฐานของ DOM lib สำหรับ argument ตัวที่สองของ `requestIdleCallback` (ก็คือ `{ timeout }` ตรงกับ `idleOptions.timeout` ของ `idle.js` ข้างบน) `ClientVisibleOptions` ถูก narrow ให้เหลือแค่ `rootMargin` — field เดียวที่ `visible.js` อ่านเข้า `IntersectionObserverInit` ของมันจริง ๆ หน้าที่ type-check ผ่านจริง ใช้ทั้งสองตัวเลือก:
+
+```astro
+---
+// src/pages/directive-options.astro
+import DirectiveCounter from '../components/DirectiveCounter.tsx';
+---
+<DirectiveCounter start={0} client:visible={{ rootMargin: '200px' }} />
+<DirectiveCounter start={0} client:idle={{ timeout: 500 }} />
+```
+
+```tsx
+// src/components/DirectiveCounter.tsx
+import { useState } from 'preact/hooks';
+
+export default function DirectiveCounter({ start }: { start: number }) {
+  const [count, setCount] = useState(start);
+  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;
+}
+```
+
+`npm run verify` type-check ทั้งสอง fence นี้ผ่านสะอาด — `rootMargin`/`timeout` เป็น option จริงที่ type ไว้ใน 7.3.5 ไม่ได้เดามั่ว
+
+## `client:only` ต้องระบุชื่อ framework — พิสูจน์ด้วย error จริง
+
+`client:only` ข้าม server rendering ทั้งหมด ทำให้ Astro ไม่มีอะไรให้ render-แล้ว-ตรวจดู เพื่อเดาว่าเป็น framework อะไร ถ้าติดตั้ง UI integration แค่ **ตัวเดียว** Astro จะเดาให้เงียบ ๆ — `client:only` (ไม่ระบุชื่อ) build ผ่านสบาย ๆ แต่พอเพิ่ม integration ที่เป็น JSX ตัวที่ **สอง** (เช่น `preact()` กับ `react()` ในโปรเจกต์เดียวกัน) การเดาจะกลายเป็นกำกวมทันที และการ build `client:only` เปล่า ๆ จะ throw จริง:
+
+```text
+[NoClientOnlyHint] Unable to render `Counter`. When using the `client:only` hydration
+strategy, Astro needs a hint to use the correct renderer.
+  Hint:
+    Did you mean to pass `client:only="react|preact|solid-js|vue (jsx)"`?
+  Error reference:
+    https://docs.astro.build/en/reference/errors/no-client-only-hint/
+```
+
+(พิสูจน์จริงกับ `astro build` ที่ติดตั้งทั้ง `@astrojs/preact` และ `@astrojs/react` — โปรเจกต์เดียวกันนี้ยัง warn ตั้งแต่ตอนเพิ่ม integration ตัวที่สองด้วย: `[@astrojs/preact] More than one JSX renderer is enabled. This will lead to unexpected behavior unless you set the include or exclude option.`) ระบุชื่อ framework — `client:only="preact"` — แก้ได้ทันที เพราะมันบอก Astro ตรง ๆ ว่าต้องโหลด `renderer-url` ไหน โดยไม่ต้องมี server render เลย
+
+## สิ่งที่เกิดขึ้นจริงกับ prop ที่ไม่ serializable
+
+prop ของ island เดินทางจากไฟล์ `.astro` ไป browser เป็น string แบบ JSON ใน attribute `props` ข้างบน จึงต้อง **serializable** ข้อจำกัดนี้จริง แต่ *รูปแบบ* ของความล้มเหลวขึ้นอยู่กับว่า type ของ prop นั้นซื่อสัตย์แค่ไหน
+
+ถ้า `Props` type ของ `DirectiveCounter` คือ `{ start: number }` แล้วผู้เขียนส่ง handler เข้าไปด้วย TypeScript จะจับได้ก่อนอะไรจะถูกส่งออกไป เป็น error จริงจาก `astro check` ไม่ใช่ lint เฉย ๆ:
+
+```astro
+---
+// @expect-error TS2322 — onPoint isn't declared on DirectiveCounter's Props, so the extra prop is rejected at the type level
+import DirectiveCounter from '../components/DirectiveCounter.tsx';
+---
+<DirectiveCounter start={0} onPoint={() => console.log('hi')} client:visible />
+```
+
+```text
+src/pages/fnprop-demo.astro:5:20 - error ts(2322): Type '{ start: number; onPoint: () => void; "client:visible": true; }'
+is not assignable to type 'IntrinsicAttributes & { start: number; }'.
+  Property 'onPoint' does not exist on type 'IntrinsicAttributes & { start: number; }'.
+```
+
+แต่ถ้า prop type หลวม (`.jsx` ธรรมดา หรือ prop แบบ `any`) ไม่มีอะไรหยุด build ไว้เลย — และพฤติกรรมตอน *runtime* ก็ไม่ใช่ error เลย แต่เป็นการ**เสียข้อมูลแบบเงียบ ๆ** ตัว serializer ของ Astro เอง (`astro/dist/runtime/server/serialize.js`) ตกไปใช้ `JSON.stringify` สำหรับอะไรก็ตามที่มันไม่รู้จักเป็นพิเศษ (`Date`, `RegExp`, `Map`, `Set`, array, typed array, `Infinity`...) — และ `JSON.stringify` ของ function ที่อยู่ใน array slot จะได้ `null` ไม่ใช่ exception attribute `props` ที่ build จริงของ call เดียวกัน โดยข้าม type check ไป:
+
+```text
+props="{&quot;start&quot;:[0,0],&quot;onPoint&quot;:[0,null]}"
+```
+
+function หายไปเลยฝั่ง client ถ้า `DirectiveCounter` เผลอเรียก `props.onPoint()` จะ throw `onPoint is not a function` ตอน hydrate — เป็น runtime error ที่งงว่าเกิดจากอะไร ทั้งที่จุดผิดจริงอยู่คนละที่
+
+## Hydration mismatch: Preact ไม่ warn เหมือน React
+
+hydration mismatch คือตอนที่ HTML ที่ render บน server กับ render ครั้งแรกฝั่ง client ไม่ตรงกัน — เช่น component ที่แยกทางตาม `typeof window` build แล้วเสิร์ฟจริง (`<p>{typeof window === 'undefined' ? 'server' : 'client'}</p>`, `client:load`):
+
+```text
+$ curl -s http://127.0.0.1:4601/mismatch-demo/ | grep -o '<p>[^<]*</p>'
+<p>server</p>
+```
+
+พอ island hydrate ใน browser จริง DOM เปลี่ยนเงียบ ๆ เป็น:
+
+```text
+document.querySelector('astro-island p').outerHTML
+// "<p>client</p>"
+```
+
+โดยไม่มี console message แม้แต่อันเดียว — เช็คตรง ๆ ด้วย browser session จริง (ตัวฟัง console ของ Playwright บันทึกได้ 0 error, 0 warning ตลอดการ navigate) นี่คือความต่างจาก React ที่มีประโยชน์จริง: Preact (framework ของคอร์สนี้เอง) ไม่ได้ส่ง hydration-mismatch warning ใน production เลย แม้แต่ `preact/debug` — package diagnostics โหมด dev ของมัน — ก็ไม่ได้เช็ค text-content mismatch (ตรวจแล้ว: warning ของมันครอบคลุมแค่ prop ที่ไม่ถูกต้อง, `key` ที่หาย, กับ DOM node ที่ไม่ถูกต้อง ไม่ใช่เรื่องนี้) อย่าคาดหวังว่า console จะบอกตอน server กับ client render ไม่ตรงกัน — render ที่ต่างกันจริง ๆ ตอน paint ครั้งแรกคือสัญญาณเดียวที่เห็นได้
+
 ## เลือกตัวที่ถูก
 
 เส้นทางตัดสินใจง่าย ๆ ครอบคลุมเกือบทุกเคส:
@@ -53,8 +250,46 @@ export const diagram = `flowchart LR
 
 สัญชาตญาณที่จะคว้า `client:load` มาใส่ทุกอย่างคือสิ่งที่ island มีไว้ป้องกันพอดี ส่ง JavaScript ให้น้อยที่สุดเท่าที่ให้ interactivity ที่ต้องการ และปล่อยให้ island ส่วนใหญ่ของคุณเป็น `client:visible`
 
+## อ่านโค้ดที่ AI เขียน
+
+ตอนเจอ snippet ที่ generate มาใช้ client directive เช็คสิ่งเหล่านี้ก่อนเชื่อ:
+
+- component interactive ทุกตัวเป็น `client:load` ไม่ว่าจะอยู่ตรงไหนของหน้าไหม? นี่คือ default ที่ LLM มักคว้ามาใช้ ส่ง JavaScript มากที่สุดแต่ได้ประโยชน์น้อยที่สุด เว้นแต่ component นั้นอยู่เหนือ fold จริง ๆ และต้องทำงานทันที
+- ถ้ามี `client:only` ปรากฏ มันระบุชื่อ framework ไหม (`client:only="preact"`)? `client:only` เปล่า ๆ ทำงานได้แค่โดยบังเอิญ — พัง ทันทีที่ติดตั้ง UI integration ตัวที่สอง ด้วย error `NoClientOnlyHint` จริงข้างบน
+- `<script>` ที่มี `is:inline` ถูกเข้าใจผิดว่าเป็น island หรือเปล่า? `is:inline` แค่บอก Astro ให้ปล่อย `<script>` ธรรมดาไว้เฉย ๆ (ไม่ bundle/ประมวลผล) — ไม่เกี่ยวกับ framework component, hydration หรือ client directive เลย และไม่มีทางออกมาเป็น `<astro-island>`
+- prop ที่ส่งให้ island serializable จริงไหม? function หรือ class instance จะพังตั้งแต่ระดับ type (พิสูจน์ข้างบน) หรือไม่ก็เงียบ ๆ กลายเป็น `null` บนสาย — ไม่มีทางไหน "ใช้ได้เฉย ๆ"
+- `client:visible`/`client:idle` ส่ง options object (`{{ rootMargin: '...' }}`, `{{ timeout: ... }}`) ตอนตั้งใจจะ config มันไหม ไม่ใช่ string เปล่า ๆ (นั่นเป็นรูปแบบของ `client:media` ไม่ใช่สองตัวนี้)?
+
+<SpotTheBug code={`---
+// src/pages/index.astro — a project with both @astrojs/preact and @astrojs/react installed
+import Counter from '../components/Counter.jsx';
+---
+<Counter start={0} client:only />`}>
+โค้ดนี้ build ผ่านถ้าติดตั้ง integration ตัวเดียว แต่โปรเจกต์นี้มี **สอง** integration ที่เป็น JSX (`preact()` กับ `react()`) `client:only` ข้าม server rendering ทั้งหมด ทำให้ Astro ไม่มี output ที่ render แล้วให้ดูเพื่อเดา framework — และเมื่อมี renderer ที่เป็นไปได้มากกว่าหนึ่งตัว การเดาก็ไม่ปลอดภัยอีกต่อไป error จริงจาก build ที่ทำ setup นี้ซ้ำแล้วซ้ำอีก: `[NoClientOnlyHint] Unable to render Counter. When using the client:only hydration strategy, Astro needs a hint to use the correct renderer.` ทางแก้คือคำเดียว: `client:only="react"` (หรือ `"preact"` แล้วแต่ว่า `Counter.jsx` ตั้งใจจะ hydrate ด้วยตัวไหนจริง ๆ ให้ตรงกับ `include`/`exclude` ของแต่ละ integration — ดูบท framework-integrations)
+</SpotTheBug>
+
+## Mental Model
+
+client directive ไม่ใช่ hint ให้ Astro runtime ในหน่วยความจำที่ไหน — มันคือขั้นตอนการ compile `client:visible` บน JSX component กลายเป็น tag `<astro-island client="visible" ...>` จริง ๆ ที่ `curl` ดูได้ ต่อสายเข้ากับ `IntersectionObserver` จริงในไฟล์ที่มี version จริงใต้ `node_modules/astro/dist/runtime/client/` ถ้าเรียกชื่อ directive ได้ ก็ไปอ่านไฟล์หกสิบบรรทัดที่ implement มันได้เลย — ไม่มี layer ที่ซ่อนอยู่ข้างล่าง
+
+## ข้อแลกเปลี่ยน
+
+| | `client:load` | `client:idle` | `client:visible` | `client:media` | `client:only` |
+|---|---|---|---|---|---|
+| **hydrate ตอนไหน** | ทันที | ตอน browser idle (`requestIdleCallback`) | ตอน scroll เข้ามาในจอ (`IntersectionObserver`) | ตอน media query match | ทันที แต่ client-only |
+| **render บน server ไหม?** | ได้ | ได้ | ได้ | ได้ | ไม่ — ข้ามไปเลย |
+| **ต้องระบุชื่อ framework ไหม?** | ไม่ | ไม่ | ไม่ | ไม่ | **ต้อง** เมื่อติดตั้ง integration มากกว่า 1 ตัว |
+| **เหมาะกับ** | control เหนือ fold ที่ต้องทำงานทันที | สำคัญแต่ไม่ด่วน | widget ใต้ fold (default ที่ปลอดภัย) | interactivity เฉพาะ breakpoint | API ที่ใช้ได้แค่ browser server จะ crash |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`client:load` คือ default ที่ปลอดภัย"** มันคือตัวที่แพงที่สุด — พิสูจน์ข้างบนแล้วว่า `load.js` ไม่มี gate อะไรเลย `client:visible` คือ default ที่ปลอดภัยกว่า เก็บ `client:load` ไว้กับสิ่งที่ต้องทำงานทันทีจริง ๆ
+- **"`client:only` แบบไม่ระบุ framework ใช้ได้เสมอ"** พิสูจน์ข้างบนแล้วว่าขึ้นอยู่กับจำนวน UI integration ที่ติดตั้งล้วน ๆ ตัวเดียวเดาได้ สองตัวขึ้นไปคือ build error จริง
+- **"prop ที่ไม่ serializable จะ throw ตอน build"** จะเป็นแบบนั้นก็ต่อเมื่อ `Props` type ของ component ซื่อสัตย์พอให้ TypeScript จับได้ (พิสูจน์แล้วว่าเป็น `ts(2322)` จริง) ถ้า type หลวม/`any` มันจะเงียบ ๆ กลายเป็น `null` บนสายแทน — ไม่มี error เลย
+- **"hydration mismatch จะ log console warning เหมือน React"** พิสูจน์ข้างบนด้วย browser session จริงแล้วว่า Preact ไม่ warn เรื่อง text-content mismatch เลย ทั้งใน production และใต้ `preact/debug` DOM แค่เงียบ ๆ กลายเป็น version ของ client เท่านั้น
+
 <Callout title="สรุปหนึ่งบรรทัด">
-client directive ทำสองอย่าง: **ทำให้ component เป็น island** และกำหนดว่า **hydrate เมื่อไหร่** — `client:load` (ทันที สำหรับ control เหนือ fold), `client:idle` (ตอน browser idle), `client:visible` (ตอน scroll เข้ามาในจอ — default ที่เบาที่สุดสำหรับใต้ fold), `client:media` (เฉพาะตอน breakpoint match) และ `client:only="react"` (ข้าม server render, client อย่างเดียว — ต้องระบุชื่อ framework) hydrate เร็วขึ้นแปลว่า JavaScript ล่วงหน้ามากขึ้น ดังนั้น default เป็น `client:visible` และเก็บ `client:load` ไว้กับสิ่งที่ต้องทำงานทันทีจริง ๆ
+client directive ทำสองอย่าง: **ทำให้ component เป็น island** และกำหนดว่า **hydrate เมื่อไหร่** — `client:load` (ทันที ไม่มี gate เลย พิสูจน์ใน `load.js`), `client:idle` (ตอน browser idle, `{ timeout }`), `client:visible` (ตอน scroll เข้ามาในจอ — default ที่เบาที่สุดสำหรับใต้ fold, `{ rootMargin }`), `client:media` (เฉพาะตอน breakpoint match) และ `client:only="react"` (ข้าม server render, client อย่างเดียว — **ต้อง**ระบุชื่อ framework เมื่อติดตั้ง UI integration มากกว่าหนึ่งตัว ไม่งั้นเป็น `NoClientOnlyHint` build error จริง) ทั้งหมดคอมไพล์เป็น custom element `<astro-island>` จริง ที่มี attribute `component-url`/`renderer-url`/`props`/`client`/`opts` — ตรวจสอบได้ตรง ๆ ใน HTML ที่ build ออกมา prop ต้อง serializable: TypeScript จับ function prop ได้ถ้า `Props` ซื่อสัตย์ แต่ตัวที่ type หลวมจะเงียบ ๆ serialize เป็น `null` แทนที่จะ error และต่างจาก React ตรงที่ Preact hydration mismatch ไม่มี console warning เลย มีแค่การสลับ DOM แบบเงียบ ๆ
 </Callout>
 
 export const quizDirectives = [
@@ -67,16 +302,18 @@ export const quizDirectives = [
       'ไม่ต้องมี directive',
     ],
     answer: 1,
+    explain: 'client:visible ไม่โหลดอะไรเลยจนกว่า IntersectionObserver จะบอกว่า component อยู่ในจอ — พิสูจน์ตรง ๆ ในไฟล์ visible.js ที่ติดตั้งจริง',
   },
   {
-    q: 'ทำไมต้องเขียน client:only="react" พร้อมชื่อ framework?',
+    q: 'ทำไมต้องเขียน client:only="react" พร้อมชื่อ framework เมื่อโปรเจกต์ติดตั้ง UI integration สองตัว?',
     options: [
       'เพื่อเป็นเอกสารเฉย ๆ',
-      'เพราะ client:only ข้าม server rendering ทำให้ Astro เดา framework จาก server render ไม่ได้ จึงต้องให้เราระบุชื่อ',
+      'เพราะ client:only ข้าม server rendering ทำให้เมื่อมี JSX integration มากกว่าหนึ่งตัว Astro เดา renderer ที่ปลอดภัยไม่ได้อีกแล้ว',
       'เพราะ React ต้องการแต่ตัวอื่นไม่ต้อง',
       'เพื่อเลือก CSS theme',
     ],
     answer: 1,
+    explain: 'พิสูจน์ข้างบนด้วย build จริง: ติดตั้ง integration ตัวเดียว client:only เปล่า ๆ เดาได้เอง ติดตั้งสองตัวจะ throw error NoClientOnlyHint จริงจนกว่าจะระบุชื่อ framework',
   },
   {
     q: 'trade-off ของการ hydrate component เร็วขึ้น (เช่น client:load เทียบกับ client:visible) คืออะไร?',
@@ -87,6 +324,7 @@ export const quizDirectives = [
       'hydrate ช้าลงทำให้ component พัง',
     ],
     answer: 1,
+    explain: 'load.js ไม่มี gate อะไรเลย — hydrate ทันทีที่รัน — ส่วน visible.js/idle.js รอผ่าน observer/idle callback จริง แลกความทันทีกับต้นทุนล่วงหน้าที่น้อยกว่า',
   },
   {
     q: 'จะใช้ client:media เมื่อไหร่?',
@@ -97,6 +335,29 @@ export const quizDirectives = [
       'เพื่อโหลดรูปแบบ lazy',
     ],
     answer: 1,
+    explain: 'media.js เรียก cb() ต่อเมื่อ matchMedia(options.value) match เท่านั้น (หรือทันทีถ้า match อยู่แล้ว) — JS ของมันไม่รันเลยถ้า breakpoint นั้นไม่เคย match',
+  },
+  {
+    q: '```html\n<astro-island uid="Z22rHo8" component-url="/_astro/Counter.js" renderer-url="/_astro/client.js" props="{&quot;start&quot;:[0,0]}" ssr client="visible" opts="{&quot;name&quot;:&quot;Counter&quot;,&quot;value&quot;:{&quot;rootMargin&quot;:&quot;200px&quot;}}" await-children>\n```\n`start()` ของ `astro-island.js` อ่าน attribute ไหนเพื่อตัดสินใจว่าจะเรียก loader ไหน (`Astro.load`/`Astro.visible`/...)?',
+    options: [
+      '`uid`',
+      '`client` — ค่าของมันถูกใช้ตรง ๆ เป็น `Astro[directive]`',
+      '`ssr`',
+      '`await-children`',
+    ],
+    answer: 1,
+    explain: 'ตรวจสอบตรง ๆ ใน astro-island.js: `const directive = this.getAttribute("client"); ... await Astro[directive](...)` — attribute client คือชื่อ directive เลย',
+  },
+  {
+    q: '```astro\n---\nimport DirectiveCounter from \'../components/DirectiveCounter.tsx\';\n---\n<DirectiveCounter start={0} onPoint={() => {}} client:visible />\n```\n`Props` type ของ DirectiveCounter คือ `{ start: number }` เกิดอะไรขึ้นจริง?',
+    options: [
+      'build ผ่านและ onPoint ทำงานปกติฝั่ง client',
+      'astro check error จริง (ts 2322: Property \'onPoint\' does not exist) — TypeScript ปฏิเสธ prop ก่อนอะไรจะถูกส่งออกไป',
+      'เงียบ ๆ กลายเป็น null โดยไม่มี error เลย',
+      'Astro throw runtime serialization exception',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์ข้างบน: ถ้า Props type ซื่อสัตย์ astro check จะรายงาน ts(2322) จริง มีแค่ตอน prop type หลวม/any เท่านั้นที่มันจะเงียบ ๆ serialize เป็น null บนสายแทน — เป็น failure mode อีกแบบที่คุยไว้ในหัวข้อเดียวกัน',
   },
 ];
 

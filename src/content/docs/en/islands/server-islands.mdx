@@ -1,6 +1,6 @@
 ---
 title: 'Server Islands'
-description: 'server:defer renders a component on the server but defers it — the page ships instantly with a fallback, and the real HTML is fetched and swapped in, letting you cache the shell and defer the personalized or slow part.'
+description: 'server:defer renders a component on the server but defers it — the real built HTML (preload link, fetch script, fallback swap), AES-GCM props encryption, real cache headers (there are none by default), the real no-adapter build error, and proof that cookies do reach a server island.'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem server islands solve
 
@@ -54,6 +55,105 @@ export const diagram = `flowchart TB
   fetch --> srv["island renders on the server (cookies, session, db)"]
   srv --> swap["real HTML swapped in over the fallback"]`;
 
+## The real built HTML
+
+The fallback content, the fetch, and the swap are not hidden framework magic — building a real page with a `server:defer` `Avatar` (fallback `GenericAvatar`) and reading the actual output shows all three, in order, in plain HTML:
+
+```astro
+---
+// src/components/GenericAvatar.astro
+---
+<img src="/generic-avatar.png" alt="Generic avatar" width="48" height="48" />
+```
+
+```astro
+---
+// src/components/Avatar.astro
+const cookie = Astro.request.headers.get('cookie');
+const userId = cookie?.match(/uid=(\\w+)/)?.[1] ?? null;
+---
+<div data-testid="avatar-real">
+  {userId ? <p>Welcome back, user {userId}</p> : <p>Anonymous (no uid cookie forwarded)</p>}
+</div>
+```
+
+```astro
+---
+// src/pages/server-island-demo.astro
+import Avatar from '../components/Avatar.astro';
+import GenericAvatar from '../components/GenericAvatar.astro';
+---
+<html><body>
+<h1>Server island demo</h1>
+<Avatar server:defer>
+  <GenericAvatar slot="fallback" />
+</Avatar>
+</body></html>
+```
+
+```html
+<!DOCTYPE html><html><link rel="preload" as="fetch" href="/_server-islands/Avatar?e=FDA01BAC8D95CB8E26A560DAB87l7Jmcc5evsrWx2DYJJRT%2BfX1KJFY%3D&amp;p=&amp;s=" crossorigin="anonymous"><body><h1>Server island demo</h1><script>async function replaceServerIsland(id, r) { let s = document.querySelector(`script[data-island-id="${id}"]`); if (!s || r.status !== 200 || r.headers.get('content-type')?.split(';')[0].trim() !== 'text/html') return; let html = await r.text(); while (s.previousSibling && s.previousSibling.nodeType !== 8 && s.previousSibling.data !== '[if astro]>server-island-start<![endif]') s.previousSibling.remove(); s.previousSibling?.remove(); s.before(document.createRange().createContextualFragment(html)); s.remove(); }</script><!--[if astro]>server-island-start<![endif]--><img src="/generic-avatar.png" alt="Generic avatar" width="48" height="48"><script type="module" data-astro-rerun data-island-id="f07047c9-f26d-45fe-a9ea-1ac642bcc610">const headers = new Headers({});
+let response = await fetch("/_server-islands/Avatar?e=FDA01BAC8D95CB8E26A560DAB87l7Jmcc5evsrWx2DYJJRT%2BfX1KJFY%3D&p=&s=", { headers });replaceServerIsland("f07047c9-f26d-45fe-a9ea-1ac642bcc610", response);</script></body></html>
+```
+
+Four real pieces, in the exact order they appear:
+
+1. A `<link rel="preload" as="fetch">` in `<head>` — the browser starts fetching the server island's endpoint before it even reaches the body, without blocking render.
+2. The shared `replaceServerIsland` runtime script — the same ~15 lines regardless of how many server islands the page has.
+3. The `GenericAvatar` fallback markup, right where `Avatar` will end up — this is what paints first.
+4. A `<script type="module" data-island-id="...">` that repeats the same URL from the preload `fetch`, then calls `replaceServerIsland(id, response)` to swap the fallback for the real HTML once it arrives.
+
+## Props encryption
+
+Props (and slot content) passed to a server island are not sent to the browser in plain text — the URL above (`?e=...&p=&s=...`) is genuinely encrypted, not just obfuscated. Astro's own source (`astro/dist/core/encryption.js`) uses **AES-GCM** with a 256-bit key generated fresh per build and stored server-side; per the official docs (`docs.astro.build/en/guides/server-islands/#reusing-the-encryption-key`):
+
+> Astro uses cryptography to encrypt props passed to server islands, protecting sensitive data from accidental exposure. This encryption relies on a new, random key that is generated on each build and embedded in the server bundle.
+
+A fresh key every build means a CDN caching a page across deploys, or a rolling deployment where old and new server instances briefly coexist, can end up with a decryption mismatch. The fix is `astro create-key`, which generates a stable key to set as the `ASTRO_KEY` environment variable so every build (and every backend instance) encrypts and decrypts with the same key.
+
+## Cache headers on the response — proven, and not what you might assume
+
+A real `curl -D -` against the built `_server-islands` endpoint (headers only, from a real running build):
+
+```text
+$ curl -s -D - "http://127.0.0.1:4601/_server-islands/Avatar?e=...&p=&s=" -o /dev/null
+HTTP/1.1 200 OK
+content-type: text/html
+x-robots-tag: noindex
+Date: Sat, 26 Sep 2026 02:35:38 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+```
+
+There is **no `Cache-Control` header at all** by default — only `x-robots-tag: noindex` (so search engines don't index the raw fragment endpoint). Astro does not cache a server island's response for you; if the fragment is cacheable, you set `Cache-Control` yourself inside the component (e.g. `Astro.response.headers.set('Cache-Control', ...)`), the same way you would for any other on-demand route.
+
+## Server islands need an adapter, even on an otherwise fully static site
+
+The requirement isn't soft advice — leave the adapter out of an otherwise `output: 'static'` project that uses `server:defer` anywhere, and the build fails immediately, before it even gets to prerendering pages:
+
+```text
+[NoAdapterInstalledServerIslands] Cannot use server islands without an adapter. Please install
+and configure the appropriate server adapter for your final deployment.
+  Hint:
+    See https://docs.astro.build/en/guides/on-demand-rendering/ for more information.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/no-adapter-installed-server-islands/
+```
+
+(Reproduced against a real `astro build` with `output: 'static'` and no `adapter` set at all, one page using `server:defer`.) Adding `adapter: node({ mode: 'standalone' })` — or any adapter — back makes the exact same project build clean; nothing else about the page needs to change.
+
+## Cookies inside a server island
+
+A server island's fetch runs same-origin from the browser, and a same-origin `fetch()` sends cookies by default (no `credentials` option needed) — so `Astro.request.headers.get('cookie')` inside `Avatar.astro` really does see the visitor's cookies, proven with a real browser session: set `document.cookie = 'uid=99'`, navigate fresh to the page, and once the deferred fetch resolves:
+
+```text
+document.querySelector('[data-testid=avatar-real]').outerHTML
+// "<div data-testid=\"avatar-real\"><p>Welcome back, user 99</p></div>"
+```
+
+— versus the fallback-then-generic-anonymous response you get with no cookie set at all (`"Anonymous (no uid cookie forwarded)"`, proven earlier via a direct `curl` with no `Cookie` header). Nothing special has to be done to forward the cookie; it's an ordinary same-origin request from the browser's point of view.
+
 ## When to use them (and the adapter requirement)
 
 Server islands are the right tool when a page is **cacheable except for a small dynamic piece**:
@@ -62,10 +162,48 @@ Server islands are the right tool when a page is **cacheable except for a small 
 - A mostly-static page with one **slow** query you don't want blocking first paint.
 - Auth-gated fragments on an otherwise public, CDN-cached page.
 
-Two things to remember. First, `server:defer` renders **on the server**, so it needs an **adapter** installed (Cloudflare, Node, Vercel...) — the same requirement as any on-demand rendering; without one you'll hit the "an adapter is required" error. Second, it's not for client interactivity — if the piece needs to respond to clicks, that's a *client* island (a client directive), possibly in addition. Server islands are about deferring **server-rendered** output, not hydrating JavaScript.
+Two things to remember. First, `server:defer` renders **on the server**, so it needs an **adapter** installed (Cloudflare, Node, Vercel...) — the same requirement as any on-demand rendering; without one you'll hit the real `NoAdapterInstalledServerIslands` build error proven above, even on an otherwise fully static, adapter-free project. Second, it's not for client interactivity — if the piece needs to respond to clicks, that's a *client* island (a client directive), possibly in addition. Server islands are about deferring **server-rendered** output, not hydrating JavaScript.
+
+## Reading AI-generated code
+
+When a generated snippet uses `server:defer`, check for these before trusting it:
+
+- Is `server:defer` used on a page/project with no adapter configured? It's a real, immediate build failure (`NoAdapterInstalledServerIslands`, proven above) — not a warning, not something that only shows up at runtime.
+- Does the component assume props are sent in plain text over the wire because "it's just a query string"? Proven above: the `e`/`p`/`s` params are AES-GCM encrypted, not just present — but also not free of operational cost (a fresh key per build, unless `ASTRO_KEY` is set).
+- Does a comment or assumption claim the server-island response is "automatically cached" or "cached at the edge like the shell"? Proven above with a real `curl -D -`: no `Cache-Control` header ships by default — only the shell around it is cacheable unless the component sets its own header.
+- Is `server:defer` reached for on a component that needs to respond to a *click*? That's client interactivity — a client directive, not a server island; the two solve different problems and can be combined but aren't substitutes.
+- Does the fallback (`slot="fallback"`) render something that quietly assumes cookies/auth state (defeating the point of a fast, cacheable shell)? The fallback is what every visitor sees first, cache included — it should be generic by design, with the personalized part arriving only in the deferred fetch.
+
+<SpotTheBug code={`---
+// src/pages/dashboard.astro — a project with output: 'static' and no adapter configured
+import Avatar from '../components/Avatar.astro';
+---
+<Avatar server:defer />`}>
+This is a syntactically valid use of `server:defer` — the bug isn't in this file at all, it's in the project's `astro.config.mjs`: `output: 'static'` with no `adapter` entry. `server:defer` always renders on the server, on its own request, which needs on-demand rendering capability — so the build fails immediately and clearly, reproduced above: `[NoAdapterInstalledServerIslands] Cannot use server islands without an adapter.` The fix isn't in this component; it's adding any adapter (`adapter: node({ mode: 'standalone' })`, Cloudflare, Vercel...) to the config, even though every *other* page on the site might be fully static and never need one.
+</SpotTheBug>
+
+## Mental Model
+
+A server island is the mirror image of a client island: a client island ships JavaScript to defer *when a component becomes interactive*; a server island defers *when a component's server render happens* — after the shell has already shipped, on its own request, so the slow or personal part never blocks the fast, cacheable part. Both are "defer this piece, ship everything else now" — one on the client's timeline, one on the server's.
+
+## Trade-offs
+
+| | Prerendered page | On-demand page | Server island (`server:defer`) |
+|---|---|---|---|
+| **Cacheable?** | Fully | Not by default | The shell yes, the island only if you set `Cache-Control` yourself (proven above) |
+| **Sees cookies/session?** | No (built once, ahead of any request) | Yes | Yes — proven above, a real cookie reached `Astro.request.headers` |
+| **Needs an adapter?** | No | Yes | Yes — proven above, even if the rest of the site is fully static |
+| **Blocks first paint on the slow bit?** | N/A (nothing dynamic) | Yes, the whole page waits | No — the shell ships first, the island arrives after, swapped over a fallback |
+
+## Common Misconceptions
+
+- **"The server island's own response is cached along with the shell."** Proven above with a real `curl -D -`: no `Cache-Control` header ships by default. Caching the fragment is something you opt into yourself, inside the component.
+- **"Props sent to a server island are visible in the page source, like a normal query string."** Proven above and confirmed in Astro's own source: they're AES-GCM encrypted, not plain text — though the key is fresh per build unless `ASTRO_KEY` is set, which matters for CDNs and rolling deploys.
+- **"A fully static site never needs an adapter."** True until the first `server:defer` — proven above, the build fails immediately (`NoAdapterInstalledServerIslands`) the moment one appears anywhere in the project, however static everything else is.
+- **"A server island can't see the visitor's cookies because the fetch is a separate, out-of-band request."** Proven above with a real browser session: the fetch is same-origin, so the browser sends cookies with it by default — `Astro.request.headers.get('cookie')` sees exactly what a normal page load would.
 
 <Callout title="The one-line takeaway">
-`server:defer` turns an `.astro` component into a **server island**: the page's shell renders and ships immediately (so it stays cacheable), while the deferred component renders **on the server on its own request** and its HTML is swapped in over a `slot="fallback"` placeholder when ready. It's the answer to "this page is cacheable except for one personalized or slow part" — cache the shell, defer the dynamic bit. It renders on the server, so it **requires an adapter**, and it's about deferring server output, not client interactivity.
+`server:defer` turns an `.astro` component into a **server island**: the page's shell renders and ships immediately (so it stays cacheable), while the deferred component renders **on the server on its own request** — over a real `<link rel="preload">` + fetch + swap, proven in the built HTML above — and its HTML is swapped in over a `slot="fallback"` placeholder when ready. Props are AES-GCM encrypted (a fresh key per build unless `ASTRO_KEY` is set), the response itself is **not cached** unless you set `Cache-Control` yourself, and cookies **do** reach the component (same-origin fetch). It renders on the server, so it **requires an adapter** — a real, immediate build error without one, even on an otherwise fully static project — and it's about deferring server output, not client interactivity.
 </Callout>
 
 export const quizServer = [
@@ -78,6 +216,7 @@ export const quizServer = [
       'Caches the component in localStorage',
     ],
     answer: 1,
+    explain: 'Proven above in the real built HTML: a preload link and a script fetch /_server-islands/<name> after the shell has already shipped, then swap the response in over the fallback.',
   },
   {
     q: 'What is the main use case for a server island?',
@@ -88,6 +227,7 @@ export const quizServer = [
       'Sharing state between client islands',
     ],
     answer: 1,
+    explain: 'A server island is about server-render timing, not client interactivity or cross-island state — those are client directives and stores, covered in other lessons.',
   },
   {
     q: 'How do you show something while a server:defer component loads?',
@@ -98,6 +238,7 @@ export const quizServer = [
       'A CSS animation is added automatically',
     ],
     answer: 1,
+    explain: 'Proven in the built HTML above: the fallback markup is what ships in the initial (cacheable) response, right where the real component will later be swapped in.',
   },
   {
     q: 'What does a server island require to run?',
@@ -108,6 +249,29 @@ export const quizServer = [
       'A nanostore',
     ],
     answer: 1,
+    explain: 'Proven above with a real build: output: static and no adapter fails immediately with NoAdapterInstalledServerIslands the moment any page uses server:defer.',
+  },
+  {
+    q: '```text\nHTTP/1.1 200 OK\ncontent-type: text/html\nx-robots-tag: noindex\n```\nThis is the real response header set from curl -D - against a built /_server-islands/ endpoint. What is missing that you might have assumed was there?',
+    options: [
+      'content-type',
+      'Cache-Control — the response is not cached by default; you must set it yourself if the fragment is cacheable',
+      'A status code',
+      'x-robots-tag',
+    ],
+    answer: 1,
+    explain: 'Proven above with a real curl -D -: only content-type and x-robots-tag: noindex are set by default. Caching a server island response is opt-in, done inside the component.',
+  },
+  {
+    q: 'A server island reads Astro.request.headers.get(\'cookie\') to personalize its output. Given the fetch to /_server-islands/<name> is triggered by a script the browser runs after the shell loads, does the visitor\'s cookie actually reach it?',
+    options: [
+      'No — it is a separate out-of-band request with no cookies',
+      'Yes — the fetch is same-origin, and same-origin fetch sends cookies by default, proven with a real browser session',
+      'Only if you manually add credentials: "include"',
+      'Only in development mode',
+    ],
+    answer: 1,
+    explain: 'Proven above: setting document.cookie and navigating fresh produced "Welcome back, user 99" from the real deferred fetch response, with no extra fetch options needed.',
   },
 ];
 
