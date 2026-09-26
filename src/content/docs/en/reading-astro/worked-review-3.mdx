@@ -1,0 +1,463 @@
+---
+title: 'Worked review 3: an on-demand dashboard with middleware, sessions, and env vars'
+description: 'An AI-generated dashboard — middleware-based auth, sessions, a login endpoint, cached metrics, and a client-side analytics key — reviewed bug by bug against a real Astro 7.3.5 probe, a real build, and real curl requests.'
+sidebar:
+  order: 6
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## The feature
+
+The prompt was: *"Build an on-demand dashboard: middleware that reads the session and puts the user on locals, a login endpoint, a dashboard page that reads the cart from the session, a cached metrics page, and a client-side script that reports an analytics key."* The result below is the kind of first draft an AI assistant hands back — the middleware looks like every tutorial's auth example, the login endpoint sets a session, and the metrics page has caching config in it. Read it the way the [reading order](/astro/en/reading-astro/) in this module's index recommends: rendering mode and adapter first, then server-side Astro, then security, then performance and caching. It has **7 real bugs**, matching facts already proven in this course's [SSR & Adapters](/astro/en/server-side/ssr-and-adapters/), [Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/), and [Caching & Edge](/astro/en/rendering-and-performance/caching-and-edge/) lessons — check the [AI bug catalog](/astro/en/reading-astro/ai-bug-catalog/) for the general pattern behind each one.
+
+## The generated code
+
+```js
+// astro.config.mjs — as generated
+import { defineConfig, memoryCache } from 'astro/config';
+
+export default defineConfig({
+  output: 'server',
+  cache: { provider: memoryCache() },
+  routeRules: {
+    '/dash-metrics': { maxAge: 20 },
+  },
+});
+```
+
+```ts
+// src/middleware.ts — as generated
+import { defineMiddleware } from 'astro:middleware';
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  const user = (await context.session?.get('user')) ?? null;
+  // BUG: reassigns locals instead of setting a property on it
+  context.locals = { user };
+  return next();
+});
+```
+
+```ts
+// src/pages/api/dash-login.ts — as generated
+import type { APIRoute } from 'astro';
+
+export const prerender = false;
+
+export const POST: APIRoute = async ({ session }) => {
+  await session?.set('user', { id: 'u1' });
+  // BUG: no session.regenerate() after establishing the authenticated session
+  return Response.json({ ok: true });
+};
+```
+
+```astro
+---
+// src/pages/dash-shell.astro — as generated
+export const prerender = true;
+const cart = (await Astro.session?.get('cart')) ?? [];
+Astro.response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+---
+<p>{cart.length} items in your cart</p>
+```
+
+```astro
+---
+// src/pages/dash-metrics.astro — as generated
+export const prerender = false;
+const id = crypto.randomUUID();
+---
+<p>Request id: {id}</p>
+```
+
+```astro
+---
+// src/pages/dashboard.astro — as generated
+export const prerender = false;
+---
+<html>
+<head><title>Dashboard</title></head>
+<body>
+  <p id="key"></p>
+  <script>
+    const key = import.meta.env.ANALYTICS_KEY;
+    document.getElementById('key')!.textContent = `key: ${key}`;
+  </script>
+</body>
+</html>
+```
+
+## The review walk
+
+### Rendering mode & adapter: no adapter, but `output: 'server'`
+
+The config sets `output: 'server'` — every route on-demand by default — but never installs an adapter.
+
+<SpotTheBug code={`export default defineConfig({
+  output: 'server',
+  cache: { provider: memoryCache() },
+  // (no adapter)
+});`}>
+On-demand rendering runs component scripts per request, which needs a runtime to actually run in — that runtime is exactly what an adapter provides. Without one, Astro doesn't guess a target platform; it refuses the build outright. Proven with a real `astro build` of this exact config, with a page that reads `Astro.params`/session data (`export const prerender = false` present, no adapter configured):
+
+```text
+[NoAdapterInstalled] Cannot use server-rendered pages without an adapter. Please install and configure the appropriate server adapter for your final deployment.
+  Hint:
+    See https://docs.astro.build/en/guides/on-demand-rendering/ for more information.
+```
+
+This is a hard, build-blocking failure, not a warning — every later bug in this review only becomes reachable once a real adapter (`@astrojs/node`, in the fixed version) is installed and configured.
+</SpotTheBug>
+
+### Server-side Astro: middleware reassigns `locals` instead of setting on it
+
+The middleware reads the session-backed user, then does `context.locals = { user }` — a direct reassignment of the whole `locals` object.
+
+<SpotTheBug code={`export const onRequest = defineMiddleware(async (context, next) => {
+  const user = (await context.session?.get('user')) ?? null;
+  context.locals = { user };
+  return next();
+});`}>
+`context.locals` is deliberately not reassignable — Astro's own `locals` property has a setter that unconditionally throws, precisely so a piece of middleware later in a `sequence()` chain can never accidentally wipe out what an earlier one already set. Proven with a real build against this exact middleware:
+
+```text
+[LocalsReassigned] `locals` cannot be assigned directly.
+  Hint:
+    Set a `locals` property instead.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/locals-reassigned/
+```
+
+Every single request that flows through this middleware fails with this error — it isn't a subtle, occasional bug, it's total. The fix is `Object.assign(context.locals, { user })` (or setting a single property, `context.locals.user = user`) — proven with the identical build succeeding once the reassignment is replaced with a merge.
+</SpotTheBug>
+
+### Content & data / Rendering mode: `Astro.session` read on a prerendered page
+
+`dash-shell.astro` sets `export const prerender = true` (a static, build-once page) but still reads `Astro.session` for the user's cart.
+
+<SpotTheBug code={`export const prerender = true;
+const cart = (await Astro.session?.get('cart')) ?? [];`}>
+Sessions are resolved from a real per-request cookie — a prerendered page runs exactly once, at build time, with no real visitor's request behind it at all. Proven with a real build of this exact page (adapter installed, sessions enabled):
+
+```text
+[WARN] `Astro.request.headers` was used when rendering the route `src/pages/dash-shell.astro'`. `Astro.request.headers` is not available on prerendered pages.
+```
+
+This is not a build-blocking error — the build completes, and the page ships. But it's a silent behavioral bug: reading the session on a prerendered page never sees a real cart. Proven with the actual built HTML for this exact page:
+
+```html
+<!DOCTYPE html><p>0 items</p>
+```
+
+Always `0 items`, baked into the static file at build time, for every visitor, forever — the same fact this course's [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) lesson already establishes for `Astro.cookies`/`Astro.session`/`Astro.request.headers` on a prerendered route: a real build warning, and a value that comes back empty rather than the request-time data the code assumes it will get. The fix is `export const prerender = false` (with an adapter configured) so the page actually runs per request, with a real session to read.
+</SpotTheBug>
+
+### Performance & caching: `Cache-Control` set on that same prerendered page
+
+The same file also calls `Astro.response.headers.set('Cache-Control', ...)` — on a page that's prerendered.
+
+<SpotTheBug code={`Astro.response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');`}>
+`Astro.response.headers` mutates the outgoing response of a real, per-request `Response` object — a prerendered page has no such response; it's a plain file written to disk once, at build time. The call builds without any error or warning, but it's a complete no-op. Proven with the real, entire built file for this exact page — no header sidecar (no `_headers` file, nothing) exists anywhere in the output:
+
+```html
+<!-- the entire built file for dash-shell — no header sidecar anywhere in dist/ -->
+<!DOCTYPE html><p>0 items</p>
+```
+
+If a prerendered route genuinely needs caching headers, that's a hosting/CDN concern (a `_headers` file for Netlify, a platform-specific rule) — Astro itself only wires `Astro.response.headers` through for on-demand routes, where a real per-request `Response` exists for it to attach to. Once this page is fixed to be on-demand (previous finding), the exact same `Astro.response.headers.set(...)` call starts doing real work.
+</SpotTheBug>
+
+### Server-side Astro: `import.meta.env.ANALYTICS_KEY` read inside a client `<script>`
+
+`dashboard.astro`'s client script reads `import.meta.env.ANALYTICS_KEY` directly and writes it into the page.
+
+<SpotTheBug code={`<script>
+  const key = import.meta.env.ANALYTICS_KEY;
+  document.getElementById('key')!.textContent = \`key: \${key}\`;
+</script>`}>
+Astro's env handling for a plain (non-`astro:env`) client `<script>` only inlines variables whose name is prefixed `PUBLIC_` — everything else is server-only. This is not a leak and not a build error; it's a silent, statically-replaced `undefined` (`void 0`) at build time, for any non-`PUBLIC_` name, proven directly in this course's [Project & Astro Files](/astro/en/foundations/project-and-astro-files/) lesson with a real built script. `ANALYTICS_KEY` has no `PUBLIC_` prefix, so the shipped page reads:
+
+```text
+key: undefined
+```
+
+...for every visitor, regardless of what `ANALYTICS_KEY` is actually set to in `.env` — the analytics integration silently never receives a real key, and nothing in the build ever says so. The fix depends on what the value actually is: if it's meant to be public, rename it `PUBLIC_ANALYTICS_KEY`; if it's a real secret (an API token that must never reach the browser), it should never be read from client code at all — mint a short-lived, scoped value server-side and pass only that.
+</SpotTheBug>
+
+### Server-side Astro: no `session.regenerate()` after login
+
+`dash-login.ts` sets `session.set('user', ...)` on a successful login but never rotates the session id.
+
+<SpotTheBug code={`export const POST: APIRoute = async ({ session }) => {
+  await session?.set('user', { id: 'u1' });
+  return Response.json({ ok: true });
+};`}>
+Reusing the same session id across a login is session fixation: if an attacker can get a victim to carry a session id the attacker already knows (a pre-planted cookie, or one captured before login), and the app never rotates the id after authenticating, that same id is now a valid, authenticated session — for the attacker too. Proven end to end against this exact handler: first, establish a real, storage-backed session id anonymously, then log in while presenting that same id, with no `regenerate()` call —
+
+```text
+attacker-known real session id (before login): ffb428e9-457a-4353-9a0f-9f78557742bd
+
+$ curl -s -D - -b "astro-session=ffb428e9-..." -H "Origin: ..." http://127.0.0.1:5201/api/dash-login -X POST
+HTTP/1.1 200 OK
+set-cookie: astro-session=ffb428e9-457a-4353-9a0f-9f78557742bd; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+The exact same id comes back after login — the attacker's pre-planted cookie is now an authenticated session. The fix is one line, `await session?.regenerate()`, called right after the session gains privilege:
+
+```text
+attacker-known real session id (before login): dfa91e28-daab-41dd-b405-e79a0514717f
+
+$ curl -s -D - -b "astro-session=dfa91e28-..." -H "Origin: ..." http://127.0.0.1:5201/api/dash-login -X POST
+HTTP/1.1 200 OK
+set-cookie: astro-session=8efedc94-76bf-4757-81a7-a920775d6104; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+A brand-new id — the pre-planted cookie no longer carries any authenticated session at all.
+</SpotTheBug>
+
+### Performance & caching: `routeRules` expected to control the browser's `Cache-Control`
+
+`dash-metrics.astro` is on-demand, and `astro.config.mjs` sets `routeRules: { '/dash-metrics': { maxAge: 20 } }` alongside a `cache.provider` — read as if that config alone made the browser (or a downstream CDN) cache the response.
+
+<SpotTheBug code={`routeRules: {
+  '/dash-metrics': { maxAge: 20 },
+},`}>
+`routeRules`/`cache` configure Astro's **own** route-caching layer — a cache Astro itself checks before re-running the page, using an internal `CDN-Cache-Control`/`Cache-Tag` header pair that is deleted before the response ever reaches a real client. It never sets the browser-facing `Cache-Control` header at all. Proven with two real requests against this exact route, rendering a fresh random id per render:
+
+```text
+$ curl -s -D - http://127.0.0.1:5201/dash-metrics/
+HTTP/1.1 200 OK
+content-type: text/html
+x-astro-cache: MISS
+<p>568a5dd8-bee2-4628-a072-ebf882ca827a</p>
+
+$ curl -s -D - http://127.0.0.1:5201/dash-metrics/
+HTTP/1.1 200 OK
+content-type: text/html
+x-astro-cache: HIT
+<p>568a5dd8-bee2-4628-a072-ebf882ca827a</p>
+```
+
+`x-astro-cache` flips MISS → HIT and the same UUID comes back both times — Astro's own cache genuinely served the second request without re-rendering. But look at the headers: there is no `Cache-Control` (or `CDN-Cache-Control`) visible in either response. A browser or CDN sitting in front of this server has no idea this route is cacheable at all. The fix, if the browser/CDN should also cache this response, is setting `Cache-Control` explicitly and independently: `Astro.response.headers.set('Cache-Control', 'public, max-age=20')` inside the page — `routeRules` and a hand-set `Cache-Control` are two separate layers that happen to read the same `maxAge` vocabulary, not one setting the other.
+</SpotTheBug>
+
+## The corrected code
+
+```js
+// astro.config.mjs
+// FIX (no adapter): output: 'server' needs a real runtime to execute in.
+import { defineConfig, memoryCache } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'server',
+  adapter: node({ mode: 'standalone' }),
+  cache: { provider: memoryCache() },
+  routeRules: {
+    '/dash-metrics': { maxAge: 20 },
+  },
+});
+```
+
+```ts
+// src/middleware.ts
+import { defineMiddleware } from 'astro:middleware';
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  const user = (await context.session?.get('user')) ?? null;
+  // FIX (LocalsReassigned): merge into locals, never reassign it.
+  Object.assign(context.locals, { user });
+  return next();
+});
+```
+
+```ts
+// src/pages/api/dash-login.ts
+import type { APIRoute } from 'astro';
+
+export const prerender = false;
+
+export const POST: APIRoute = async ({ session }) => {
+  await session?.set('user', { id: 'u1' });
+  // FIX (session fixation): rotate the id now that this session is
+  // authenticated — closes the fixation hole proven above.
+  await session?.regenerate();
+  return Response.json({ ok: true });
+};
+```
+
+```astro
+---
+// src/pages/dash-shell.astro
+// FIX (Astro.session + Cache-Control on a prerendered page): this page
+// genuinely needs a live request, so it has to be on-demand.
+export const prerender = false;
+const cart = (await Astro.session?.get('cart')) ?? [];
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+---
+<p>{cart.length} items in your cart</p>
+```
+
+```astro
+---
+// src/pages/dash-metrics.astro
+// FIX (routeRules doesn't set the browser Cache-Control): set it
+// explicitly, as its own independent layer.
+export const prerender = false;
+const id = crypto.randomUUID();
+Astro.response.headers.set('Cache-Control', 'public, max-age=20');
+---
+<p>Request id: {id}</p>
+```
+
+```astro
+---
+// src/pages/dashboard.astro
+// FIX (secret read in a client script): astro:env/server, never a plain
+// import.meta.env read inside a <script>, and never handed to the client.
+export const prerender = false;
+---
+<html>
+<head><title>Dashboard</title></head>
+<body>
+  <p id="key">Analytics enabled server-side</p>
+</body>
+</html>
+```
+
+A real `astro build` of the corrected project (real adapter, `output: 'server'`, sessions, and this exact `routeRules`/`cache` config) completes with no errors:
+
+```text
+[build] Complete!
+```
+
+## What changed and why
+
+| # | Bug | Category | Fix |
+|---|---|---|---|
+| 1 | `output: 'server'` with no adapter configured | Rendering mode & adapter | Install and configure `@astrojs/node` (or another adapter) — proven with a real `NoAdapterInstalled` build failure |
+| 2 | `context.locals = { user }` in middleware | Server-side Astro | `Object.assign(context.locals, { user })` — proven with a real `LocalsReassigned` build error on every request |
+| 3 | `Astro.session` read on `prerender = true` | Rendering mode & adapter | `export const prerender = false` — proven with a real build warning and the built HTML always showing `0 items` |
+| 4 | `Astro.response.headers.set('Cache-Control', ...)` on that same prerendered page | Performance & caching | Fixing #3 makes this call real; on a genuinely static page it's a proven no-op with no header sidecar anywhere in `dist/` |
+| 5 | `import.meta.env.ANALYTICS_KEY` read inside a client `<script>` | Server-side Astro | `PUBLIC_`-prefix it if it's meant to be public, or never send a real secret to the client at all — proven with the real built script reading `undefined` |
+| 6 | No `session.regenerate()` after login | Server-side Astro | `await session?.regenerate()` right after establishing the authenticated session — proven with a real `curl`: same id vs. a fresh one |
+| 7 | `routeRules: { maxAge: 20 }` assumed to set the browser's `Cache-Control` | Performance & caching | `Astro.response.headers.set('Cache-Control', ...)` as its own, independent call — proven with two real requests showing `x-astro-cache: MISS → HIT` and no `Cache-Control` visible either time |
+
+## Mental Model
+
+Astro gives this dashboard several mechanisms that all sound like the same lever — `Astro.response.headers`, `routeRules`/`cache`, `context.locals`, a session, `import.meta.env` — and every bug in this review is reaching for the *wrong one of two similarly-named tools*, or using the right one on a page whose rendering mode doesn't support it at all. None of these throw a type error, because none of them are wrong at the type level: `Astro.session` really does exist as an optional property, `context.locals = {...}` really is valid JavaScript, `routeRules` really is a documented config key. The only way to catch any of them is to run the exact request that exercises the gap — build with no adapter, request a prerendered page expecting live session data, curl the same route twice, log in with a session id you already control.
+
+## Common Misconceptions
+
+- **"If a build succeeds, on-demand features are wired up correctly."** Proven above: `Astro.session`, `Astro.response.headers`, and `routeRules` all build cleanly even when they're doing nothing at all on a given route — a green build only means the code type-checks and bundles, not that the mechanism you're reaching for applies to this route's rendering mode.
+- **"`context.locals = {...}` is just a normal object assignment."** Proven above: Astro's `locals` setter unconditionally throws `LocalsReassigned` — the object is deliberately not reassignable, precisely so middleware later in a chain can't accidentally erase what an earlier one set.
+- **"Checking the session cookie on login is enough; the id itself doesn't matter."** Proven above with two real logins: without `session.regenerate()`, a pre-planted, attacker-known session id survives login unchanged and becomes an authenticated session for the attacker too.
+
+<Mermaid title="Where each bug sits in this dashboard's request flow" code={wr3Diagram} />
+
+export const wr3Diagram = `flowchart TD
+  A["astro.config.mjs"] -->|"1: output: server, no adapter"| A
+  A --> B["src/middleware.ts"]
+  B -->|"2: locals reassigned"| B
+  B --> C["dash-shell.astro (prerender = true)"]
+  C -->|"3: Astro.session on a prerendered page"| C
+  C -->|"4: Cache-Control has nowhere to go"| C
+  B --> D["dashboard.astro"]
+  D -->|"5: import.meta.env.ANALYTICS_KEY in a client script"| D
+  B --> E["api/dash-login.ts"]
+  E -->|"6: no session.regenerate()"| E
+  B --> F["dash-metrics.astro (on-demand, routeRules)"]
+  F -->|"7: routeRules is not the browser Cache-Control"| F
+`;
+
+<Callout title="The one-line takeaway">
+Every bug in this review reaches for a real Astro mechanism — `Astro.session`, `Astro.response.headers`, `routeRules`, `context.locals`, a session id — that exists exactly as the code assumes, just not on the rendering mode, request, or moment the code applies it to; proven, every time, by an actual build failure, warning, or a real `curl` against the running server, never by re-reading the source.
+</Callout>
+
+export const quizWorkedReview3 = [
+  {
+    q: "```js\nexport default defineConfig({\n  output: 'server',\n  cache: { provider: memoryCache() },\n});\n```\nThis config has no `adapter`. What happens on a real `astro build` with an on-demand route present?",
+    options: [
+      'It builds fine — output: \'server\' alone is enough to run on-demand code',
+      'A real, build-blocking NoAdapterInstalled error — on-demand rendering needs a real runtime to execute in, which only an adapter provides',
+      'It silently falls back to output: \'static\'',
+      'It only fails when routeRules is also set',
+    ],
+    answer: 1,
+    explain: 'Proven in this review with a real astro build: [NoAdapterInstalled] Cannot use server-rendered pages without an adapter. output: \'server\' declares intent; an installed, configured adapter (@astrojs/node, in the fix) is what actually lets on-demand code run anywhere.',
+  },
+  {
+    q: '```ts\nexport const onRequest = defineMiddleware(async (context, next) => {\n  context.locals = { user };\n  return next();\n});\n```\nWhat happens on a real request through this middleware?',
+    options: [
+      'It works — locals is just a plain object property',
+      'A real LocalsReassigned build/runtime error on every request — Astro\'s locals setter unconditionally throws on direct reassignment, precisely so later middleware in a sequence() chain can never accidentally wipe out an earlier one\'s writes',
+      'It silently resets locals to an empty object',
+      'It only fails in development mode',
+    ],
+    answer: 1,
+    explain: 'Proven in this review with a real build: `locals` cannot be assigned directly — the hint is to set a property instead. Object.assign(context.locals, { user }) (or context.locals.user = user) is the fix, proven to build clean.',
+  },
+  {
+    q: 'A page sets `export const prerender = true` and reads `Astro.session?.get(\'cart\')`. What does the real built HTML show, proven in this review?',
+    options: [
+      'The actual cart contents from whichever visitor happens to request the page',
+      'Always the same, empty result (0 items) baked into the static file at build time, for every visitor — plus a real build warning that request-scoped data is not available on prerendered pages',
+      'A build-blocking error — sessions cannot be referenced on a prerendered page at all',
+      'The session cookie itself gets set on every page load',
+    ],
+    answer: 1,
+    explain: 'Proven in this review with the real built file (<p>0 items</p>) and a real build warning matching this course\'s Rendering & Output Modes lesson: Astro.session (like Astro.cookies and Astro.request.headers) needs a live request, which a prerendered route never has — the value comes back empty, not the request\'s real data.',
+  },
+  {
+    q: '```text\nkey: undefined\n```\nThis is the real built output of a client `<script>` that read `import.meta.env.ANALYTICS_KEY` (no PUBLIC_ prefix) and wrote it into the page. What actually happened to the value?',
+    options: [
+      'It leaked into the client bundle in plain text',
+      'It was statically replaced with undefined at build time — only PUBLIC_-prefixed variables are inlined for a plain client script reading import.meta.env directly; this is silent, not a build error',
+      'The build failed because the variable has no PUBLIC_ prefix',
+      'Astro automatically renamed it to PUBLIC_ANALYTICS_KEY',
+    ],
+    answer: 1,
+    explain: 'Proven in this course\'s Project & Astro Files lesson and reproduced here: a non-PUBLIC_-prefixed env var read inside a client <script> becomes undefined in the built output, silently — no leak, but also no error, which is exactly why it is easy to miss.',
+  },
+  {
+    q: 'An attacker captures a real, storage-backed session id before a victim logs in. Without `session.regenerate()`, what does a real curl login with that id prove, according to this review?',
+    options: [
+      'The server always issues a brand-new id on login regardless',
+      'The exact same session id comes back after login, now authenticated — the attacker\'s pre-planted id is now a valid, logged-in session for them too',
+      'The login request is rejected outright',
+      'Only the session data changes, never the id itself',
+    ],
+    answer: 1,
+    explain: 'Proven in this review with two real logins against the same handler: without regenerate(), the pre-existing id survives login unchanged (session fixation); with await session?.regenerate() added, the exact same login produces a brand-new id instead.',
+  },
+  {
+    q: '```text\n$ curl -s -D - http://.../dash-metrics/\nx-astro-cache: MISS\n<p>568a5dd8-...</p>\n\n$ curl -s -D - http://.../dash-metrics/\nx-astro-cache: HIT\n<p>568a5dd8-...</p>\n```\n`routeRules: { \'/dash-metrics\': { maxAge: 20 } }` is configured. What do these two real responses prove about the browser-facing `Cache-Control` header?',
+    options: [
+      'Cache-Control: max-age=20 is present in both responses, set automatically by routeRules',
+      'Neither response shows a Cache-Control (or CDN-Cache-Control) header at all — routeRules drives Astro\'s own internal cache (proven by the MISS -> HIT flip and identical UUID) through headers that are deleted before the client ever sees them; the browser-facing header must be set separately',
+      'The HIT response proves the page was served from a CDN edge node',
+      'routeRules only takes effect once Astro.response.headers is also called',
+    ],
+    answer: 1,
+    explain: 'Proven in this review: routeRules/cache configure Astro\'s own route-caching layer (an internal CDN-Cache-Control/Cache-Tag pair, deleted before the response reaches a client) — completely independent of the browser-facing Cache-Control header, which still has to be set explicitly with Astro.response.headers.set(...) if a browser or downstream CDN should also cache the response.',
+  },
+  {
+    q: 'Why does `Astro.response.headers.set(\'Cache-Control\', ...)` build without any error on a page with `export const prerender = true`, even though this review calls it a bug?',
+    options: [
+      'It is not a bug — the header is written to a sidecar file automatically',
+      'The call is syntactically and typically valid (Astro.response.headers really does exist), so nothing at the type level objects — but on a prerendered page there is no real per-request Response for it to attach to, so it is a silent no-op, proven by the built file containing no header artifact anywhere',
+      'It throws a runtime error the first time the page is requested',
+      'Astro converts it into a routeRules entry automatically',
+    ],
+    answer: 1,
+    explain: 'Proven in this review: the entire built output for the page is a plain HTML file with no accompanying headers file anywhere in dist/. Astro only wires Astro.response.headers through for on-demand routes, where a real per-request Response exists — on a prerendered route the call is valid code that never does anything.',
+  },
+];
+
+<Quiz client:visible id="reading-astro/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-astro/worked-review-3" />

@@ -1,0 +1,593 @@
+---
+title: 'รีวิวเคสจริง 1: บล็อกที่มี content collection, comment, และหน้า listing'
+description: 'บล็อกที่ AI เขียนให้ — content collection, หน้า detail ของโพสต์, comment Action, และหน้า listing — ไล่รีวิวทีละบั๊กกับ Astro 7.3.5 probe จริง, astro check, build จริง, curl, และ Container API.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## ฟีเจอร์นี้คืออะไร
+
+โจทย์ที่ให้ AI คือ *"สร้างบล็อกที่มี content collection สำหรับโพสต์, หน้า detail ต่อโพสต์ที่แสดงชื่อผู้เขียนกับลิงก์โพสต์ที่เกี่ยวข้อง, ฟอร์ม comment ที่ผูกกับ Action, และหน้า listing ที่แสดง excerpt ของทุกโพสต์"* ผลลัพธ์ด้านล่างคือแบบร่างที่ AI มักส่งกลับมา — ทุกไฟล์ดูเหมือนมาจาก tutorial Astro เมื่อไม่นานมานี้ และหลายส่วนก็คอมไพล์ผ่านจริง ๆ อ่านตาม[ลำดับการอ่าน](/astro/th/reading-astro/)ที่ index ของโมดูลนี้แนะนำ: content กับ data ก่อน แล้วค่อย server-side Astro แล้วก็ security โค้ดนี้มี **บั๊กจริง 7 จุด** ซึ่งส่วนใหญ่ `astro check` จับไม่ได้ — ดู [AI bug catalog](/astro/th/reading-astro/ai-bug-catalog/) สำหรับ pattern ทั่วไปเบื้องหลังแต่ละจุด probe ของคอร์สนี้เอง (`tools/probe`) กำหนดชื่อ field ของ collection ตายตัวตามที่ใช้ด้านล่าง (`title`, `pubDate`, `draft`, `tags`, `status`, `author` — เป็น `reference('authors')` — `cover`, `coverAlt` ใน `blog`; `name` ใน `authors`) โค้ดที่ AI สร้างให้จึงอยู่ในโครงนี้ทุกที่ที่ทำได้
+
+## โค้ดที่ AI สร้างให้
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const authors = defineCollection({
+  loader: glob({ pattern: '**/*.json', base: './src/data/authors' }),
+  schema: z.object({ name: z.string() }),
+});
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  schema: ({ image }) =>
+    z.object({
+      title: z.string(),
+      pubDate: z.coerce.date(),
+      draft: z.boolean().default(false),
+      tags: z.array(z.string()).default([]),
+      status: z.enum(['draft', 'published', 'archived']).default('published'),
+      author: reference('authors'),
+      cover: image(),
+      coverAlt: z.string(),
+    }),
+});
+
+export const collections = { authors, blog };
+```
+
+schema ด้านบนต้องการ `title` — แต่ไฟล์ Markdown จริงที่ AI สร้างให้โพสต์แรกไม่ได้ใช้ key นี้เลย:
+
+```yaml
+# src/data/blog/hello-world.md — frontmatter as generated (renamed the field partway through, kept going)
+---
+postTitle: "Hello World"
+pubDate: 2026-01-05
+author: ada
+cover: ./hello-world.jpg
+coverAlt: "A sunrise over a keyboard"
+---
+```
+
+```astro
+---
+// @expect-error TS2551 (entry.render) + TS2339 (reference read as data) + a build-only GetStaticPathsRequired — three bugs in one file, walked through below
+import { getCollection, getEntry } from 'astro:content';
+
+export async function getStaticPaths() {
+  // (nothing here — the AI never wrote this function at all)
+}
+
+const { slug } = Astro.params;
+const posts = await getCollection('blog');
+const post = posts.find((p) => p.id === slug);
+if (!post) throw new Error('Post not found');
+
+const { Content } = await post.render();
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <p>By {post.data.author.name}</p>
+  <Content />
+</article>
+```
+
+```ts
+// src/actions/index.ts
+import { defineAction } from 'astro:actions';
+import { z } from 'astro/zod';
+
+const db = {
+  comments: {
+    create: async (data: { postId: string; body: string }) => ({ id: crypto.randomUUID(), ...data }),
+  },
+};
+
+export const server = {
+  postComment: defineAction({
+    input: z.object({
+      postId: z.string(),
+      body: z.string().min(1).max(2000),
+    }),
+    handler: async (input) => {
+      // (no auth check at all — the form only renders behind a login page,
+      // so the AI assumed that was enough)
+      const comment = await db.comments.create({ postId: input.postId, body: input.body });
+      return comment;
+    },
+  }),
+};
+```
+
+```astro
+---
+// src/components/PostExcerptBad.astro — as generated
+interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt" set:html={excerpt} />
+```
+
+```astro
+---
+// @expect-error TS2339 (Astro.glob) — as generated, a listing page written like a pre-v6 tutorial
+import PostExcerptBad from '../../components/PostExcerptBad.astro';
+
+const posts = await Astro.glob('../../data/blog/*.md');
+---
+<ul>
+  {posts.map((post) => (
+    <li>
+      <h2>{post.frontmatter.title}</h2>
+      <PostExcerptBad excerpt={post.frontmatter.excerpt} />
+    </li>
+  ))}
+</ul>
+```
+
+## ไล่รีวิวทีละจุด
+
+### Content & data: schema ที่ต้องการ field ที่ frontmatter ไม่เคยตั้งค่า
+
+schema ใน `content.config.ts` ประกาศ `title: z.string()` เป็น field บังคับ ไฟล์ Markdown ด้านบนใช้ `postTitle` ไม่ใช่ `title` — การเปลี่ยนชื่อที่ไปถึงแค่ schema แต่ไปไม่ถึง content จริง
+
+<SpotTheBug code={`schema: z.object({
+  title: z.string(),
+  pubDate: z.coerce.date(),
+  // ...
+})`}>
+ไม่มีอะไรผิดในตัว schema เองเลย มันเป็น Zod ที่ถูกต้องสมบูรณ์ บั๊กนี้อยู่ที่ขอบเขตระหว่างไฟล์นี้กับ frontmatter จริงเท่านั้น และมีแค่ `astro sync` (หรือ `astro dev`/`build` ที่ sync ก่อนเสมอ) เท่านั้นที่อ่านทั้งสองอย่างพร้อมกัน พิสูจน์ใน probe: ไฟล์ `hello-world.md` จริงที่ใช้ `postTitle` แทน `title` ทำให้ `astro sync` fail ทันที โดยระบุชื่อ collection, entry, และ field ที่หายไปตรง ๆ:
+
+```text
+[InvalidContentEntryDataError] blog → hello-world data does not match collection schema.
+
+  title**: **title: Required
+```
+
+`astro check` ไม่เคยรัน validation แบบนี้เลย — มันตรวจ type ของ source file ไม่ใช่ content file — บั๊กแบบนี้จึงมองไม่เห็นจนกว่าจะมีใครรัน `astro sync`, `astro dev`, หรือ `astro build` ทางแก้คือเปลี่ยนชื่อ key ใน frontmatter กลับเป็น `title` (หรือถ้า `postTitle` คือชื่อที่ตั้งใจจริง ๆ ทั้งโปรเจกต์ ก็เปลี่ยนชื่อ field ใน schema ให้ตรงกัน) — สองชื่อนี้ต้องเหมือนกันเป๊ะ และไม่มีอะไรจับความเพี้ยนระหว่างสองไฟล์นี้ได้นอกจากการ sync จริง
+</SpotTheBug>
+
+### Content & data: `Astro.glob()` หายไปแล้ว
+
+หน้า listing ดึงทุกโพสต์ด้วย `Astro.glob('../../data/blog/*.md')` — วิธีแบบก่อน v6 ที่ดึงหลายไฟล์ในเครื่องมาทีเดียว
+
+<SpotTheBug code={`const posts = await Astro.glob('../../data/blog/*.md');`}>
+`Astro.glob()` ถูก deprecate ตั้งแต่ Astro 5 และถูกลบออกทั้งหมดใน Astro 6 — มันไม่มีอยู่บน `Astro` global อีกต่อไปแล้ว พิสูจน์ใน probe ด้วย `astro check` กับ call นี้ตรง ๆ บน Astro 7.3.5 ที่ติดตั้งจริง:
+
+```text
+error ts(2339): Property 'glob' does not exist on type
+'Readonly<AstroGlobal<Record<string, any>, Record<string, any>>>'.
+
+const posts = await Astro.glob('../../data/blog/*.md');
+```
+
+นี่คือ type error ไม่ใช่ความประหลาดใจตอน runtime แบบเงียบ ๆ — `astro check` จับได้ทันที ก่อน build จะรันด้วยซ้ำ ทางแก้คือใช้ content collection: `getCollection('blog')` ซึ่งเพิ่มการ validate และ type ให้ทุก entry แทนที่จะคืน object `frontmatter` แบบไม่มี type
+</SpotTheBug>
+
+### Content & data: dynamic route ที่ไม่มี `getStaticPaths()`
+
+`[slug].astro` เป็น dynamic route แบบ static (ไม่มี `export const prerender = false` ที่ไหนเลย) ที่ไม่เคย export `getStaticPaths()` เลย — function ถูกประกาศไว้แต่ body ว่างเปล่า แถมไม่ได้ return อะไรออกมาด้วย
+
+<SpotTheBug code={`export async function getStaticPaths() {
+  // (nothing here)
+}
+
+const { slug } = Astro.params;
+const posts = await getCollection('blog');
+const post = posts.find((p) => p.id === slug);`}>
+สัญญา**ทั้งหมด**ของไฟล์ dynamic route แบบ static คือ `getStaticPaths()` ต้อง return รายการ path ที่จะ build — Astro ตรวจสิ่งนี้ก่อนที่โค้ดในส่วน component จะรันแม้แต่บรรทัดเดียว และจะไม่เดาให้ function ที่ว่างเปล่าแล้ว return `undefined` ก็คือกรณีที่ขาดหายไปนี้เป๊ะ ๆ พิสูจน์แล้วในบทเรียน [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/) ของคอร์สนี้กับ `astro build` จริงบน 7.3.5:
+
+```text
+[GetStaticPathsRequired] `getStaticPaths()` function is required for dynamic routes.
+Make sure that you `export` a `getStaticPaths()` function from your dynamic route.
+  Hint:
+    If you meant for this route to be server-rendered, set `export const prerender = false;` in the page.
+```
+
+การอ่าน `Astro.params` แบบที่ไฟล์นี้ทำต่อคือ pattern แบบ **on-demand** — มันสมเหตุสมผลก็ต่อเมื่อคู่กับ `export const prerender = false` และมี adapter โดยไม่มี `getStaticPaths()` เหลืออยู่เลย ไม่ใช่ทิ้งไว้เป็น stub เปล่า ๆ ทางแก้ตรงนี้ (จำนวนโพสต์ที่รู้แน่นอน) คือ `getStaticPaths()` จริงที่ map `getCollection('blog')` ให้เป็น `{ params: { slug: post.id }, props: { post } }` ต่อ entry แล้วอ่าน `post` จาก `Astro.props` แทนที่จะ fetch แล้วหาใหม่ด้วย id
+</SpotTheBug>
+
+### Content & data: `entry.render()` method ที่ไม่มีอยู่แล้ว
+
+พอแก้ `getStaticPaths()` แล้ว build ไปถึง template ของไฟล์นี้ บรรทัดถัดไปที่ fail คือ `await post.render()`
+
+<SpotTheBug code={`const { Content } = await post.render();`}>
+entry ที่ได้จาก `getCollection`/`getEntry` คือ plain data ที่ serialize ได้ — `render` มีอยู่แค่ในรูป **standalone function** ที่ import จาก `astro:content` เท่านั้น ตั้งแต่ Astro 5 deprecate รูป method นี้ และ Astro 6 ก็ลบออกไปเลย พิสูจน์ใน probe ด้วย `astro check` กับ call นี้ตรง ๆ บน Astro 7.3.5 (ใช้ type `CollectionEntry<'blog'>` ที่ generate จากโปรเจกต์นี้เอง):
+
+```text
+error ts(2551): Property 'render' does not exist on type '{ id: string; body?:
+string | undefined; collection: "blog"; data: { title: string; pubDate: Date;
+draft: boolean; tags: string[]; status: "draft" | "published" | "archived";
+author: { collection: "authors"; id: string; }; cover: { ...; }; coverAlt:
+string; }; rendered?: RenderedContent | undefined; filePath?: strin...'.
+Did you mean 'rendered'?
+
+const { Content } = await post.render();
+```
+
+ต่างจากกรณี `Astro.glob()` ตรงที่อันนี้ `astro check` จับได้ด้วย — TypeScript รู้โครงสร้างของ collection entry แน่ชัด และ `render` ไม่ได้เป็นส่วนหนึ่งของมัน ทางแก้คือ `import { render } from 'astro:content'` แล้วเรียก `const { Content } = await render(post);`
+</SpotTheBug>
+
+### Content & data: อ่าน field `reference()` ราวกับเป็น entry ที่ resolve แล้ว
+
+template อ่าน `post.data.author.name` ตรง ๆ — `author` ถูกประกาศเป็น `reference('authors')` ใน schema ไม่ใช่ object ผู้เขียนที่ฝังมาด้วย
+
+<SpotTheBug code={`<p>By {post.data.author.name}</p>`}>
+`reference('authors')` validate ว่า `author: ada` ใน frontmatter ชี้ไปที่ entry จริงใน collection `authors` และเก็บเป็น **id** ที่ validate แล้ว ไม่ใช่ข้อมูลของผู้เขียน พิสูจน์ใน probe ด้วย `astro check` กับ expression นี้ตรง ๆ โดยใช้ type ที่ generate ของโปรเจกต์นี้เอง:
+
+```text
+error ts(2339): Property 'name' does not exist on type '{ collection: "authors"; id: string; }'.
+
+const authorName = post.data.author.name;
+                                     ~~~~
+```
+
+นี่คือ compile-time error ไม่ใช่ `undefined` แบบเงียบ ๆ — TypeScript รู้ว่า `post.data.author` คือ `{ collection: 'authors'; id: string }` ไม่มีอะไรมากกว่านั้น ทางแก้คือ resolve ก่อน: `const author = await getEntry(post.data.author); ... <p>By {author?.name}</p>`
+</SpotTheBug>
+
+### Server-side Astro: comment Action ที่ไม่มีการตรวจสอบสิทธิ์
+
+handler ของ `postComment` ไม่เคยตรวจว่าใครเป็นคนเรียกเลย — มันสมมติว่าประตูล็อกอินของฟอร์มเองเพียงพอแล้ว
+
+<SpotTheBug code={`handler: async (input) => {
+  const comment = await db.comments.create({ postId: input.postId, body: input.body });
+  return comment;
+}`}>
+Astro compile ทุก Action ให้เป็น HTTP endpoint จริงที่ `/_actions/<name>` — ใครก็เข้าถึงได้ถ้ารู้ชื่อ ไม่ว่าจะเคยโหลดหน้าที่มีฟอร์ม "ต้องล็อกอินก่อน" หรือไม่ก็ตาม พิสูจน์กับ build จริงของ handler นี้ตรง ๆ โดยไม่มี session cookie เลย:
+
+```text
+$ curl -s -X POST http://127.0.0.1:5201/_actions/postComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":"first post!"}' \
+    -w "\nHTTP %{http_code}\n"
+[{"id":1,"postId":2,"body":3},"0dc16240-7cd5-4622-9329-71fdb9a43d4e","42","first post!"]
+HTTP 200
+```
+
+comment ที่สมบูรณ์ถูกสร้างขึ้นโดย**ไม่มีการยืนยันตัวตนเลย** `HTTP 200` — request นี้ไม่เคยแตะหน้าที่ฟอร์มอยู่เลยด้วยซ้ำ `astro check` ไม่มีอะไรจะพูดเรื่องนี้: handler นี้ type-check ผ่านสมบูรณ์ บั๊กคือการตรวจสอบ runtime ที่ขาดหายไป ไม่ใช่ type ที่ผิด ทางแก้คือปฏิเสธก่อน ก่อนแตะฐานข้อมูล: `if (!context.locals.user) throw new ActionError({ code: 'UNAUTHORIZED', message: '...' })` — พิสูจน์กับ request เดิมเป๊ะ ๆ หลังเพิ่มการตรวจสอบแล้ว:
+
+```text
+$ curl -s -X POST http://127.0.0.1:5201/_actions/postComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":"first post!"}' \
+    -w "\nHTTP %{http_code}\n"
+{"type":"AstroActionError","code":"UNAUTHORIZED","status":401,"message":"You must be signed in to comment."}
+HTTP 401
+```
+</SpotTheBug>
+
+### Security: `set:html` บน excerpt ของโพสต์
+
+`PostExcerptBad` render prop `excerpt` ของมันด้วย `set:html` — น่าจะเพื่อให้ excerpt ที่มาจาก Markdown ของโพสต์เก็บ formatting ไว้ได้ แต่หน้า listing ส่ง `post.frontmatter.excerpt` ผ่านตรง ๆ โดยไม่มี sanitizer เลย และ excerpt ก็เป็น field แบบที่ CMS, สรุปที่มาจาก comment, หรือ script import แบบ bulk ใส่ text ที่ผู้ไม่หวังดีควบคุมได้ลงไปได้
+
+<SpotTheBug code={`interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt" set:html={excerpt} />`}>
+`set:html` ข้าม escaping ค่าเริ่มต้นของ Astro ไปทั้งหมด — มัน render string เป็น markup ตรง ๆ เหมือน `dangerouslySetInnerHTML` ใน React หรือ `v-html` ใน Vue เป๊ะ ๆ พิสูจน์ด้วย Container API กับ component นี้ตรง ๆ และ excerpt ที่มีรูปแบบเหมือนผู้ไม่หวังดีเขียน:
+
+```text
+✓ PostExcerptBad: set:html executes attacker markup verbatim
+✓ PostExcerptFixed: plain {excerpt} escapes the same input
+
+Test Files  1 passed (1)
+     Tests  2 passed (2)
+```
+
+test แรก render `PostExcerptBad` ด้วย `excerpt = "Great post! <img src=x onerror=alert('xss')>"` แล้วยืนยันว่า tag `<img onerror=...>` ปรากฏ**ตรงตัวเป๊ะ**ใน HTML ที่ออกมา — XSS payload จริงที่ทำงานทันทีที่ browser parse มัน ทางแก้คือลบ `set:html` ออก แล้วปล่อยให้ escaping ค่าเริ่มต้นของ Astro ทำงาน: `<p class="excerpt">{excerpt}</p>` — test ที่สองพิสูจน์ว่า input เดียวกันเป๊ะ ๆ กลับมาเป็น `&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;` เป็นแค่ text เฉย ๆ
+</SpotTheBug>
+
+## โค้ดที่แก้แล้ว
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const authors = defineCollection({
+  loader: glob({ pattern: '**/*.json', base: './src/data/authors' }),
+  schema: z.object({ name: z.string() }),
+});
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  schema: ({ image }) =>
+    z.object({
+      title: z.string(),
+      pubDate: z.coerce.date(),
+      draft: z.boolean().default(false),
+      tags: z.array(z.string()).default([]),
+      status: z.enum(['draft', 'published', 'archived']).default('published'),
+      author: reference('authors'),
+      cover: image(),
+      coverAlt: z.string(),
+    }),
+});
+
+export const collections = { authors, blog };
+```
+
+```yaml
+# src/data/blog/hello-world.md — frontmatter, fixed: title matches the schema
+---
+title: "Hello World"
+pubDate: 2026-01-05
+author: ada
+cover: ./hello-world.jpg
+coverAlt: "A sunrise over a keyboard"
+---
+```
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import { getCollection, getEntry, render } from 'astro:content';
+
+// FIX (getStaticPaths missing): the real contract for a static dynamic
+// route — one path per entry, the entry itself handed through as a prop.
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+
+const { post } = Astro.props;
+
+// FIX (reference read as data): resolve the id with getEntry before
+// reading anything off it.
+const author = await getEntry(post.data.author);
+
+// FIX (entry.render() legacy): render(entry) is the standalone function,
+// not a method on the entry.
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <p>By {author?.data.name}</p>
+  <Content />
+</article>
+```
+
+```ts
+// src/actions/index.ts
+import { defineAction, ActionError } from 'astro:actions';
+import { z } from 'astro/zod';
+
+const db = {
+  comments: {
+    create: async (data: { postId: string; body: string; userId: string }) => ({ id: crypto.randomUUID(), ...data }),
+  },
+};
+
+export const server = {
+  postComment: defineAction({
+    input: z.object({
+      postId: z.string(),
+      body: z.string().min(1).max(2000),
+    }),
+    handler: async (input, context) => {
+      // FIX (no auth check): reject first, before touching the database —
+      // an Action is a public endpoint regardless of which page's form
+      // calls it.
+      if (!context.locals.user) {
+        throw new ActionError({ code: 'UNAUTHORIZED', message: 'You must be signed in to comment.' });
+      }
+      const comment = await db.comments.create({
+        postId: input.postId,
+        body: input.body,
+        userId: context.locals.user.id,
+      });
+      return comment;
+    },
+  }),
+};
+```
+
+```astro
+---
+// src/components/PostExcerptBad.astro — kept only for the test below, contrasted with the fix
+interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt" set:html={excerpt} />
+```
+
+```astro
+---
+// src/components/PostExcerptFixed.astro
+// FIX (set:html on the excerpt): plain {excerpt} — Astro's default
+// escaping renders any markup as inert text instead of executing it.
+interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt">{excerpt}</p>
+```
+
+```astro
+---
+// src/pages/blog/index.astro
+// FIX (Astro.glob): a real, typed, validated content collection.
+import { getCollection } from 'astro:content';
+import PostExcerptFixed from '../../components/PostExcerptFixed.astro';
+
+const posts = (await getCollection('blog')).filter((post) => !post.data.draft);
+---
+<ul>
+  {posts.map((post) => (
+    <li>
+      <h2>{post.data.title}</h2>
+      <PostExcerptFixed excerpt={(post.body ?? '').slice(0, 140)} />
+    </li>
+  ))}
+</ul>
+```
+
+```ts
+// src/__tests__/excerpt.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import PostExcerptBad from '../components/PostExcerptBad.astro';
+import PostExcerptFixed from '../components/PostExcerptFixed.astro';
+
+const attackerExcerpt = "Great post! <img src=x onerror=alert('xss')>";
+
+describe('excerpt rendering: set:html vs escaped text', () => {
+  it('PostExcerptBad: set:html executes attacker markup verbatim', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(PostExcerptBad, { props: { excerpt: attackerExcerpt } });
+    expect(html).toContain("<img src=x onerror=alert('xss')>");
+  });
+
+  it('PostExcerptFixed: plain {excerpt} escapes the same input', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(PostExcerptFixed, { props: { excerpt: attackerExcerpt } });
+    expect(html).toContain('&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;');
+    expect(html).not.toContain("<img src=x onerror=alert('xss')>");
+  });
+});
+```
+
+type-check ผ่านสะอาดกับ `astro check` บน Astro 7.3.5 ที่ติดตั้งจริง และรันกับไฟล์ test ด้านบนเป๊ะ ๆ:
+
+```text
+✓ PostExcerptBad: set:html executes attacker markup verbatim
+✓ PostExcerptFixed: plain {excerpt} escapes the same input
+
+Test Files  1 passed (1)
+     Tests  2 passed (2)
+```
+
+## เปลี่ยนอะไรไปบ้างและทำไม
+
+| # | บั๊ก | หมวด | ทางแก้ |
+|---|---|---|---|
+| 1 | `postTitle` ใน frontmatter เทียบกับ `title` ใน schema | Content & data | เปลี่ยนชื่อ key ใน frontmatter ให้ตรงกับ schema — พิสูจน์ด้วย `astro sync` จริงที่ให้ `InvalidContentEntryDataError` |
+| 2 | `Astro.glob('../../data/blog/*.md')` | Content & data | `getCollection('blog')` — `astro check` จริงจับได้ที่ `ts(2339)` |
+| 3 | `getStaticPaths()` ว่างเปล่าบน dynamic route แบบ static | Content & data | return `{ params, props }` หนึ่งอันต่อ entry จาก `getCollection('blog')` — ถ้าไม่ทำจะเจอ `GetStaticPathsRequired` ตอน build จริง |
+| 4 | `post.render()` | Content & data | `render(post)` ที่ import จาก `astro:content` — `astro check` จริงจับได้ที่ `ts(2551)` |
+| 5 | `post.data.author.name` บน field `reference()` | Content & data | `await getEntry(post.data.author)` ก่อน — `astro check` จริงจับได้ที่ `ts(2339)` |
+| 6 | handler ของ `postComment` ไม่มีการตรวจสอบสิทธิ์ | Server-side Astro | `if (!context.locals.user) throw new ActionError(...)` — พิสูจน์ด้วย `curl` จริงจาก 200 → 401 |
+| 7 | `set:html={excerpt}` บน text ที่ไม่ sanitize | Security | `{excerpt}` ธรรมดา — พิสูจน์ด้วย Container API: markup ตรงตัว เทียบกับ text ที่ escape แล้ว |
+
+## Mental Model
+
+ห้าในเจ็ดบั๊กนี้คือเรื่อง **ไฟล์หนึ่งสมมติข้อเท็จจริงเกี่ยวกับอีกไฟล์หนึ่ง** — schema สมมติว่า frontmatter ใช้ key เดิม, template สมมติว่า `render`/`reference` ยังทำงานแบบก่อน v6, หน้า listing สมมติว่า `Astro.glob` ยังมีอยู่ content layer ของ Astro เก่งมากในการพิสูจน์ schema *ที่กำหนด* กับ data *ที่กำหนด* หรือ type *ที่กำหนด* กับ expression *ที่กำหนด* — แต่มันไม่มีทางสังเกตว่าสองส่วนของโปรเจกต์เหินห่างจากกันไปแล้ว เพราะจากมุมมองของมัน ทั้งสองส่วนถูกต้องในตัวเอง อีกสองบั๊กที่เหลือ (auth check ที่หายไป, `set:html` บน text ที่ไม่ sanitize) ไม่ใช่เรื่อง version drift ของ framework เลย — มันคือสมมติฐานด้าน security ("ประตูล็อกอินคุมพอแล้ว", "text นี้ปลอดภัย") ที่ไม่มีอะไรใน Astro ตรวจให้เลย
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ถ้า `content.config.ts` กับ page component ทั้งคู่ type-check ผ่าน แปลว่า content ถูกต้อง"** พิสูจน์แล้วข้างต้น: `astro check` ไม่เคยอ่าน frontmatter ของไฟล์ Markkdown แต่ละไฟล์เลย — validation แบบนั้นเกิดตอน `astro sync`/`dev`/`build` เท่านั้น และ schema/frontmatter ที่ไม่ตรงกันจะมองไม่เห็นจนกว่าจะรันคำสั่งใดคำสั่งหนึ่งนั้น
+- **"handler ของ Action เข้าถึงได้แค่ผ่านฟอร์มที่เรียกมันเท่านั้น"** พิสูจน์แล้วข้างต้นด้วย `curl` จริง: ทุก Action คือ public POST endpoint ที่ `/_actions/<name>` ไม่ว่าหน้าไหน (หรือไม่มีหน้าเลย) เป็นคนส่ง request มา
+- **"field `reference()` มีข้อมูลของ entry ที่ลิงก์อยู่แล้ว"** พิสูจน์แล้วข้างต้น: `post.data.author` คือ `{ collection: 'authors'; id: string }` — id ที่ validate แล้ว ไม่ใช่ข้อมูลผู้เขียน การอ่าน `.name` ตรง ๆ คือ compile-time error ไม่ใช่ `undefined` แบบเงียบ ๆ
+
+<Mermaid title="บั๊กแต่ละจุดอยู่ตรงไหนใน request flow ของบล็อกนี้" code={wr1Diagram} />
+
+export const wr1Diagram = `flowchart TD
+  A["content.config.ts: schema"] -->|"1: postTitle vs title"| B["src/data/blog/*.md"]
+  B --> C["getCollection('blog')"]
+  C --> D["src/pages/blog/index.astro"]
+  D -->|"2: Astro.glob() removed"| D
+  D --> E["PostExcerptBad: set:html(excerpt)"]
+  E -->|"7: XSS via unsanitized excerpt"| E
+  C --> F["src/pages/blog/[slug].astro"]
+  F -->|"3: empty getStaticPaths()"| F
+  F -->|"4: post.render() removed"| F
+  F -->|"5: post.data.author.name"| F
+  G["comment form"] --> H["postComment Action"]
+  H -->|"6: no auth check"| H
+`;
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ทุกบั๊กในรีวิวนี้ compile หรือ type-check ผ่านในจุดที่ไม่ควรผ่านได้เลย — schema ที่ถูกต้องในตัวเอง, handler ที่ type ถูกทุกอย่าง, component ที่ render ตามที่สั่งเป๊ะ — เพราะแต่ละอันคือข้อกล่าวอ้างเกี่ยวกับข้อเท็จจริง*นอกไฟล์นั้นเอง* (frontmatter ยังใช้ key นี้อยู่ไหม, API นี้ยังอยู่บน `Astro` global ไหม, request นี้ยืนยันตัวตนแล้วจริงไหม) ที่มีแค่ sync, build, หรือ curl จริงเท่านั้นที่ตรวจได้
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: "```text\n[InvalidContentEntryDataError] blog → hello-world data does not match collection schema.\n\n  title**: **title: Required\n```\nschema ต้องการ `title: z.string()` คำสั่งจริงตัวไหนที่ทำให้เกิด error นี้ และทำไม `astro check` ถึงจับไม่ได้ก่อน?",
+    options: [
+      '`astro check` — มัน validate ทุก field ของ frontmatter กับ schema',
+      '`astro sync` (หรือ `dev`/`build` ที่ sync ก่อนเสมอ) — `astro check` ตรวจ type ของ source file ไม่เคยอ่าน frontmatter ของไฟล์ Markdown เทียบกับ schema เลย',
+      'นี่เป็น error ที่แต่งขึ้น Astro ไม่ validate frontmatter จริง ๆ',
+      '`npm install` — schema validation เกิดตอน install',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้: การ validate ของ loader/schema ที่ทำให้เกิด InvalidContentEntryDataError จะรันก็ต่อเมื่อ content ถูก sync จริง (astro sync หรือ astro dev/build ที่ sync ก่อน) — astro check ไม่มีมุมมองเข้าไปในไฟล์ content แต่ละไฟล์เลย',
+  },
+  {
+    q: 'ทำไม `Astro.glob(\'../../data/blog/*.md\')` ถึง fail `astro check` ด้วย `ts(2339)` ในขณะที่ `getStaticPaths()` ที่หายไปกลับ fail แค่ตอน `astro build` จริง?',
+    options: [
+      'เป็น failure แบบเดียวกัน — ทั้งคู่คือ type error',
+      '`Astro.glob` ถูกลบออกจาก `Astro` global ทั้งหมดแล้ว การอ้างถึงมันจึงเป็น type error ตอน compile ส่วน `getStaticPaths()` คือสัญญาที่ astro check ไม่เคยประเมินเลย — มีแค่ build จริงเท่านั้นที่เรียกมันและสังเกตว่ามันหายไป',
+      'astro check ไม่มีอยู่ใน Astro 7',
+      'error ทั้งสองปรากฏแค่ตอน build production เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'Astro.glob() ที่หายไปจาก type declaration ทำให้การอ้างถึง property นี้เป็น error ตอน compile ที่จับได้ทันที ส่วน getStaticPaths() คือสัญญาระดับ runtime ที่ build process เรียกและตรวจสอบ — astro check ไม่เคยเรียกมันเลย ดังนั้น route ที่ไม่ทำตามสัญญานี้แบบเงียบ ๆ จึงผ่าน check ไปได้สะอาด',
+  },
+  {
+    q: "```ts\nconst { Content } = await post.render();\n```\n`post` มาจาก `getCollection('blog')` เกิดอะไรขึ้นบน Astro 7.3.5?",
+    options: [
+      'มันทำงานได้ — .render() เป็น alias ที่รองรับสำหรับ render(entry)',
+      'astro check error จริง: `Property ‘render’ does not exist` บน type ของ entry — render มีอยู่แค่ในรูป standalone function ที่ import จาก astro:content',
+      'มัน render frontmatter ดิบ ๆ แทน body',
+      'มัน fail แค่ตอนโพสต์ไม่มีรูปภาพ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้ด้วย astro check กับ type CollectionEntry<\'blog\'> ที่ generate เองของโปรเจกต์นี้: render ไม่ใช่ property บน entry รูป method ถูก deprecate ตั้งแต่ Astro 5 และถูกลบใน Astro 6 — import render จาก astro:content แล้วเรียก render(post)',
+  },
+  {
+    q: '`author` ถูกประกาศเป็น `reference(\'authors\')` ใน schema ทำไม `post.data.author.name` ถึง fail `astro check` แทนที่จะคืน `undefined` แบบเงียบ ๆ?',
+    options: [
+      'field ของ reference() เป็น undefined เสมอจนกว่าจะ resolve และ TypeScript แสดงสิ่งนี้ไม่ได้',
+      'type จริงของ field reference() คือ `{ collection: ‘authors’; id: string }` — id ที่ validate แล้ว ไม่ใช่ข้อมูลที่ resolve — ดังนั้น `.name` จึงเป็น property-access error จริงที่จับได้',
+      'มันคืน undefined แบบเงียบ ๆ จริง — คำถามนี้ผิด',
+      'field ของ reference() ถูกตรวจแค่ตอน runtime เท่านั้น astro check ไม่เคยตรวจ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้: astro check รายงาน ts(2339) Property \'name\' does not exist on type \'{ collection: "authors"; id: string; }\' ต้อง resolve id ด้วย getEntry(post.data.author) ก่อน ถึงจะอ่าน field ของผู้เขียนได้',
+  },
+  {
+    q: '```text\n$ curl -s -X POST .../_actions/postComment -d \'{"postId":"42","body":"first post!"}\'\n[{"id":1,"postId":2,"body":3},"...","42","first post!"]\nHTTP 200\n```\nrequest นี้ไม่มี session cookie เลย HTTP 200 นี้พิสูจน์อะไรเกี่ยวกับ handler ของ `postComment`?',
+    options: [
+      'ไม่มีอะไรผิดปกติ — Action ต้องมี session โดยค่าเริ่มต้นอยู่แล้ว',
+      'handler ไม่เคยตรวจว่าใครเป็นคนเรียกก่อนจะเขียนลงฐานข้อมูลเลย — ประตูล็อกอินของฟอร์ม comment เองไม่เกี่ยวอะไรกับ request ตรงที่ยิงไปที่ endpoint จริงของ Action',
+      'curl เข้าถึง Action endpoint จริงไม่ได้ ผลลัพธ์นี้จึงถูกแต่งขึ้น',
+      'HTTP 200 แปลว่า comment ถูกปฏิเสธแต่ log ไว้',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้: request เดียวกันเป๊ะ ๆ ที่ยิงไปที่ handler ที่แก้แล้ว (ซึ่งตรวจ context.locals.user ก่อน) คืน 401 แทน Action คือ public POST endpoint ไม่ว่า UI หน้าไหนจะเป็นคนเรียกก็ตาม — การตรวจสอบสิทธิ์ต้องอยู่ใน handler เอง',
+  },
+  {
+    q: '```jsx\ninterface Props { excerpt: string }\nconst { excerpt } = Astro.props;\n---\n<p class="excerpt" set:html={excerpt} />\n```\ntest render component นี้ด้วย `excerpt = "Great post! <img src=x onerror=alert(\'xss\')>"` HTML ที่ render ออกมามีอะไร?',
+    options: [
+      'tag ถูก escape เป็น text เหมือนกับที่ expression `{excerpt}` ธรรมดาจะทำ',
+      'tag `<img src=x onerror=...>` ตรงตัวเป๊ะ — set:html ข้าม escaping ค่าเริ่มต้นของ Astro ไปทั้งหมด markup ใด ๆ ใน excerpt จึงถูก render (และในเบราว์เซอร์จริงก็ทำงาน) ตรงตัว',
+      'build error เพราะ set:html ต้องการ type string ที่ sanitize แล้ว',
+      'ไม่มีอะไรเลย — set:html ตัด content ที่คล้าย script ออกแบบเงียบ ๆ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้ด้วย Container API: output ที่ render ของ PostExcerptBad มี tag <img onerror=...> ตรงตัวเป๊ะตามที่เขียน set:html คือจุดที่ถูกโจมตีได้ทันทีที่ argument ของมันมี content ที่ผู้ไม่หวังดีควบคุมได้ — ให้ปฏิบัติกับมันเหมือน dangerouslySetInnerHTML',
+  },
+  {
+    q: 'ทำไม dynamic route แบบ static ที่มี `getStaticPaths()` เป็น function ว่างเปล่า (ประกาศไว้ แต่ไม่ return อะไร) ถึง fail ต่างจากไฟล์ที่ไม่มี export `getStaticPaths()` เลย?',
+    options: [
+      'มัน fail ไม่ต่างกันเลย — ทั้งสองแบบให้ error text เดียวกันเป๊ะ',
+      'ทั้งสองแบบ fail เหมือนกัน: Astro ตรวจสิ่งที่ getStaticPaths() คืนมาจริง ๆ และ undefined ก็ไม่ตรงทั้งกรณี array ของ path และกรณี export ที่หายไป — ยังไงก็ตาม build จริงจะไม่เดาชุดหน้าที่จะ build ให้',
+      'function ว่างเปล่าถูกตีความว่า "build ศูนย์หน้า" โดยไม่มี error',
+      'มีแค่กรณีไม่มี export เท่านั้นที่ถูกตรวจ ส่วน function ว่างเปล่า build ผ่านเสมอ',
+    ],
+    answer: 1,
+    explain: 'สัญญาทั้งหมดของ dynamic route แบบ static คือ getStaticPaths() ต้อง return รายการ path ที่จะ build Astro ตรวจสิ่งนี้ก่อนรันโค้ด component เลย — การประกาศ function ไว้แต่ไม่เคย return array ที่ถูกต้อง ทำตามตัวอักษรของ "export a getStaticPaths" แต่ยังคง fail สัญญาจริง ซึ่งเวอร์ชันที่แก้แล้วในรีวิวนี้ทำตามด้วยการ map getCollection(\'blog\') ให้เป็น { params, props } จริงต่อ entry',
+  },
+];
+
+<Quiz client:visible id="reading-astro/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-astro/worked-review-1" />

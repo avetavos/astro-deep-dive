@@ -1,0 +1,556 @@
+---
+title: 'รีวิวเคสจริง 2: เว็บ marketing ที่มี island กับ view transition'
+description: 'เว็บ marketing ที่ AI เขียนให้ — ฟอร์มสมัคร newsletter, live chat widget, testimonials carousel, และ view transition ระหว่างหน้า — ไล่รีวิวทีละบั๊กกับ Astro 7.3.5 probe จริง, astro check, build จริง, และ output ที่ build ออกมาจริง ๆ'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## ฟีเจอร์นี้คืออะไร
+
+โจทย์ที่ให้ AI คือ *"สร้างเว็บ marketing: hero section, ฟอร์มสมัคร newsletter, live chat widget, ส่วน testimonials ที่มี carousel กับการ์ดคำพูดแยกแต่ละอัน, และ promo banner ที่แสดงสามครั้งบนหน้า ใช้ view transition ระหว่างหน้า และ track page view ด้วย analytics script"* ผลลัพธ์ด้านล่างคือแบบร่างที่ AI มักส่งกลับมา — ทุก island ดูเหมือน interactive, ทุก import resolve ได้ และหน้าเว็บก็ render ได้จริง อ่านตาม[ลำดับการอ่าน](/astro/th/reading-astro/)ที่ index ของโมดูลนี้แนะนำ: island กับ client directive ก่อน แล้วค่อย performance กับ caching แล้วก็ security โค้ดนี้มี **บั๊กจริง 7 จุด** — ดู [AI bug catalog](/astro/th/reading-astro/ai-bug-catalog/) สำหรับ pattern ทั่วไปเบื้องหลังแต่ละจุด โปรเจกต์นี้ใช้แค่ `@astrojs/preact` (integration เดียวกับที่ probe ของคอร์สนี้ติดตั้ง) — หนึ่งในเจ็ดบั๊กด้านล่างคือเรื่องที่เกิดขึ้นทันทีที่มี framework integration ตัวที่ *สอง* เข้ามาร่วมด้วย
+
+## โค้ดที่ AI สร้างให้
+
+```astro
+---
+// @expect-error TS2305 (ViewTransitions renamed) — as generated, plus a DOMContentLoaded script that stops re-running after the first client-side navigation, walked through below
+import { ViewTransitions } from 'astro:transitions';
+
+interface Props { title: string }
+const { title } = Astro.props;
+---
+<html lang="en">
+<head>
+  <title>{title}</title>
+  <ViewTransitions />
+</head>
+<body>
+  <slot />
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('ANALYTICS_INIT');
+    });
+  </script>
+</body>
+</html>
+```
+
+```tsx
+// src/components/NewsletterForm.tsx — as generated
+export default function NewsletterForm({ placeholder, onSubscribed }: { placeholder: string; onSubscribed: any }) {
+  function submit(e: SubmitEvent) {
+    e.preventDefault();
+    const email = (e.target as HTMLFormElement).email.value;
+    onSubscribed(email);
+  }
+  return (
+    <form onSubmit={submit}>
+      <input name="email" placeholder={placeholder} />
+      <button type="submit">Subscribe</button>
+    </form>
+  );
+}
+```
+
+```tsx
+// src/components/LiveChatWidget.tsx — as generated
+import { useState } from 'preact/hooks';
+
+export default function LiveChatWidget() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div class="chat-widget">
+      <button onClick={() => setOpen(!open)}>{open ? 'Close chat' : 'Chat with us'}</button>
+      {open && <p>An agent will be with you shortly.</p>}
+    </div>
+  );
+}
+```
+
+```tsx
+// src/components/TestimonialsCarousel.tsx — as generated
+import { useState } from 'preact/hooks';
+
+export default function TestimonialsCarousel({ quotes }: { quotes: string[] }) {
+  const [i, setI] = useState(0);
+  return (
+    <div class="carousel">
+      <p>{quotes[i]}</p>
+      <button onClick={() => setI((i + 1) % quotes.length)}>Next</button>
+    </div>
+  );
+}
+```
+
+```tsx
+// src/components/TestimonialCard.tsx — as generated
+export default function TestimonialCard({ author }: { author: string }) {
+  return (
+    <blockquote class="testimonial">
+      <slot />
+      <footer>{author}</footer>
+    </blockquote>
+  );
+}
+```
+
+```astro
+---
+// src/components/PromoBanner.astro — as generated
+---
+<div class="promo">Sale ends soon — free shipping over $50</div>
+<script is:inline>
+  console.log('PROMO_COUNTDOWN_INIT');
+</script>
+```
+
+```astro
+---
+// src/pages/index.astro — as generated
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import NewsletterForm from '../components/NewsletterForm.tsx';
+import LiveChatWidget from '../components/LiveChatWidget.tsx';
+import TestimonialsCarousel from '../components/TestimonialsCarousel.tsx';
+import TestimonialCard from '../components/TestimonialCard.tsx';
+import PromoBanner from '../components/PromoBanner.astro';
+
+function trackSubscribe(email: string) {
+  console.log('subscribed', email);
+}
+---
+<MarketingLayout title="Acme — Ship faster">
+  <PromoBanner />
+  <section class="hero">
+    <h1>Ship faster with Acme</h1>
+    <NewsletterForm placeholder="you@example.com" onSubscribed={trackSubscribe} client:visible />
+  </section>
+  <PromoBanner />
+  <section class="testimonials">
+    <TestimonialCard author="Sam, verified customer" client:visible>
+      <p>This product changed how our team ships.</p>
+    </TestimonialCard>
+    <TestimonialsCarousel quotes={["Great support!", "Worth every dollar"]} client:only />
+  </section>
+  <PromoBanner />
+  <LiveChatWidget client:load />
+</MarketingLayout>
+```
+
+## ไล่รีวิวทีละจุด
+
+### Islands & client directives: `<ViewTransitions />` — ชื่อนี้หายไปแล้ว
+
+`MarketingLayout` import `ViewTransitions` จาก `astro:transitions` ซึ่งเป็นชื่อเก่าก่อน v5 ของ component นี้
+
+<SpotTheBug code={`import { ViewTransitions } from 'astro:transitions';
+---
+<head>
+  <ViewTransitions />
+</head>`}>
+Astro รุ่นปัจจุบันเปลี่ยนชื่อ component นี้เป็น `ClientRouter` — และมันไม่ใช่แค่ deprecate หรือมี alias เลย ชื่อเก่าไม่ถูก export ออกมาแล้วด้วยซ้ำ พิสูจน์ใน probe ด้วย `astro check` กับ import นี้ตรง ๆ บน Astro 7.3.5:
+
+```text
+error ts(2305): Module '"astro:transitions"' has no exported member 'ViewTransitions'.
+
+import { ViewTransitions } from 'astro:transitions';
+         ~~~~~~~~~~~~~~~
+```
+
+`astro build` จริงก็ fail แบบเดียวกัน อีกชั้นถัดไป ด้วย bundler error ที่มีชื่อจริง:
+
+```text
+[ERROR] [vite] ✗ Build failed
+[MISSING_EXPORT] "ViewTransitions" is not exported by "\0astro:transitions".
+```
+
+ทางแก้คือเปลี่ยนชื่อตรง ๆ — `import { ClientRouter } from 'astro:transitions'` แล้วใช้ `<ClientRouter />` ใน template — import specifier เดิม พฤติกรรมเดิม แค่เปลี่ยนเป็นชื่อปัจจุบัน
+</SpotTheBug>
+
+### Performance & caching: init script ที่ผูกกับ `DOMContentLoaded`
+
+analytics script ใน layout เดียวกันตั้งค่าตัวเองตอน `DOMContentLoaded` — event ที่ยิงแค่ครั้งเดียว ตอน browser parse document ครั้งแรก
+
+<SpotTheBug code={`document.addEventListener('DOMContentLoaded', () => {
+  console.log('ANALYTICS_INIT');
+});`}>
+พอมี `<ClientRouter />` (ทางแก้ข้างบน) อยู่บนหน้าแล้ว การคลิกลิงก์จะไม่ trigger full page load อีกต่อไป — มันถูก intercept, ดึง HTML ของหน้าถัดไปมา แล้วสลับ DOM แทนที่ `DOMContentLoaded` จะยิงแค่ตอน document โหลดจริงครั้งแรกเท่านั้น มันไม่ยิงอีกเลยตอน swap แบบ client-side พิสูจน์ตรง ๆ ใน source ของ Astro ที่ติดตั้งจริง (`astro/dist/transitions/events.js`, `router.js`) ซึ่ง dispatch event ของตัวเองเป็น plain string event แทน คือ **`astro:page-load`** — ยิงหลังจาก*ทุก*การ navigate ทั้งการโหลดครั้งแรกและการ swap แบบ client-side ทุกครั้ง นี่คือจุดพลาดเรื่อง view-transitions ที่พบบ่อยที่สุด: script "ทำงาน" ตอนโหลดหน้าครั้งแรก แล้วก็เงียบ ๆ หยุดทำงานซ้ำทันทีที่ผู้เข้าชมคลิกที่ไหนก็ตาม ทางแก้คือ `document.addEventListener('astro:page-load', () => { ... })` — ไม่ต้อง import อะไรเลย มันเป็นชื่อ event แบบ plain string (ไม่มี constant แบบ `PAGE_LOAD` ให้ import แทน)
+</SpotTheBug>
+
+### Islands & client directives: function prop เข้าไปใน island
+
+`NewsletterForm` รับ `onSubscribed: any` และ parent ส่ง function จริง ๆ เข้าไปคือ `trackSubscribe`
+
+<SpotTheBug code={`export default function NewsletterForm({ placeholder, onSubscribed }: { placeholder: string; onSubscribed: any }) {
+  // ...
+}
+---
+<NewsletterForm placeholder="you@example.com" onSubscribed={trackSubscribe} client:visible />`}>
+prop ของ island เดินทางจากไฟล์ `.astro` ไปถึง browser เป็น string แบบ JSON ใน attribute `props` ของ HTML ที่ build ออกมา — มันต้อง serialize ได้ เพราะ `onSubscribed` ถูก type เป็น `any` จึงไม่มีอะไรในระดับ type คอย block ไม่ให้ function ผ่านไปได้ และพฤติกรรมตอน *runtime* ก็คือข้อมูลหายไปแบบเงียบ ๆ ไม่ใช่ error: serializer ของ Astro เองจะ fallback ไปใช้ `JSON.stringify` กับอะไรก็ตามที่มันไม่รู้จักเป็นพิเศษ และ `JSON.stringify` ของ function ที่อยู่ใน array slot จะได้ `null` พิสูจน์ด้วย attribute `props` ที่ build ออกมาจริงสำหรับ call นี้ตรง ๆ:
+
+```text
+props="{&quot;placeholder&quot;:[0,&quot;you@example.com&quot;],&quot;onSubscribed&quot;:[0,null]}"
+```
+
+`onSubscribed` เป็น `null` ฝั่ง client — function ไม่เคยเดินทางไปถึงเลย ถ้า `NewsletterForm` เรียก `onSubscribed(email)` ตอน submit นั่นจะ throw `onSubscribed is not a function` ตอนที่มีคน submit ฟอร์มจริง ๆ — runtime error ที่งงงวยหนึ่ง interaction หลังจากความผิดพลาดจริง ทางแก้คือไม่ส่ง function เป็น prop เลย — ให้ island เรียก Action หรือ `fetch()` เองตรง ๆ (ข้อมูลที่ island มีอยู่แล้ว ส่งจากข้างในตัว island เอง) หรือส่งแค่ข้อมูลที่ serialize ได้ลงไป แล้วให้ parent อ่านผลลัพธ์กลับผ่าน event/callback ที่ลงทะเบียนฝั่ง client ไม่ใช่ผ่าน prop ของ island
+</SpotTheBug>
+
+### Islands & client directives: `client:load` บน widget ที่ไม่มีใครเห็นตอนโหลดหน้า
+
+`LiveChatWidget` อยู่ล่างสุดของหน้า ใต้ testimonials แต่ hydrate ด้วย `client:load` — directive ที่กระตือรือร้นที่สุดและแพงที่สุด สงวนไว้สำหรับ control เหนือ fold ที่ต้องทำงานทันทีที่หน้าใช้งานได้
+
+<SpotTheBug code={`<LiveChatWidget client:load />`}>
+`client:load` กับ `client:visible` compile ออกมาเป็น loader script ที่ต่างกันจริง ๆ ยืนยันตรง ๆ จาก output ที่ build ออกมาจริง loader ของ `client:load` **ไม่มีเงื่อนไขคุมเลย** — มันรัน hydrator ทันทีที่ custom element connect:
+
+```text
+(()=>{var e=async t=>{await(await t())()};(self.Astro||(self.Astro={})).load=e;window.dispatchEvent(new Event("astro:load"));})();
+```
+
+loader ของ `client:visible` ห่อ call เดียวกันไว้หลัง `IntersectionObserver` จริง ๆ และยิงก็ต่อเมื่อ element เลื่อนเข้ามาในหน้าจอจริง ๆ:
+
+```text
+(()=>{var a=(s,i,o)=>{let r=async()=>{await(await s())()},t=typeof i.value=="object"?i.value:void 0,c={rootMargin:t==null?void 0:t.rootMargin},n=new IntersectionObserver(e=>{for(let l of e)if(l.isIntersecting){n.disconnect(),r();break}},c);for(let e of o.children)n.observe(e)};(self.Astro||(self.Astro={})).visible=a;window.dispatchEvent(new Event("astro:visible"));})();
+```
+
+chat widget ที่จอดอยู่ใต้ testimonials ส่งและรัน JavaScript ของมันให้ผู้เข้าชม**ทุกคน**ทันทีที่โหลด ไม่ว่าจะเลื่อนไปเห็นมันหรือไม่ก็ตาม — ตรงกับ reflex แบบกระตือรือร้นเกินไปที่ AI bug catalog พูดถึงเป๊ะ ทางแก้คือ `client:visible`: JS ของ widget จะไม่โหลดเลยด้วยซ้ำสำหรับผู้เข้าชมที่ออกไปก่อนเลื่อนมาถึงมัน
+</SpotTheBug>
+
+### Islands & client directives: `client:only` ที่ไม่มีคำใบ้ framework
+
+`TestimonialsCarousel` ใช้ `client:only` เปล่า ๆ ไม่มีชื่อ framework
+
+<SpotTheBug code={`<TestimonialsCarousel quotes={["Great support!", "Worth every dollar"]} client:only />`}>
+`client:only` ข้าม server render ไปเลยทั้งหมด Astro จึงไม่มีอะไรให้ render-แล้ว-ตรวจสอบเพื่อเดา framework ในเมื่อมี UI integration แค่ **ตัวเดียว** ติดตั้งอยู่ — ก็คือ `@astrojs/preact` ของโปรเจกต์นี้เอง ตอนนี้ — Astro เดาให้เงียบ ๆ และมัน build ผ่านตอนนี้จริง ๆ แต่ทันทีที่มี integration ตัวที่ JSX รองรับตัวที่ **สอง** ถูกเพิ่มเข้ามา (ขั้นตอนที่พบบ่อยเวลาเว็บ marketing ดึง embed widget แบบ React-only มาใช้ทีหลัง) การเดานั้นจะกำกวมทันที และบรรทัดเดิมเป๊ะ ๆ ก็ throw จริง พิสูจน์ใน side probe ที่ติดตั้งทั้ง `@astrojs/preact` กับ `@astrojs/react` กับ component ชื่อนี้ตรง ๆ:
+
+```text
+[NoClientOnlyHint] Unable to render `TestimonialsCarousel`. When using the `client:only` hydration
+strategy, Astro needs a hint to use the correct renderer.
+  Hint:
+    Did you mean to pass `client:only="react|preact|solid-js|vue (jsx)"`?
+  Error reference:
+    https://docs.astro.build/en/reference/errors/no-client-only-hint/
+```
+
+`astro check` และ build แบบ integration เดียวของวันนี้ผ่านไฟล์นี้สะอาดทั้งคู่ — บั๊กนี้ยังไม่ทำงาน (latent) ไม่ได้ fail อยู่ตอนนี้ ซึ่งนั่นแหละคือเหตุผลที่มันหลุดออกไปได้ง่าย ทางแก้ไม่มีต้นทุนอะไรวันนี้และป้องกันการพังในอนาคต: `client:only="preact"` ระบุชื่อ framework ตรง ๆ
+</SpotTheBug>
+
+### Islands & client directives: `<slot />` ข้างในตัว Preact component
+
+`TestimonialCard` เป็น Preact component ที่เขียน `<slot />` ใน JSX เหมือนที่ component แบบ `.astro` จะทำ
+
+<SpotTheBug code={`export default function TestimonialCard({ author }: { author: string }) {
+  return (
+    <blockquote class="testimonial">
+      <slot />
+      <footer>{author}</footer>
+    </blockquote>
+  );
+}`}>
+React, Preact, และ Solid รับ children ที่ slot มาเป็น prop **`children`** — มีแค่ Svelte กับ Vue เท่านั้นที่ใช้ element `<slot />` ของ Astro เอง `<slot />` ข้างในไฟล์ `.tsx` compile ออกมาเป็น native HTML element `<slot>` ตรง ๆ ซึ่งไม่ทำอะไรเลยถ้าไม่มี Shadow DOM ล้อมรอบ — มันไม่ใช่ตัวแทนของ `props.children` พิสูจน์ด้วย build จริงของการใช้งานนี้ตรง ๆ (`<TestimonialCard client:visible>` ที่ห่อ `<p>` ที่ server-render มาให้):
+
+```html
+<blockquote class="testimonial"><slot></slot><footer>Sam, verified customer</footer></blockquote><template data-astro-template><p>This product changed how our team ships.</p></template><!--astro:end-->
+```
+
+คำพูดที่ server-render มาไม่ปรากฏตรงที่มันควรจะอยู่เลย — มันติดอยู่ข้างใน tag `<template data-astro-template>` ที่เป็น sibling (กลไกของ Astro เองที่ใช้พา slotted content ไปให้ client ตอน hydrate) ในขณะที่ตัว component เอง render `<slot></slot>` ที่ว่างเปล่าและไม่ทำอะไรแทนที่ ทางแก้คือ `{props.children}` แทน `<slot />` — content เดียวกันเป๊ะ แต่อ่านในแบบที่ Preact เปิดให้อ่านจริง ๆ
+</SpotTheBug>
+
+### Performance & caching: `is:inline` บน script ที่ตั้งใจให้รันครั้งเดียวต่อหน้า
+
+`PromoBanner` ถูกวางสามครั้งบนหน้าแรก และ script init countdown ของมันถูกใส่ `is:inline`
+
+<SpotTheBug code={`<div class="promo">Sale ends soon — free shipping over $50</div>
+<script is:inline>
+  console.log('PROMO_COUNTDOWN_INIT');
+</script>`}>
+`<script>` ธรรมดา (ไม่มี `is:inline`) ใน component ที่ใช้หลายครั้งบนหน้าเดียว จะถูก bundle และ **dedupe** — Astro จะ emit มันแค่ครั้งเดียว ไม่ว่า component จะปรากฏกี่ instance ก็ตาม `is:inline` ปิดทั้งสองอย่าง: tag ถูก emit **ตามที่เขียนเป๊ะ ครั้งเดียวต่อ instance** ไม่มีการ bundle ไม่มีการ dedupe พิสูจน์ด้วย build จริงของ component นี้ตรง ๆ ที่ใช้สามครั้งบนหน้าเดียว:
+
+```text
+PROMO_COUNTDOWN_INIT
+PROMO_COUNTDOWN_INIT
+PROMO_COUNTDOWN_INIT
+```
+
+console.log สามบรรทัดเหมือนกันเป๊ะ — logic init countdown รันแยกกันสามครั้ง ครั้งละหนึ่ง banner แทนที่จะรันครั้งเดียวต่อหน้า พอเอา `is:inline` ออกแล้ว build หน้าสาม banner เดิมอีกครั้งจะได้แค่หนึ่งบรรทัด:
+
+```text
+PROMO_COUNTDOWN_INIT
+```
+
+ทางแก้คือลบ `is:inline` ออกตรงนี้ — script นี้ไม่มีเหตุผลอะไรที่ต้องรันแบบไม่ผ่านการประมวลผลหรือแยกต่อ instance เลย `is:inline` มีไว้สำหรับ script ที่ต้องส่งแบบดิบและซ้ำจริง ๆ (analytics snippet แบบ inline ที่ vendor บังคับให้ใช้ตามนั้นเป๊ะ) ไม่ใช่ reflex ที่ใส่ทุก script tag
+</SpotTheBug>
+
+## โค้ดที่แก้แล้ว
+
+```astro
+---
+// src/layouts/MarketingLayout.astro
+import { ClientRouter } from 'astro:transitions';
+
+interface Props { title: string }
+const { title } = Astro.props;
+---
+<html lang="en">
+<head>
+  <title>{title}</title>
+  {/* FIX (ViewTransitions renamed): ClientRouter, imported from the same specifier */}
+  <ClientRouter />
+</head>
+<body>
+  <slot />
+  <script>
+    // FIX (script stops re-running after navigation): astro:page-load fires
+    // on the first load AND every client-side swap, unlike DOMContentLoaded.
+    document.addEventListener('astro:page-load', () => {
+      console.log('ANALYTICS_INIT');
+    });
+  </script>
+</body>
+</html>
+```
+
+```tsx
+// src/components/NewsletterForm.tsx
+// FIX (function prop into an island): the island owns the side effect
+// itself instead of receiving a callback prop the wire format can't carry.
+export default function NewsletterForm({ placeholder }: { placeholder: string }) {
+  function submit(e: SubmitEvent) {
+    e.preventDefault();
+    const email = (e.target as HTMLFormElement).email.value;
+    console.log('subscribed', email);
+  }
+  return (
+    <form onSubmit={submit}>
+      <input name="email" placeholder={placeholder} />
+      <button type="submit">Subscribe</button>
+    </form>
+  );
+}
+```
+
+```tsx
+// src/components/LiveChatWidget.tsx
+import { useState } from 'preact/hooks';
+
+export default function LiveChatWidget() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div class="chat-widget">
+      <button onClick={() => setOpen(!open)}>{open ? 'Close chat' : 'Chat with us'}</button>
+      {open && <p>An agent will be with you shortly.</p>}
+    </div>
+  );
+}
+```
+
+```tsx
+// src/components/TestimonialsCarousel.tsx
+import { useState } from 'preact/hooks';
+
+export default function TestimonialsCarousel({ quotes }: { quotes: string[] }) {
+  const [i, setI] = useState(0);
+  return (
+    <div class="carousel">
+      <p>{quotes[i]}</p>
+      <button onClick={() => setI((i + 1) % quotes.length)}>Next</button>
+    </div>
+  );
+}
+```
+
+```tsx
+// src/components/TestimonialCard.tsx
+// FIX (<slot /> in a Preact component): React/Preact/Solid receive
+// slotted content as props.children, never Astro's own <slot />.
+import type { ComponentChildren } from 'preact';
+
+export default function TestimonialCard({ author, children }: { author: string; children?: ComponentChildren }) {
+  return (
+    <blockquote class="testimonial">
+      {children}
+      <footer>{author}</footer>
+    </blockquote>
+  );
+}
+```
+
+```astro
+---
+// src/components/PromoBanner.astro
+// FIX (is:inline defeating dedup): a plain <script> is bundled AND
+// deduplicated across every instance of this component on the page.
+---
+<div class="promo">Sale ends soon — free shipping over $50</div>
+<script>
+  console.log('PROMO_COUNTDOWN_INIT');
+</script>
+```
+
+```astro
+---
+// src/pages/index.astro
+import MarketingLayout from '../layouts/MarketingLayout.astro';
+import NewsletterForm from '../components/NewsletterForm.tsx';
+import LiveChatWidget from '../components/LiveChatWidget.tsx';
+import TestimonialsCarousel from '../components/TestimonialsCarousel.tsx';
+import TestimonialCard from '../components/TestimonialCard.tsx';
+import PromoBanner from '../components/PromoBanner.astro';
+---
+<MarketingLayout title="Acme — Ship faster">
+  <PromoBanner />
+  <section class="hero">
+    <h1>Ship faster with Acme</h1>
+    <NewsletterForm placeholder="you@example.com" client:visible />
+  </section>
+  <PromoBanner />
+  <section class="testimonials">
+    <TestimonialCard author="Sam, verified customer" client:visible>
+      <p>This product changed how our team ships.</p>
+    </TestimonialCard>
+    {/* FIX (client:only ambiguity): name the framework explicitly */}
+    <TestimonialsCarousel quotes={["Great support!", "Worth every dollar"]} client:only="preact" />
+  </section>
+  <PromoBanner />
+  {/* FIX (client:load reflex): below the fold, hydrate only once visible */}
+  <LiveChatWidget client:visible />
+</MarketingLayout>
+```
+
+type-check ผ่านสะอาดกับ `astro check` บน Astro 7.3.5 ที่ติดตั้งจริง และ `astro build` จริงของ page tree นี้เป๊ะ ๆ ก็เสร็จโดยไม่มี error เลย:
+
+```text
+[build] Complete!
+```
+
+## เปลี่ยนอะไรไปบ้างและทำไม
+
+| # | บั๊ก | หมวด | ทางแก้ |
+|---|---|---|---|
+| 1 | `import { ViewTransitions } from 'astro:transitions'` | Islands & client directives | `ClientRouter` — พิสูจน์ด้วย `astro check` จริงที่ `ts(2305)` และ build-time `MISSING_EXPORT` |
+| 2 | analytics script ผูกกับ `DOMContentLoaded` | Performance & caching | `astro:page-load` — ยิงทั้งตอนโหลดครั้งแรกและทุกครั้งที่ navigate แบบ client-side |
+| 3 | function prop `onSubscribed: any` เข้าไปใน `NewsletterForm` | Islands & client directives | island เป็นเจ้าของ side effect เอง — พิสูจน์ด้วย attribute `props` ที่ build จริงที่ serialize function เป็น `null` |
+| 4 | `<LiveChatWidget client:load />` ใต้ fold | Islands & client directives | `client:visible` — พิสูจน์ด้วยการเทียบ loader script จริงสองแบบ |
+| 5 | `<TestimonialsCarousel ... client:only />` แบบเปล่า ๆ | Islands & client directives | `client:only="preact"` — พิสูจน์ด้วย `NoClientOnlyHint` จริงทันทีที่ติดตั้ง integration ตัวที่สอง |
+| 6 | `<slot />` ข้างใน Preact `TestimonialCard` | Islands & client directives | `{props.children}` — พิสูจน์ด้วย HTML ที่ build จริงที่แสดง `<slot></slot>` ว่างเปล่ากับ content ที่ตกค้าง |
+| 7 | `is:inline` บน script ที่ควรใช้ร่วมกันของ `PromoBanner` | Performance & caching | `<script>` ธรรมดา — พิสูจน์ด้วย build จริง: รันซ้ำ 3 ครั้ง เทียบกับ dedupe เหลือ 1 ครั้ง |
+
+## Mental Model
+
+บั๊กทั้งเจ็ดจุดนี้ทุกจุดส่งอะไรบางอย่างไปให้ browser ที่ไม่ตรงกับที่โค้ดที่ AI สร้างให้สมมติไว้ — ชื่อ component ที่ไม่มีอยู่แล้ว, event ที่ยิงแค่ครั้งเดียว, prop ที่กลายเป็น `null` แบบเงียบ ๆ, script ที่รันกระตือรือร้นเกินไปหรือซ้ำเกินความตั้งใจของคนเขียน, `<slot />` ที่ render เป็น native tag เฉย ๆ ไม่มีอันไหนเป็น *logic* ที่ผิดเลย — โค้ดทำตามที่มันบอกไว้ทุกอย่าง สิ่งที่ผิดคือสมมติฐานเกี่ยวกับสิ่งที่ compiler หรือ runtime ของ Astro ทำจริง ๆ กับ syntax นั้นเป๊ะ ๆ และทางเดียวที่จะจับได้คือการอ่าน output ที่ build จริง ๆ: attribute `props`, loader script, `console.log` ที่ซ้ำ, หรือ custom element ที่ว่างเปล่า
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ถ้ามี client directive อยู่ แปลว่า component ทำงานถูกต้อง"** `client:load`, `client:only` แบบเปล่า ๆ, และ `is:inline` ล้วนมีอยู่จริง เขียนถูก syntax และทำให้หน้าเว็บใช้งานได้วันนี้ — บั๊กในแต่ละกรณีคือ *directive ไหน* ไม่ใช่ว่ามี directive หรือไม่
+- **"prop ที่ส่งเข้าไปใน island ก็แค่ค่า JavaScript ธรรมดาทันทีที่ไปถึง client"** พิสูจน์แล้วข้างต้น: function prop กลายเป็น `null` แบบเงียบ ๆ — ไม่มีอะไรให้เรียกได้ และไม่มี error จนกว่า callback จะถูกเรียกจริง
+- **"เพราะ React/Preact กับ Astro ต่างก็มีแนวคิดคล้าย `<slot />` มันน่าจะทำงานเหมือนกันข้างใน framework component"** พิสูจน์แล้วข้างต้น: ไฟล์ `.astro` ของ Astro เองใช้ `<slot />` ส่วน React, Preact, และ Solid ใช้ prop `children` แทน — การเขียน `<slot />` ข้างในไฟล์ `.tsx` compile ออกมาเป็น native HTML element ที่ไม่ทำอะไรเลย ไม่ใช่จุด project content
+
+<Mermaid title="บั๊กแต่ละจุดอยู่ตรงไหนบนหน้าเว็บ marketing นี้" code={wr2Diagram} />
+
+export const wr2Diagram = `flowchart TD
+  L["MarketingLayout.astro"] -->|"1: ViewTransitions renamed"| L
+  L -->|"2: DOMContentLoaded vs astro:page-load"| L
+  L --> P["index.astro"]
+  P --> B1["PromoBanner (x3)"]
+  B1 -->|"7: is:inline defeats dedup"| B1
+  P --> N["NewsletterForm client:visible"]
+  N -->|"3: onSubscribed function prop -> null"| N
+  P --> T1["TestimonialCard client:visible"]
+  T1 -->|"6: <slot /> instead of children"| T1
+  P --> T2["TestimonialsCarousel client:only"]
+  T2 -->|"5: no framework hint"| T2
+  P --> C["LiveChatWidget client:load"]
+  C -->|"4: eager hydration below the fold"| C
+`;
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ทุกบั๊กในรีวิวนี้คือความไม่ตรงกันระหว่างสิ่งที่โค้ดที่ AI สร้างสมมติว่าจะถูกส่งไปให้ browser กับสิ่งที่ compiler ของ Astro ส่งไปจริง ๆ — พิสูจน์ได้ทุกกรณีด้วยการอ่าน output ที่ build จริง: attribute `props`, loader script, บรรทัด log ที่ซ้ำ, หรือ custom element ที่ว่างเปล่า — ไม่ใช่ด้วยการอ่าน source ซ้ำอีกรอบ
+</Callout>
+
+export const quizWorkedReview2 = [
+  {
+    q: "```astro\n---\nimport { ViewTransitions } from 'astro:transitions';\n---\n<ViewTransitions />\n```\nเกิดอะไรขึ้นบน Astro 7.3.5?",
+    options: [
+      'มันทำงานได้ — ViewTransitions เป็น alias ที่ deprecate แล้วแต่ยังรองรับสำหรับ ClientRouter',
+      'astro check error จริง (ts2305, ไม่มี exported member) และถ้าข้าม check ไป build ก็จะ fail ด้วย MISSING_EXPORT — ชื่อนี้หายไปแล้ว ไม่ใช่แค่มี alias',
+      'มัน render ไม่ออกอะไรเลยแบบเงียบ ๆ',
+      'มัน fail แค่ตอนใช้ transition:persist ด้วยเท่านั้น',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้: astro check รายงาน "Module astro:transitions has no exported member \'ViewTransitions\'" และ build จริง fail ด้วย MISSING_EXPORT ชื่อปัจจุบันคือ ClientRouter import จาก specifier astro:transitions เดิม',
+  },
+  {
+    q: 'init script ผูกกับ `DOMContentLoaded` บนหน้าที่ใช้ `<ClientRouter />` เกิดอะไรขึ้นหลังผู้เข้าชมคลิกลิงก์ไปหน้าอื่นในเว็บเดียวกัน?',
+    options: [
+      'script รันซ้ำตามปกติ เพราะ ClientRouter จำลอง full page load ให้',
+      'DOMContentLoaded ไม่ยิงอีกเลย — มันยิงแค่ครั้งเดียวตอน document โหลดจริงครั้งแรกเท่านั้น — script จึงหยุดทำงานซ้ำแบบเงียบ ๆ หลังการ navigate แบบ client-side ทุกครั้ง',
+      'browser throw error',
+      'ClientRouter ปฏิเสธไม่ navigate จนกว่า script จะทำงานเสร็จ',
+    ],
+    answer: 1,
+    explain: 'ClientRouter intercept การคลิกแล้วสลับ content แทนที่จะ reload document ดังนั้น DOMContentLoaded (browser event จริงที่ยิงครั้งเดียว) จึงไม่ยิงอีกเลย Astro dispatch event ของตัวเองคือ astro:page-load หลังทุกการ navigate รวมทั้งการโหลดครั้งแรก โดยตั้งใจให้มาแทน pattern นี้',
+  },
+  {
+    q: "```text\nprops=\"{&quot;placeholder&quot;:[0,&quot;you@example.com&quot;],&quot;onSubscribed&quot;:[0,null]}\"\n```\nนี่คือ attribute `props` ที่ build จริงของ `<NewsletterForm onSubscribed={trackSubscribe} client:visible />` ที่ `onSubscribed` ถูก type เป็น `any` เกิดอะไรขึ้นกับ function นี้?",
+    options: [
+      'มันถูก bundle ไปพร้อม island และยังทำงานได้',
+      'มันถูก serialize เป็น null — serializer ของ Astro เอง fallback ไปใช้ JSON.stringify กับอะไรก็ตามที่มันไม่รู้จักเป็นพิเศษ และ function ที่อยู่ใน array slot จะกลายเป็น null โดยไม่มี error',
+      'build fail เพราะ function ใช้เป็น prop ไม่ได้',
+      'Astro แปลงมันเป็น Action call ให้อัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้ด้วย HTML ที่ build จริง: onSubscribed serialize เป็น null เพราะ prop ถูก type เป็น any จึงไม่มีอะไรในระดับ type จับความผิดพลาดนี้ได้ — มันจะเงียบไปเรื่อย ๆ จนกว่า island จะพยายามเรียก onSubscribed(email) จริง ๆ',
+  },
+  {
+    q: 'widget ที่อยู่ล่างสุดของหน้ายาว ๆ ใช้ `client:load` loader script จริงที่ build ออกมาของ `client:load` ต่างจากของ `client:visible` ยังไง ตามที่พิสูจน์ในรีวิวนี้?',
+    options: [
+      'เหมือนกันเป๊ะ — ชื่อ directive แค่เป็นเรื่อง cosmetic',
+      'loader ของ client:load ไม่มีเงื่อนไขคุมเลยและรัน hydrator ทันทีที่ connect ส่วน loader ของ client:visible ห่อ call เดียวกันไว้หลัง IntersectionObserver จริงที่รอให้ element เลื่อนเข้ามาในจอก่อน',
+      'client:load รอ network idle; client:visible รอการคลิก',
+      'client:visible ไม่ hydrate เลยจริง ๆ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้ด้วยการอ่าน loader script จริงทั้งสองแบบ: ของ client:load ไม่มีเงื่อนไข ของ client:visible ถูกคุมด้วย IntersectionObserver widget ที่อยู่ใต้ fold จึงส่งและรัน JS ให้ผู้เข้าชมทุกคนทันทีภายใต้ client:load ไม่ว่าจะเลื่อนมาเห็นมันหรือไม่',
+  },
+  {
+    q: 'ทำไม `<TestimonialsCarousel quotes={[...]} client:only />` ถึง build ผ่านได้วันนี้ แต่ยังถูกตั้งเป็นบั๊กในรีวิวนี้อยู่ดี?',
+    options: [
+      'จริง ๆ ไม่ใช่บั๊ก — ผู้รีวิวระวังเกินไป',
+      'พอมี integration ที่ JSX รองรับแค่ตัวเดียว Astro จะเดา framework ให้เงียบ ๆ แต่บรรทัดเดิมเป๊ะ ๆ จะ throw NoClientOnlyHint จริงทันทีที่มีตัวที่สอง (เช่น @astrojs/react) ถูกเพิ่มเข้ามา — พิสูจน์ใน side probe ที่ติดตั้งทั้งสองตัว',
+      'client:only ต้องมี integration สองตัวถึงจะทำงานได้เลย',
+      'มัน fail แค่ตอน development เท่านั้น ไม่ใช่ตอน build production',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้: พอติดตั้งทั้ง @astrojs/preact กับ @astrojs/react บรรทัด client:only แบบเปล่า ๆ เดิมเป๊ะ ๆ จะ fail ด้วย NoClientOnlyHint ระบุชื่อ component เดิมตรง ๆ การระบุชื่อ framework (client:only="preact") ไม่มีต้นทุนอะไรวันนี้และป้องกันการพังในอนาคตนั้น',
+  },
+  {
+    q: '```jsx\nexport default function TestimonialCard({ author }) {\n  return (\n    <blockquote>\n      <slot />\n      <footer>{author}</footer>\n    </blockquote>\n  );\n}\n```\n`TestimonialCard` เป็น Preact component ที่ใช้เป็น `<TestimonialCard client:visible><p>...</p></TestimonialCard>` HTML ที่ build จริงแสดงอะไร?',
+    options: [
+      'content ของ <p> render ตรงจุดที่ <slot /> เขียนไว้เป๊ะ เหมือนที่มันจะทำในไฟล์ .astro',
+      'element <slot></slot> ที่ว่างเปล่าและไม่ทำอะไรตรงจุดที่ JSX เขียนไว้ตามตัวอักษร ในขณะที่ content <p> ที่ server-render จริง ๆ ติดอยู่ใน tag <template data-astro-template> ที่เป็น sibling แยกต่างหาก ไม่เคยแสดงโดยตัว component เอง',
+      'build error เพราะ <slot /> เป็น JSX ที่ไม่ถูกต้อง',
+      'component ตัด footer ของ author ออกแบบเงียบ ๆ แทน',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้ด้วย output ที่ build จริง: React, Preact, และ Solid รับ content ที่ slot มาเป็น prop children ไม่ใช่ผ่าน element <slot /> ของ Astro เอง <slot /> ในไฟล์ .tsx compile เป็น native HTML tag <slot> ตรง ๆ ซึ่งไม่ทำอะไรเลยถ้าไม่มี Shadow DOM ล้อมรอบ',
+  },
+  {
+    q: '`<script is:inline>` อยู่ข้างใน component ที่ใช้สามครั้งบนหน้าเดียว build จริงของหน้านั้นแสดงอะไร ตามที่พิสูจน์ในรีวิวนี้?',
+    options: [
+      'script รันครั้งเดียว ใช้ร่วมกันทั้งสาม instance เหมือน <script> ธรรมดา',
+      'script tag (และ console.log ของมัน) ถูก emit แยกกันสามครั้ง ครั้งละหนึ่ง instance — is:inline ปิดทั้งการ bundle และการ dedupe อัตโนมัติต่อหน้าของ Astro',
+      'is:inline ทำให้ build error เมื่อ component ซ้ำกัน',
+      'มีแค่ script ของ instance แรกเท่านั้นที่ทำงานจริง',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในรีวิวนี้: มี log PROMO_COUNTDOWN_INIT สามบรรทัดตอนมี is:inline เทียบกับแค่หนึ่งบรรทัดพอเอาออก <script> ธรรมดาที่ไม่ inline จะถูก bundle และ dedupe ครั้งเดียวต่อหน้า is:inline ปิดทั้งสองอย่าง emit tag ตามที่เขียนเป๊ะ ครั้งเดียวต่อ instance',
+  },
+];
+
+<Quiz client:visible id="reading-astro/worked-review-2" questions={quizWorkedReview2} />
+
+<ProgressTracker client:visible id="reading-astro/worked-review-2" />

@@ -1,0 +1,593 @@
+---
+title: 'Worked review 1: a blog with content collections, comments, and a listing page'
+description: 'An AI-generated blog — content collections, a post detail page, a comment Action, and a listing page — reviewed bug by bug against a real Astro 7.3.5 probe, astro check, a real build, curl, and the Container API.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## The feature
+
+The prompt was: *"Build a blog with a content collection for posts, a detail page per post with the author's name and a related-posts link, a comment form backed by an Action, and a listing page showing every post's excerpt."* The result below is the kind of first draft an AI assistant hands back — every file looks like something from a recent Astro tutorial, and several pieces genuinely do compile. Read it the way the [reading order](/astro/en/reading-astro/) in this module's index recommends: content and data first, then server-side Astro, then security. It has **7 real bugs**, most of which `astro check` does not catch — check the [AI bug catalog](/astro/en/reading-astro/ai-bug-catalog/) for the general pattern behind each one. Astro's own probe (`tools/probe`) fixes the collection field names used below (`title`, `pubDate`, `draft`, `tags`, `status`, `author` — a `reference('authors')` — `cover`, `coverAlt` on `blog`; `name` on `authors`); the generated code stays inside that shape everywhere it can.
+
+## The generated code
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const authors = defineCollection({
+  loader: glob({ pattern: '**/*.json', base: './src/data/authors' }),
+  schema: z.object({ name: z.string() }),
+});
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  schema: ({ image }) =>
+    z.object({
+      title: z.string(),
+      pubDate: z.coerce.date(),
+      draft: z.boolean().default(false),
+      tags: z.array(z.string()).default([]),
+      status: z.enum(['draft', 'published', 'archived']).default('published'),
+      author: reference('authors'),
+      cover: image(),
+      coverAlt: z.string(),
+    }),
+});
+
+export const collections = { authors, blog };
+```
+
+The schema above requires `title` — but the actual Markdown file the AI generated for the first post doesn't use that key at all:
+
+```yaml
+# src/data/blog/hello-world.md — frontmatter as generated (renamed the field partway through, kept going)
+---
+postTitle: "Hello World"
+pubDate: 2026-01-05
+author: ada
+cover: ./hello-world.jpg
+coverAlt: "A sunrise over a keyboard"
+---
+```
+
+```astro
+---
+// @expect-error TS2551 (entry.render) + TS2339 (reference read as data) + a build-only GetStaticPathsRequired — three bugs in one file, walked through below
+import { getCollection, getEntry } from 'astro:content';
+
+export async function getStaticPaths() {
+  // (nothing here — the AI never wrote this function at all)
+}
+
+const { slug } = Astro.params;
+const posts = await getCollection('blog');
+const post = posts.find((p) => p.id === slug);
+if (!post) throw new Error('Post not found');
+
+const { Content } = await post.render();
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <p>By {post.data.author.name}</p>
+  <Content />
+</article>
+```
+
+```ts
+// src/actions/index.ts
+import { defineAction } from 'astro:actions';
+import { z } from 'astro/zod';
+
+const db = {
+  comments: {
+    create: async (data: { postId: string; body: string }) => ({ id: crypto.randomUUID(), ...data }),
+  },
+};
+
+export const server = {
+  postComment: defineAction({
+    input: z.object({
+      postId: z.string(),
+      body: z.string().min(1).max(2000),
+    }),
+    handler: async (input) => {
+      // (no auth check at all — the form only renders behind a login page,
+      // so the AI assumed that was enough)
+      const comment = await db.comments.create({ postId: input.postId, body: input.body });
+      return comment;
+    },
+  }),
+};
+```
+
+```astro
+---
+// src/components/PostExcerptBad.astro — as generated
+interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt" set:html={excerpt} />
+```
+
+```astro
+---
+// @expect-error TS2339 (Astro.glob) — as generated, a listing page written like a pre-v6 tutorial
+import PostExcerptBad from '../../components/PostExcerptBad.astro';
+
+const posts = await Astro.glob('../../data/blog/*.md');
+---
+<ul>
+  {posts.map((post) => (
+    <li>
+      <h2>{post.frontmatter.title}</h2>
+      <PostExcerptBad excerpt={post.frontmatter.excerpt} />
+    </li>
+  ))}
+</ul>
+```
+
+## The review walk
+
+### Content & data: a schema that requires a field the frontmatter never sets
+
+The schema in `content.config.ts` declares `title: z.string()` as required. The Markdown file above uses `postTitle`, not `title` — a rename that only reached the schema, not the content.
+
+<SpotTheBug code={`schema: z.object({
+  title: z.string(),
+  pubDate: z.coerce.date(),
+  // ...
+})`}>
+Nothing here is wrong in isolation — the schema is perfectly valid Zod. The bug only exists at the boundary between this file and the actual frontmatter, and only `astro sync` (or `astro dev`/`build`, which sync first) ever reads both at once. Proven in the probe: a real `hello-world.md` with `postTitle` instead of `title` fails `astro sync` immediately, naming the collection, the entry, and the exact missing field:
+
+```text
+[InvalidContentEntryDataError] blog → hello-world data does not match collection schema.
+
+  title**: **title: Required
+```
+
+`astro check` never runs this validation at all — it type-checks source files, not content files — so this specific mismatch is invisible until someone runs `astro sync`, `astro dev`, or `astro build`. The fix is renaming the frontmatter key back to `title` (or, if `postTitle` is the real intended name project-wide, renaming the schema field to match it) — the two names must be identical, and nothing catches a drift between them except actually syncing.
+</SpotTheBug>
+
+### Content & data: `Astro.glob()` is gone
+
+The listing page pulls every post with `Astro.glob('../../data/blog/*.md')` — the pre-v6 way to grab many local files at once.
+
+<SpotTheBug code={`const posts = await Astro.glob('../../data/blog/*.md');`}>
+`Astro.glob()` was deprecated in Astro 5 and removed entirely in Astro 6 — it no longer exists on the `Astro` global at all. Proven in the probe with `astro check` against this exact call on the installed Astro 7.3.5:
+
+```text
+error ts(2339): Property 'glob' does not exist on type
+'Readonly<AstroGlobal<Record<string, any>, Record<string, any>>>'.
+
+const posts = await Astro.glob('../../data/blog/*.md');
+```
+
+This is a type error, not a silent runtime surprise — `astro check` catches it immediately, before a build ever runs. The fix is a content collection: `getCollection('blog')`, which additionally validates and types every entry instead of handing back an untyped `frontmatter` object.
+</SpotTheBug>
+
+### Content & data: a dynamic route with no `getStaticPaths()`
+
+`[slug].astro` is a static dynamic route (no `export const prerender = false` anywhere) that never exports `getStaticPaths()` at all — the function is declared but its body is empty, and it isn't even returned from.
+
+<SpotTheBug code={`export async function getStaticPaths() {
+  // (nothing here)
+}
+
+const { slug } = Astro.params;
+const posts = await getCollection('blog');
+const post = posts.find((p) => p.id === slug);`}>
+A static dynamic route file's **entire contract** is `getStaticPaths()` returning the list of paths to build — Astro checks this before a single line of the component script runs, and refuses to guess. An empty function that returns `undefined` is exactly the missing case. Proven in this course's [Dynamic Routes](/astro/en/content-and-data/dynamic-routes/) lesson against a real `astro build` on 7.3.5:
+
+```text
+[GetStaticPathsRequired] `getStaticPaths()` function is required for dynamic routes.
+Make sure that you `export` a `getStaticPaths()` function from your dynamic route.
+  Hint:
+    If you meant for this route to be server-rendered, set `export const prerender = false;` in the page.
+```
+
+Reading `Astro.params` the way the rest of this file does is the **on-demand** pattern — it only makes sense paired with `export const prerender = false` and an adapter, with `getStaticPaths()` dropped entirely, not left in as an empty stub. The fix here (a known, finite set of posts) is a real `getStaticPaths()` that maps `getCollection('blog')` to `{ params: { slug: post.id }, props: { post } }` for every entry, and reads `post` from `Astro.props` instead of re-fetching and re-finding it by id.
+</SpotTheBug>
+
+### Content & data: `entry.render()`, the method that doesn't exist anymore
+
+Once `getStaticPaths()` is fixed and the build reaches this file's template, the next line to fail is `await post.render()`.
+
+<SpotTheBug code={`const { Content } = await post.render();`}>
+Entries returned by `getCollection`/`getEntry` are plain, serializable data — `render` only exists as a **standalone function** imported from `astro:content`, since Astro 5 deprecated the method form and Astro 6 removed it outright. Proven in the probe with `astro check` against this exact call on Astro 7.3.5 (reusing this project's own generated `CollectionEntry<'blog'>` shape):
+
+```text
+error ts(2551): Property 'render' does not exist on type '{ id: string; body?:
+string | undefined; collection: "blog"; data: { title: string; pubDate: Date;
+draft: boolean; tags: string[]; status: "draft" | "published" | "archived";
+author: { collection: "authors"; id: string; }; cover: { ...; }; coverAlt:
+string; }; rendered?: RenderedContent | undefined; filePath?: strin...'.
+Did you mean 'rendered'?
+
+const { Content } = await post.render();
+```
+
+Unlike the `Astro.glob()` case, this one is caught by `astro check` too — TypeScript knows exactly what shape a collection entry has, and `render` isn't part of it. The fix is `import { render } from 'astro:content'` and `const { Content } = await render(post);`.
+</SpotTheBug>
+
+### Content & data: reading a `reference()` field as if it were the resolved entry
+
+The template reads `post.data.author.name` directly — `author` is declared as `reference('authors')` in the schema, not an embedded author object.
+
+<SpotTheBug code={`<p>By {post.data.author.name}</p>`}>
+`reference('authors')` validates that the frontmatter's `author: ada` points at a real entry in the `authors` collection, and stores a validated **id**, not the author's data. Proven in the probe with `astro check` against this exact expression, using the project's own generated types:
+
+```text
+error ts(2339): Property 'name' does not exist on type '{ collection: "authors"; id: string; }'.
+
+const authorName = post.data.author.name;
+                                     ~~~~
+```
+
+This is a compile-time error, not a silent `undefined` — TypeScript knows `post.data.author` is `{ collection: 'authors'; id: string }`, nothing more. The fix is resolving it first: `const author = await getEntry(post.data.author); ... <p>By {author?.name}</p>`.
+</SpotTheBug>
+
+### Server-side Astro: a comment Action with no auth check
+
+`postComment`'s handler never checks who is calling — it assumes the form's own login gate is enough.
+
+<SpotTheBug code={`handler: async (input) => {
+  const comment = await db.comments.create({ postId: input.postId, body: input.body });
+  return comment;
+}`}>
+Astro compiles every Action into a real HTTP endpoint under `/_actions/<name>` — reachable by anyone who knows the name, whether or not they ever loaded the page with the "logged in only" form on it. Proven against a real running build of this exact handler, with no session cookie at all:
+
+```text
+$ curl -s -X POST http://127.0.0.1:5201/_actions/postComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":"first post!"}' \
+    -w "\nHTTP %{http_code}\n"
+[{"id":1,"postId":2,"body":3},"0dc16240-7cd5-4622-9329-71fdb9a43d4e","42","first post!"]
+HTTP 200
+```
+
+A fully-formed comment, created with **zero** authentication, `HTTP 200` — the request never touched the page the form lives on. `astro check` has nothing to say about this: the handler type-checks perfectly, the bug is a missing runtime check, not a wrong type. The fix is rejecting first, before touching the database: `if (!context.locals.user) throw new ActionError({ code: 'UNAUTHORIZED', message: '...' })` — proven against the exact same request once the check is added:
+
+```text
+$ curl -s -X POST http://127.0.0.1:5201/_actions/postComment \
+    -H "Content-Type: application/json" -d '{"postId":"42","body":"first post!"}' \
+    -w "\nHTTP %{http_code}\n"
+{"type":"AstroActionError","code":"UNAUTHORIZED","status":401,"message":"You must be signed in to comment."}
+HTTP 401
+```
+</SpotTheBug>
+
+### Security: `set:html` on a post excerpt
+
+`PostExcerptBad` renders its `excerpt` prop with `set:html` — presumably so a post's own Markdown-derived excerpt can keep its formatting. But the listing page passes `post.frontmatter.excerpt` straight through with no sanitizer, and an excerpt is exactly the kind of field a CMS, a comment-derived summary, or a bulk-import script can put attacker-controlled text into.
+
+<SpotTheBug code={`interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt" set:html={excerpt} />`}>
+`set:html` bypasses Astro's default escaping entirely — it renders the string as markup, verbatim, exactly like `dangerouslySetInnerHTML` in React or `v-html` in Vue. Proven with the Container API against this exact component and an attacker-shaped excerpt:
+
+```text
+✓ PostExcerptBad: set:html executes attacker markup verbatim
+✓ PostExcerptFixed: plain {excerpt} escapes the same input
+
+Test Files  1 passed (1)
+     Tests  2 passed (2)
+```
+
+The first test renders `PostExcerptBad` with `excerpt = "Great post! <img src=x onerror=alert('xss')>"` and confirms the `<img onerror=...>` tag appears **verbatim** in the output HTML — a real, executing XSS payload the instant a browser parses it. The fix is deleting `set:html` and letting Astro's default escaping do its job: `<p class="excerpt">{excerpt}</p>` — the second test proves the identical input comes back as `&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;`, inert text.
+</SpotTheBug>
+
+## The corrected code
+
+```ts
+// src/content.config.ts
+import { defineCollection, reference } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const authors = defineCollection({
+  loader: glob({ pattern: '**/*.json', base: './src/data/authors' }),
+  schema: z.object({ name: z.string() }),
+});
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/[^_]*.{md,mdx}', base: './src/data/blog' }),
+  schema: ({ image }) =>
+    z.object({
+      title: z.string(),
+      pubDate: z.coerce.date(),
+      draft: z.boolean().default(false),
+      tags: z.array(z.string()).default([]),
+      status: z.enum(['draft', 'published', 'archived']).default('published'),
+      author: reference('authors'),
+      cover: image(),
+      coverAlt: z.string(),
+    }),
+});
+
+export const collections = { authors, blog };
+```
+
+```yaml
+# src/data/blog/hello-world.md — frontmatter, fixed: title matches the schema
+---
+title: "Hello World"
+pubDate: 2026-01-05
+author: ada
+cover: ./hello-world.jpg
+coverAlt: "A sunrise over a keyboard"
+---
+```
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import { getCollection, getEntry, render } from 'astro:content';
+
+// FIX (getStaticPaths missing): the real contract for a static dynamic
+// route — one path per entry, the entry itself handed through as a prop.
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+
+const { post } = Astro.props;
+
+// FIX (reference read as data): resolve the id with getEntry before
+// reading anything off it.
+const author = await getEntry(post.data.author);
+
+// FIX (entry.render() legacy): render(entry) is the standalone function,
+// not a method on the entry.
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <p>By {author?.data.name}</p>
+  <Content />
+</article>
+```
+
+```ts
+// src/actions/index.ts
+import { defineAction, ActionError } from 'astro:actions';
+import { z } from 'astro/zod';
+
+const db = {
+  comments: {
+    create: async (data: { postId: string; body: string; userId: string }) => ({ id: crypto.randomUUID(), ...data }),
+  },
+};
+
+export const server = {
+  postComment: defineAction({
+    input: z.object({
+      postId: z.string(),
+      body: z.string().min(1).max(2000),
+    }),
+    handler: async (input, context) => {
+      // FIX (no auth check): reject first, before touching the database —
+      // an Action is a public endpoint regardless of which page's form
+      // calls it.
+      if (!context.locals.user) {
+        throw new ActionError({ code: 'UNAUTHORIZED', message: 'You must be signed in to comment.' });
+      }
+      const comment = await db.comments.create({
+        postId: input.postId,
+        body: input.body,
+        userId: context.locals.user.id,
+      });
+      return comment;
+    },
+  }),
+};
+```
+
+```astro
+---
+// src/components/PostExcerptBad.astro — kept only for the test below, contrasted with the fix
+interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt" set:html={excerpt} />
+```
+
+```astro
+---
+// src/components/PostExcerptFixed.astro
+// FIX (set:html on the excerpt): plain {excerpt} — Astro's default
+// escaping renders any markup as inert text instead of executing it.
+interface Props { excerpt: string }
+const { excerpt } = Astro.props;
+---
+<p class="excerpt">{excerpt}</p>
+```
+
+```astro
+---
+// src/pages/blog/index.astro
+// FIX (Astro.glob): a real, typed, validated content collection.
+import { getCollection } from 'astro:content';
+import PostExcerptFixed from '../../components/PostExcerptFixed.astro';
+
+const posts = (await getCollection('blog')).filter((post) => !post.data.draft);
+---
+<ul>
+  {posts.map((post) => (
+    <li>
+      <h2>{post.data.title}</h2>
+      <PostExcerptFixed excerpt={(post.body ?? '').slice(0, 140)} />
+    </li>
+  ))}
+</ul>
+```
+
+```ts
+// src/__tests__/excerpt.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import PostExcerptBad from '../components/PostExcerptBad.astro';
+import PostExcerptFixed from '../components/PostExcerptFixed.astro';
+
+const attackerExcerpt = "Great post! <img src=x onerror=alert('xss')>";
+
+describe('excerpt rendering: set:html vs escaped text', () => {
+  it('PostExcerptBad: set:html executes attacker markup verbatim', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(PostExcerptBad, { props: { excerpt: attackerExcerpt } });
+    expect(html).toContain("<img src=x onerror=alert('xss')>");
+  });
+
+  it('PostExcerptFixed: plain {excerpt} escapes the same input', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(PostExcerptFixed, { props: { excerpt: attackerExcerpt } });
+    expect(html).toContain('&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;');
+    expect(html).not.toContain("<img src=x onerror=alert('xss')>");
+  });
+});
+```
+
+Type-checked clean against `astro check` on the installed Astro 7.3.5 and run against the exact test file above:
+
+```text
+✓ PostExcerptBad: set:html executes attacker markup verbatim
+✓ PostExcerptFixed: plain {excerpt} escapes the same input
+
+Test Files  1 passed (1)
+     Tests  2 passed (2)
+```
+
+## What changed and why
+
+| # | Bug | Category | Fix |
+|---|---|---|---|
+| 1 | `postTitle` in frontmatter vs `title` in the schema | Content & data | Rename the frontmatter key to match the schema — proven with a real `astro sync` `InvalidContentEntryDataError` |
+| 2 | `Astro.glob('../../data/blog/*.md')` | Content & data | `getCollection('blog')` — a real `astro check` `ts(2339)` catches the old call |
+| 3 | Empty `getStaticPaths()` on a static dynamic route | Content & data | Return one `{ params, props }` per entry from `getCollection('blog')` — a real `GetStaticPathsRequired` build error without it |
+| 4 | `post.render()` | Content & data | `render(post)`, imported from `astro:content` — a real `astro check` `ts(2551)` catches the method form |
+| 5 | `post.data.author.name` on a `reference()` field | Content & data | `await getEntry(post.data.author)` first — a real `astro check` `ts(2339)` catches the direct read |
+| 6 | `postComment` handler with no auth check | Server-side Astro | `if (!context.locals.user) throw new ActionError(...)` — proven with a real `curl` 200 → 401 |
+| 7 | `set:html={excerpt}` on unsanitized text | Security | Plain `{excerpt}` — proven with the Container API: verbatim markup vs. escaped text |
+
+## Mental Model
+
+Five of these seven bugs are about **one file assuming a fact about another file** — the schema assuming the frontmatter kept the same key, the template assuming `render`/`reference` still work the pre-v6 way, the listing page assuming `Astro.glob` still exists. Astro's content layer is very good at proving a *given* schema against *given* data, or a *given* type against a *given* expression — it has no way to notice that the two pieces of a project drifted apart from each other, because from its perspective, both were correct on their own. The other two (the missing auth check, `set:html` on unsanitized text) are not framework version drift at all — they are a security assumption ("the login gate covers it," "this text is safe") that nothing in Astro checks for you, ever.
+
+## Common Misconceptions
+
+- **"If `content.config.ts` and the page component both type-check, the content is valid."** Proven above: `astro check` never reads a single Markdown file's frontmatter — that validation only happens on `astro sync`/`dev`/`build`, and a schema/frontmatter mismatch is invisible until one of those runs.
+- **"An Action's handler is only reachable through the form that calls it."** Proven above with a real `curl`: every Action is a public POST endpoint at `/_actions/<name>`, regardless of which page (or no page) made the request.
+- **"`reference()` fields already contain the linked entry's data."** Proven above: `post.data.author` is `{ collection: 'authors'; id: string }` — a validated id, not the author. Reading `.name` off it directly is a compile-time error, not a silent `undefined`.
+
+<Mermaid title="Where each bug sits in this blog's request flow" code={wr1Diagram} />
+
+export const wr1Diagram = `flowchart TD
+  A["content.config.ts: schema"] -->|"1: postTitle vs title"| B["src/data/blog/*.md"]
+  B --> C["getCollection('blog')"]
+  C --> D["src/pages/blog/index.astro"]
+  D -->|"2: Astro.glob() removed"| D
+  D --> E["PostExcerptBad: set:html(excerpt)"]
+  E -->|"7: XSS via unsanitized excerpt"| E
+  C --> F["src/pages/blog/[slug].astro"]
+  F -->|"3: empty getStaticPaths()"| F
+  F -->|"4: post.render() removed"| F
+  F -->|"5: post.data.author.name"| F
+  G["comment form"] --> H["postComment Action"]
+  H -->|"6: no auth check"| H
+`;
+
+<Callout title="The one-line takeaway">
+Every bug in this review compiles or type-checks somewhere it shouldn't have to — a schema that's individually valid, a handler whose types are fine, a component that renders exactly what it's told to — because each one is a claim about a fact *outside* the file itself (does the frontmatter still use this key, is this API still on the `Astro` global, is this request actually authenticated) that only a real sync, build, or curl can check.
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: "```text\n[InvalidContentEntryDataError] blog → hello-world data does not match collection schema.\n\n  title**: **title: Required\n```\nThe schema requires `title: z.string()`. What real command produced this error, and why doesn't `astro check` catch it first?",
+    options: [
+      '`astro check` — it validates every frontmatter field against the schema',
+      '`astro sync` (or `dev`/`build`, which sync first) — `astro check` type-checks source files, it never reads a Markdown file’s frontmatter against a schema',
+      'This is a made-up error; Astro does not validate frontmatter',
+      '`npm install` — schema validation happens at install time',
+    ],
+    answer: 1,
+    explain: 'Proven in this review: the loader/schema validation that produces InvalidContentEntryDataError only runs when content is actually synced (astro sync, or astro dev/build, which sync first) — astro check has no visibility into individual content files at all.',
+  },
+  {
+    q: 'Why does `Astro.glob(\'../../data/blog/*.md\')` fail `astro check` with `ts(2339)`, while the missing `getStaticPaths()` only fails a real `astro build`?',
+    options: [
+      'They are the same kind of failure — both are type errors',
+      '`Astro.glob` was removed from the `Astro` global entirely, so referencing it is a static type error; `getStaticPaths()` is a contract astro check never evaluates — only a real build calls it and can notice it is missing',
+      'astro check does not exist in Astro 7',
+      'Both errors only appear in production builds',
+    ],
+    answer: 1,
+    explain: 'Astro.glob() being gone from the type declarations makes it a compile-time property-access error astro check catches immediately. getStaticPaths() is a runtime contract the build process calls and inspects — astro check never invokes it, so a route that silently fails to satisfy that contract passes check clean.',
+  },
+  {
+    q: "```ts\nconst { Content } = await post.render();\n```\n`post` came from `getCollection('blog')`. What happens on Astro 7.3.5?",
+    options: [
+      'It works — .render() is a supported alias for render(entry)',
+      'A real astro check error: `Property ‘render’ does not exist` on the entry’s type — render only exists as a standalone function imported from astro:content',
+      'It renders the raw frontmatter instead of the body',
+      'It only fails when the post has no images',
+    ],
+    answer: 1,
+    explain: 'Proven in this review with astro check against the project’s own generated CollectionEntry<\'blog\'> type: render is not a property on an entry. The method form was deprecated in Astro 5 and removed in Astro 6 — import render from astro:content and call render(post).',
+  },
+  {
+    q: '`author` is declared as `reference(\'authors\')` in the schema. Why does `post.data.author.name` fail `astro check` instead of silently returning `undefined`?',
+    options: [
+      'reference() fields are always undefined until resolved, and TypeScript cannot express that',
+      'A reference() field’s real type is `{ collection: ‘authors’; id: string }` — a validated id, never the resolved data — so `.name` is a genuine, catchable property-access error',
+      'It does return undefined silently — the question is wrong',
+      'reference() fields are only checked at runtime, never by astro check',
+    ],
+    answer: 1,
+    explain: 'Proven in this review: astro check reports ts(2339) Property \'name\' does not exist on type \'{ collection: "authors"; id: string; }\'. The id must be resolved with getEntry(post.data.author) before any of the author\'s own fields are readable.',
+  },
+  {
+    q: '```text\n$ curl -s -X POST .../_actions/postComment -d \'{"postId":"42","body":"first post!"}\'\n[{"id":1,"postId":2,"body":3},"...","42","first post!"]\nHTTP 200\n```\nThis request carried no session cookie at all. What does the HTTP 200 prove about the `postComment` handler?',
+    options: [
+      'Nothing unusual — Actions require a session by default',
+      'The handler never checks who is calling before writing to the database — the comment form’s own login gate is irrelevant to a direct request against the Action’s real endpoint',
+      'curl cannot actually reach an Action endpoint, so this output is fabricated',
+      'The 200 means the comment was rejected but logged anyway',
+    ],
+    answer: 1,
+    explain: 'Proven in this review: the exact same request against the fixed handler (which checks context.locals.user first) returns a 401 instead. An Action is a public POST endpoint regardless of which page’s UI happens to call it — authorization has to live in the handler itself.',
+  },
+  {
+    q: '```jsx\ninterface Props { excerpt: string }\nconst { excerpt } = Astro.props;\n---\n<p class="excerpt" set:html={excerpt} />\n```\nA test renders this component with `excerpt = "Great post! <img src=x onerror=alert(\'xss\')>"`. What does the rendered HTML contain?',
+    options: [
+      'The tag escaped as text, exactly like a plain `{excerpt}` expression would produce',
+      'The `<img src=x onerror=...>` tag verbatim — set:html bypasses Astro’s default escaping entirely, so any markup in excerpt renders (and, in a real browser, executes) as-is',
+      'A build error, since set:html requires a sanitized string type',
+      'Nothing — set:html silently strips script-like content',
+    ],
+    answer: 1,
+    explain: 'Proven with the Container API in this review: PostExcerptBad\'s rendered output contains the <img onerror=...> tag exactly as written. set:html is the injection point the moment its argument contains attacker-influenced content — treat it like dangerouslySetInnerHTML.',
+  },
+  {
+    q: 'Why does a static dynamic route file with an empty `getStaticPaths()` function (declared, but returning nothing) fail differently than one with no `getStaticPaths()` export at all?',
+    options: [
+      'It does not fail differently — both produce the exact same error text',
+      'Both still fail: Astro validates what getStaticPaths() actually returns, and undefined satisfies neither an array of paths nor the missing-export case cleanly — either way, a real build refuses to guess the set of pages',
+      'An empty function is treated as "build zero pages" with no error',
+      'Only the no-export case is checked; an empty function always builds fine',
+    ],
+    answer: 1,
+    explain: 'A static dynamic route\'s entire contract is that getStaticPaths() returns the list of paths to build. Astro checks this before running the component script at all — declaring the function but never returning a valid array satisfies the letter of "export a getStaticPaths" while still failing the actual contract, which this review\'s fixed version satisfies by mapping getCollection(\'blog\') to real { params, props } entries.',
+  },
+];
+
+<Quiz client:visible id="reading-astro/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-astro/worked-review-1" />
