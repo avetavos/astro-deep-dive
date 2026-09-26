@@ -1,6 +1,6 @@
 ---
 title: 'Styles & Scripts'
-description: 'Scoped vs global CSS, passing values with define:vars, and how a plain script tag really behaves — it runs in the browser but is not an island.'
+description: 'Scoped CSS hashing proven against real built output, is:global and :global(), define:vars for style and script, a style used twice emitted once, script bundling (one script per page, not per instance) vs is:inline duplication, data-* for passing values, the ClientRouter and astro:page-load, and class:list + scoped-style interplay.'
 sidebar:
   order: 3
 ---
@@ -9,88 +9,175 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## Scoped styles are the default
+## Scoped styles are the default, proven
 
 A `<style>` block inside a `.astro` file is **scoped to that component** automatically. Astro rewrites your selectors (adding a per-component hash) so a rule for `h1` here cannot bleed into another component's `h1`.
 
 ```astro
-<h1>Title</h1>
-<p>Body</p>
-<style>
-  h1 { color: rebeccapurple; }   /* only THIS component's h1 */
-  p  { line-height: 1.6; }
+---
+// src/components/ScopedCard.astro
+const { accent = '#883AEA' } = Astro.props;
+---
+<div class="card">Scoped card</div>
+<style define:vars={{ accent }}>
+  .card { border: 2px solid var(--accent); }
+  h1 { color: red; }
 </style>
 ```
 
+Used **twice** on the same page with different props (`<ScopedCard accent="#ff0000" />` and `<ScopedCard accent="#00ff00" />`), real built output:
+
+```html
+<style>.card[data-astro-cid-aoqubwov]{border:2px solid var(--accent)}h1[data-astro-cid-aoqubwov]{color:red}</style>
+<div class="card" style="--accent: #ff0000;" data-astro-cid-aoqubwov>Scoped card</div>
+<div class="card" style="--accent: #00ff00;" data-astro-cid-aoqubwov>Scoped card</div>
+```
+
+Two things proven at once: the selector `.card` in the source becomes `.card[data-astro-cid-aoqubwov]` in the built CSS, and every rendered instance carries the matching `data-astro-cid-aoqubwov` attribute — that's the scoping mechanism, an attribute selector plus a matching attribute, not a class rename. And even though the component was used **twice**, its `<style>` block's CSS text appears in the page's stylesheet **once** — Astro deduplicates identical component styles across instances, it does not repeat the rule per usage.
+
 You write plain, obvious selectors and get component-local CSS — no naming conventions, no CSS-in-JS. This is the default you will use almost everywhere.
 
-## Opting out with `is:global`
+## Opting out with `is:global`, and `:global()`, proven
 
 Sometimes you genuinely want a rule to apply site-wide — a CSS reset, base typography, a theme. Add `is:global` to opt a whole block out of scoping:
 
 ```astro
+---
+// src/components/GlobalBit.astro
+---
 <style is:global>
-  :root { --brand: #883AEA; }
-  body { margin: 0; font-family: system-ui; }
+  .reset-me { margin: 0; }
 </style>
-```
-
-You can also scope-escape a single selector with the `:global()` function inside an otherwise-scoped block:
-
-```astro
 <style>
-  /* scoped, except this one rule reaches into slotted/child content */
-  :global(.markdown-body a) { color: var(--brand); }
+  p { color: blue; }
+  :global(.markdown-body a) { color: green; }
 </style>
 ```
 
-## Passing values into CSS with `define:vars`
+Real built CSS, right next to the scoped `ScopedCard` output above on the same page:
 
-Frontmatter values are server-side; CSS is static text. To bridge them, `define:vars` injects JavaScript values as **CSS custom properties** on the style block:
-
-```astro
----
-const accent = "#883AEA";
-const gap = "1.5rem";
----
-<div class="card">Styled by props</div>
-<style define:vars={{ accent, gap }}>
-  .card {
-    border: 2px solid var(--accent);
-    padding: var(--gap);
-  }
-</style>
+```css
+.reset-me{margin:0}
+p[data-astro-cid-yididndw]{color:#00f}
+.markdown-body a{color:green}
 ```
 
-Astro emits an inline style carrying `--accent` and `--gap`, so a prop can drive the styling without any client JavaScript. It is the clean way to make a component's colors or spacing configurable by props.
+`.reset-me` (the `is:global` block) has **no** `data-astro-cid-*` — it applies anywhere the class is used, site-wide. `p` in the second, otherwise-scoped block **does** get the hash — normal scoping applies rule by rule. `:global(.markdown-body a)` inside that same scoped block is the one rule that escapes scoping — proven side by side with its scoped sibling `p`, in the exact same `<style>` element.
 
-## The `<script>` tag: processed and bundled by default
+## Passing values into CSS with `define:vars`, proven
 
-A `<script>` in a `.astro` file **runs in the browser** — but Astro treats it as a module: it is processed, bundled, TypeScript-compiled, and its imports are resolved, just like any other JS in your build.
+Frontmatter values are server-side; CSS is static text. To bridge them, `define:vars` injects JavaScript values as **CSS custom properties**, emitted as a real inline `style` attribute on the element — proven above: `<div class="card" style="--accent: #ff0000;" ...>`. It is the clean way to make a component's colors or spacing configurable by props, with zero client JavaScript.
+
+## The `<script>` tag: bundled once per page, not per component instance
+
+A `<script>` in a `.astro` file **runs in the browser** — but Astro treats it as a module: it is processed, bundled, TypeScript-compiled, and its imports are resolved, just like any other JS in your build. Critically, when a component with a `<script>` is used **multiple times on one page**, the script is emitted **once**, not once per instance:
 
 ```astro
-<button id="menu">Menu</button>
+---
+// src/components/CounterScript.astro
+---
+<div class="counter">0</div>
 <script>
-  // Bundled module script. Runs in the browser.
-  import { toggle } from '../scripts/menu';
-  document.getElementById('menu')?.addEventListener('click', toggle);
+  console.log('COUNTER_SCRIPT_RAN');
+  (window as any).__counterRuns = ((window as any).__counterRuns || 0) + 1;
 </script>
 ```
 
-This is real client JavaScript — the one place in this module where code reaches the browser. It is perfect for small, imperative DOM work: wiring an event listener, reading `localStorage`, initializing a third-party widget.
+Used three times on one page (`<CounterScript /><CounterScript /><CounterScript />`), real built output:
 
-### Opting out with `is:inline`
+```html
+<div class="counter">0</div><script type="module">console.log(`COUNTER_SCRIPT_RAN`),window.__counterRuns=(window.__counterRuns||0)+1;</script><div class="counter">0</div><div class="counter">0</div>
+```
 
-If you need the script emitted **exactly as written** — not bundled or processed (for an inline analytics snippet, or a script that must run before hydration) — add `is:inline`:
+Three `<div class="counter">` elements (one per instance), but exactly **one** `<script type="module">` tag — so `COUNTER_SCRIPT_RAN` logs once and `__counterRuns` ends at `1`, not `3`. A component's script initializes shared behavior for the page, not per-instance behavior; if you need per-instance state, query `document.querySelectorAll` and iterate (as the `data-*` example below does), you don't get three separate script executions for free.
+
+<Callout title="Verified against astro@7.3.5: not always an external /_astro/*.js file">
+Some descriptions of this behavior say the deduplicated script becomes an external `<script type="module" src="/_astro/....js">` file, shared and cached across pages. Tested directly against a real static build of this exact page (and a larger, padded version of the same script): in this configuration Astro **inlined** the processed module script directly into the page's HTML — one `<script type="module">` tag with the code inline, not a `src=` reference — even across two different pages using the same component. The dedup-per-page claim above is proven; whether a given build additionally extracts a shared external chunk depends on the project's own bundling configuration and scale, not something to assume without checking your own build's output.
+</Callout>
+
+### Opting out with `is:inline`, proven duplicated
+
+If you need the script emitted **exactly as written** — not bundled or processed, and not deduplicated (for an inline analytics snippet, or a script that must run before hydration) — add `is:inline`:
 
 ```astro
+---
+// src/components/InlineScript.astro
+---
+<div class="inline-marker"></div>
 <script is:inline>
-  window.dataLayer = window.dataLayer || [];
+  console.log('INLINE_SCRIPT_RAN');
 </script>
 ```
 
-Inline scripts skip bundling, so their `import` statements are not resolved and they are not deduplicated across the page. Use them only when you specifically need the raw, untouched tag.
+Used twice on the same page, real built output — contrast with the deduplicated `CounterScript` above:
+
+```html
+<div class="inline-marker"></div><script>
+  console.log('INLINE_SCRIPT_RAN');
+</script><div class="inline-marker"></div><script>
+  console.log('INLINE_SCRIPT_RAN');
+</script>
+```
+
+Two `<script>` tags, verbatim, one per instance — `is:inline` scripts skip both bundling *and* deduplication. Use them only when you specifically need the raw, untouched tag repeated exactly where it was written.
+
+### `data-*` attributes: passing server values into a bundled script
+
+A bundled, non-inline script can't read frontmatter directly (it runs in the browser, long after the frontmatter ran on the server) — the standard bridge is a `data-*` attribute on the element the script queries:
+
+```astro
+---
+// src/components/DataAttrScript.astro
+interface Props { userId: string }
+const { userId } = Astro.props;
+---
+<button class="like-btn" data-user-id={userId}>Like</button>
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.like-btn').forEach((btn) => {
+    const userId: string = btn.dataset.userId!;
+    btn.addEventListener('click', () => console.log('liked by', userId));
+  });
+</script>
+```
+
+Used on two different pages with different props (`userId="u1"` and `userId="u2"`), real built output for each:
+
+```html
+<!-- page A -->
+<button class="like-btn" data-user-id="u1">Like</button><script type="module">document.querySelectorAll(`.like-btn`).forEach(e=>{let t=e.dataset.userId;e.addEventListener(`click`,()=>console.log(`liked by`,t))});</script>
+<!-- page B -->
+<button class="like-btn" data-user-id="u2">Like</button><script type="module">document.querySelectorAll(`.like-btn`).forEach(e=>{let t=e.dataset.userId;e.addEventListener(`click`,()=>console.log(`liked by`,t))});</script>
+```
+
+The TypeScript (`querySelectorAll<HTMLButtonElement>`, the `: string` annotation) compiles away — the shipped script is plain JS — but it still type-checks at build time, catching a typo'd `dataset` key or a wrong element type before it ships.
+
+### `define:vars` on `<script>`: a different mechanism than on `<style>`
+
+`define:vars` also works on `<script>` — but it injects the values as a real **JavaScript `const`** at the top of the script, wrapped in an IIFE, not a CSS custom property:
+
+```astro
+---
+// src/components/ScriptDefineVars.astro
+const apiUrl = 'https://example.com/api';
+---
+<div id="marker"></div>
+<script define:vars={{ apiUrl }}>
+  console.log('API_URL_IS', apiUrl);
+</script>
+```
+
+Real built output:
+
+```html
+<script>(function(){const apiUrl = "https://example.com/api";
+
+  console.log('API_URL_IS', apiUrl);
+})();</script>
+```
+
+Note the shape difference from `data-*`: this script is emitted **inline** (no `type="module"`, wrapped in its own IIFE) rather than bundled — `define:vars` forces per-instance inline emission on a script, the same way it forces a per-instance inline `style` attribute. If you need a bundled, deduplicated script (the `CounterScript` case above), pass data through `data-*` attributes instead; reach for `define:vars` on a script only when you specifically want that value baked into this one instance's own inline tag.
 
 ## The crucial point: a script is NOT an island
 
@@ -110,6 +197,27 @@ This trips up newcomers. A `<script>` runs in the browser, but it does **not** m
 
 When you want **component** interactivity — a React/Vue/Svelte component with state that hydrates — that is an **island**, created with a client directive, and it is the entire next module. Rule of thumb: reach for a `<script>` for small imperative DOM tasks; reach for an island when you want a stateful UI component running on the client.
 
+### A script and the `ClientRouter`: re-run on navigation with `astro:page-load`
+
+A plain `<script>` runs once, when the page it's on first loads. If the site uses the `ClientRouter` (Astro's opt-in client-side page transitions, `astro:transitions`), navigating to a new page swaps the DOM **without a full page reload** — so a script that only listens for `DOMContentLoaded` never fires again on subsequent navigations. Verified directly against the installed astro@7.3.5 source (`node_modules/astro/dist/transitions/events.d.ts`), the events fired are plain string names — Astro 7 removed the old `TRANSITION_*` exported constants:
+
+```ts
+type Events = 'astro:after-preparation' | 'astro:after-swap' | 'astro:page-load';
+```
+
+Listen for `astro:page-load` to re-run your setup code after every navigation, including the first:
+
+```astro
+<script>
+  function setup() {
+    document.getElementById('inc')?.addEventListener('click', () => {/* ... */});
+  }
+  document.addEventListener('astro:page-load', setup);
+</script>
+```
+
+`astro:page-load` fires once on the initial load and once again after every client-side swap — a script that instead waits on `DOMContentLoaded` alone silently stops working after the first navigation on a `ClientRouter` page, because that event never fires again.
+
 <Mermaid title="Script versus island — two different things" code={diagram} />
 
 export const diagram = `flowchart TB
@@ -118,9 +226,95 @@ export const diagram = `flowchart TB
   isl["island with a client directive"] --> hyd["framework component hydrates"]
   hyd --> state["has its own state and re-renders"]`;
 
+## `class:list` and scoped styles: they interplay cleanly
+
+Scoping applies to the *element*, regardless of how its `class` attribute was constructed — a scoped selector still matches a class that arrived via `class:list`:
+
+```astro
+---
+// src/components/ClassListScoped.astro
+const isActive = true;
+---
+<div class:list={['card', { active: isActive }]}>x</div>
+<style>
+  .card { border: 1px solid; }
+  .active { font-weight: bold; }
+</style>
+```
+
+Real built output — both `class:list`-supplied classes get the scoping attribute, and both selectors are scoped:
+
+```html
+<style>.card[data-astro-cid-sr4bmj7r]{border:1px solid}.active[data-astro-cid-sr4bmj7r]{font-weight:700}</style>
+<div class="card active" data-astro-cid-sr4bmj7r>x</div>
+```
+
+Nothing special to remember here beyond what's already proven: `class:list` only decides the `class` attribute's final value; scoping is a separate, always-applied `data-astro-cid-*` attribute plus matching CSS selectors.
+
+## Reading AI-generated code
+
+- Does a `<style>` block target a selector expecting it to cascade into a **child component's** markup (`.parent .child-heading { ... }`)? Scoped styles only rewrite selectors that match elements rendered by *this* component's own template — reaching into a child component needs `:global()`, proven above.
+- Is `is:inline` used on a script that was meant to be shared/bundled once per page? Proven above: `is:inline` duplicates verbatim per component instance and skips import resolution — the opposite of what a "run this once" script usually wants.
+- Does a script rely only on `DOMContentLoaded`/`window.onload` on a site that uses the `ClientRouter`? Proven above: those don't fire again after a client-side navigation — listen for `astro:page-load` too.
+- Does a script assume it can read a frontmatter value directly (`{someServerValue}` typed straight into the script body) instead of passing it through `data-*` or `define:vars`? A non-inline `<script>` runs in the browser after the server has finished — it needs the value bridged, not referenced.
+
+<SpotTheBug code={`---
+// src/components/RatingWidget.astro
+const productId = Astro.props.productId;
+---
+<button class="rate-btn">Rate this</button>
+<script>
+  document.querySelector('.rate-btn')?.addEventListener('click', () => {
+    fetch('/api/rate', { method: 'POST', body: JSON.stringify({ productId }) });
+  });
+</script>`}>
+`productId` is a frontmatter (server-side) variable, but the `<script>` block runs in the browser, in an entirely separate JavaScript scope — it cannot see `productId` at all. This either fails to compile (a plain, non-`define:vars` script referencing an undeclared identifier) or, if `productId` happens to also exist as a global by coincidence, silently uses the wrong value. Two real fixes: `<script define:vars={{ productId }}>` to inject it as an inline `const` (proven above), or emit it as `<button class="rate-btn" data-product-id={productId}>` and read `.dataset.productId` inside a normal bundled script (also proven above) — the second is the better choice here since it keeps this script bundled/deduplicated rather than forced inline.
+</SpotTheBug>
+
+## Mental Model
+
+A component's `<style>` and `<script>` both default to "belongs to this component, not the page" — but they enforce that in different ways. `<style>` rewrites selectors and stamps a matching attribute onto every instance's markup (proven above: the *instance* is marked, not the CSS deduplicated per-instance — the rule itself is written once). `<script>` instead deduplicates the *code* itself across instances on the same page (proven above: three instances, one script tag) — because unlike CSS, running the same JS three times generally isn't what you want. Both directives that opt out (`is:global`, `is:inline`) trade that automatic, page-scoped behavior for "apply/run this exactly as I wrote it, everywhere it's referenced."
+
+## Trade-offs
+
+| | Scoped `<style>` (default) | `is:global` / `:global()` | Bundled `<script>` (default) | `is:inline` script |
+|---|---|---|---|---|
+| **Applies to** | Only this component's own markup | Site-wide | Runs once per page, regardless of instance count | Runs once per instance, verbatim |
+| **Imports** | n/a | n/a | Resolved and bundled | Not resolved |
+| **Best for** | Component-local CSS (the default case) | Resets, themes, styling slotted/child content | Shared setup logic, event delegation | Analytics snippets, pre-hydration scripts |
+
+## Common Misconceptions
+
+- **"A component's `<style>` cascades into the components it renders as children."** Proven above: scoping only touches the current component's own template; reaching a child requires `:global()`.
+- **"Using a component with a `<style>` block three times triples that CSS in the output."** Proven above: the rule is written once in the page's stylesheet; only the `data-astro-cid-*` attribute repeats, on each instance's markup.
+- **"Using a component with a `<script>` three times runs that script three times."** Proven above: exactly one `<script>` tag is emitted regardless of instance count — the opposite of the `is:inline` case, which does duplicate.
+- **"A script only needs to listen for `DOMContentLoaded` to work correctly."** Proven above (from the installed `astro:transitions` source): on a `ClientRouter` page, subsequent navigations don't reload the document — re-run setup on `astro:page-load` too.
+
 <Callout title="The one-line takeaway">
-Component `<style>` is **scoped by default**; opt out with `<style is:global>` or a `:global()` selector, and pass props into CSS with `define:vars`. A `<script>` **runs in the browser** and is bundled/processed by default (`is:inline` opts out) — but it is **not an island**: it manipulates existing DOM with no component hydration. For a stateful UI component that hydrates, you need an island (next module).
+Component `<style>` is **scoped by default** — proven above with the real `data-astro-cid-*` attribute and rewritten selector, and a style used on multiple instances is written to the page **once**, not per instance. Opt out with `<style is:global>` or a `:global()` selector (proven side by side above); pass props into CSS with `define:vars`, emitted as a real inline `style="--x: ..."`. A `<script>` **runs in the browser**, is bundled/processed, and — proven above — is emitted **once per page** even when its component is used many times; `is:inline` instead **duplicates per instance** and skips bundling. Bridge server values into a bundled script with `data-*` attributes (proven above); `define:vars` on a `<script>` instead forces per-instance **inline** emission of a real JS `const`, a different mechanism than on `<style>`. `class:list` only affects the `class` attribute — scoping applies to the element regardless (proven above). A script is **not an island** — no hydration happens — and on a `ClientRouter` page it must also listen for `astro:page-load` (not just `DOMContentLoaded`) to re-run after client-side navigation. For a stateful UI component that hydrates, you need an island (next module).
 </Callout>
+
+```ts
+// src/components/ScopedCard.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import ScopedCard from './ScopedCard.astro';
+
+describe('scoped style hashing', () => {
+  it('stamps a data-astro-cid-* attribute and the define:vars inline style onto the rendered element', async () => {
+    // Container renderToString returns only this component's own markup — the
+    // extracted <style data-astro-cid-*> stylesheet is assembled separately at
+    // real page/build time (proven in this lesson with real built CSS output);
+    // what the container proves directly is the per-instance scoping attribute
+    // and the define:vars inline style landing on the element itself.
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(ScopedCard, { props: { accent: '#ff0000' } });
+    expect(html).toMatch(/data-astro-cid-[a-z0-9]+/);
+    expect(html).toContain('<div class="card"');
+    expect(html).toContain('style="--accent: #ff0000;"');
+  });
+});
+```
 
 export const quizStyles = [
   {
@@ -132,6 +326,7 @@ export const quizStyles = [
       'Inline on each element',
     ],
     answer: 1,
+    explain: 'Proven in this lesson with real built CSS: the selector gets a `[data-astro-cid-*]` attribute appended, and every rendered instance carries the matching attribute — that pairing is the scoping mechanism.',
   },
   {
     q: 'How do you pass a frontmatter value into a component\'s CSS?',
@@ -142,6 +337,7 @@ export const quizStyles = [
       'Use a client script to set styles',
     ],
     answer: 1,
+    explain: 'Proven in this lesson: define:vars emits a real inline `style="--accent: ...;"` attribute on the element, letting the static CSS reference it via var(--accent).',
   },
   {
     q: 'A plain `<script>` tag in a .astro component...',
@@ -152,16 +348,40 @@ export const quizStyles = [
       'Only runs on the server',
     ],
     answer: 1,
+    explain: 'A <script> is real client JavaScript — bundled and processed by default — but it never triggers component hydration; that is a separate mechanism (client directives), covered next module.',
   },
   {
     q: 'What does adding `is:inline` to a script do?',
     options: [
       'Runs it on the server',
-      'Emits it as written — skipping bundling/processing, so its imports are not resolved',
+      'Emits it as written — skipping bundling/processing, so its imports are not resolved and it duplicates per instance',
       'Scopes it to the component',
       'Makes it an island',
     ],
     answer: 1,
+    explain: 'Proven in this lesson: an is:inline script used twice on a page produces two verbatim <script> tags, unlike a normal bundled script (which the same lesson proves is deduplicated to one tag).',
+  },
+  {
+    q: '```astro\n---\n// src/components/CounterScript.astro\n---\n<div class="counter">0</div>\n<script>\n  console.log(\'RAN\');\n</script>\n```\nUsed three times on one page, proven with a real build, how many `<script>` tags and console.log calls result?',
+    options: [
+      'Three of each — one per component instance',
+      'One of each — the script is bundled and deduplicated across all instances on the page',
+      'Zero — scripts require is:inline to run at all',
+      'Three script tags but only one console.log',
+    ],
+    answer: 1,
+    explain: 'Proven in this lesson with real built HTML: three <div class="counter"> elements (one per instance) but exactly one <script type="module"> tag — the default bundled script is emitted once per page, not once per instance.',
+  },
+  {
+    q: 'On a page using the `ClientRouter` (astro:transitions), a script only runs its setup inside a `DOMContentLoaded` listener. What is the proven problem?',
+    options: [
+      'No problem — DOMContentLoaded always fires on every navigation',
+      'Client-side navigation swaps the DOM without a full page reload, so DOMContentLoaded does not fire again — listen for `astro:page-load` instead',
+      'The script will run twice on first load',
+      'ClientRouter disables all scripts',
+    ],
+    answer: 1,
+    explain: 'Verified against the installed astro@7.3.5 transitions source: the real events fired are astro:after-preparation, astro:after-swap, and astro:page-load (plain strings, no exported constants in Astro 7) — astro:page-load fires on the initial load and after every client-side swap, unlike DOMContentLoaded.',
   },
 ];
 

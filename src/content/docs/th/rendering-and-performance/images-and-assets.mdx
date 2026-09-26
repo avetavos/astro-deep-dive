@@ -97,7 +97,7 @@ browser เลือก `<source>` แรกที่รองรับ (AVIF �
 
 ## SVG ในฐานะ component
 
-import ไฟล์ `.svg` ตรง ๆ แล้ว Astro จะแปลงมันเป็น component จริง — render แบบ `<Logo />` แทนที่จะเป็น `<img src={logoUrl} />` prop เพิ่มเติมที่ส่งเข้าไปจะกลายเป็น literal HTML attribute บน root `<svg>` (Astro ไม่ได้ map prop ให้ `viewBox`/scaling อย่างฉลาด):
+`import` ไฟล์ `.svg` ตรง ๆ แล้ว Astro จะแปลงมันเป็น component จริง — render แบบ `<Logo />` แทนที่จะเป็น `<img src={logoUrl} />` prop เพิ่มเติมที่ส่งเข้าไปจะกลายเป็น literal HTML attribute บน root `<svg>` (Astro ไม่ได้ map prop ให้ `viewBox`/scaling อย่างฉลาด):
 
 ```astro
 ---

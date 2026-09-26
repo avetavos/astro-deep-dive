@@ -1,6 +1,6 @@
 ---
 title: 'Markdown & MDX'
-description: 'หน้า Markdown กับ MDX, frontmatter, การใส่ layout ให้ content, การฝัง component ใน MDX, pipeline Sätteri ใน Astro 7 และเมื่อไหร่ควรใช้ .md กับ .mdx'
+description: 'หน้า Markdown กับ MDX, frontmatter, การใส่ layout ให้ content, การฝัง component ใน MDX, ตัวแปรที่ export, Content component กับ components prop ของมัน, pipeline Sätteri ใน Astro 7 และสิ่งที่ยังต้องใช้ @astrojs/markdown-remark, กับ .md เทียบ .mdx — พิสูจน์ด้วย build output จริงและ MDX parse error จริง'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Markdown เป็นหน้า
 
@@ -19,12 +20,25 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 title: Hello World
 ---
 
-# {frontmatter.title}
+# Hello World
 
-This is **Markdown**. Astro renders it to HTML at build time.
+This is **Markdown** with a `code span` and a [link](/x).
+
+- item one
+- item two
 ```
 
-บนสุดคือ **frontmatter** — บล็อก YAML คั่นด้วย `---` — เก็บ metadata อย่าง `title` หรือ `date` ภายใน body ของ Markdown คุณอ้างถึงค่าพวกนั้นผ่าน object `frontmatter` ได้
+บนสุดคือ **frontmatter** — บล็อก YAML คั่นด้วย `---` — เก็บ metadata อย่าง `title` หรือ `date` ตัว body ของ Markdown เอง render เป็น HTML ธรรมดา
+
+<Callout title="พิสูจน์แล้ว: body ของ .md ธรรมดาไม่ใช่ expression context">
+มันน่าสมมติว่า `{frontmatter.title}` ใช้ได้ตรง ๆ ใน body ของ `.md` แบบเดียวกับที่ใช้ได้ใน MDX (ข้างล่าง) — แต่ไม่ใช่ Build ด้วยหน้า `.md` จริงที่มีข้อความนั้นเป๊ะ ๆ ใน body ผลออกมาเป็น text ตรงตัว:
+
+```html
+<h1 id="frontmattertitle">{frontmatter.title}</h1>
+```
+
+สังเกต `id` ของ heading ที่ generate ออกมาคือ `frontmattertitle` ตรงตัว — หลักฐานว่า string `{frontmatter.title}` ทั้งก้อนถูกปฏิบัติเป็น plain text ไม่เคยถูก evaluate เลย Markdown ธรรมดาไม่มี expression syntax เลยแม้แต่น้อย `{ }` เป็น text เฉื่อยชาที่นั่น ค่า frontmatter จะเข้าถึงได้ก็ผ่าน component **layout** เท่านั้น ซึ่งรับมันมาเป็น prop (หัวข้อถัดไป) — หรือเมื่อคุณเลื่อนขั้นไปใช้ content collection (โมดูลถัดไป) ก็ผ่านข้อมูลที่ `render()` return กลับมา
+</Callout>
 
 ## ใส่ layout ให้ Markdown
 
@@ -36,10 +50,10 @@ layout: ../../layouts/BaseLayout.astro
 title: Hello World
 ---
 
-# Content here goes into the layout's default slot.
+Content here goes into the layout's default slot.
 ```
 
-layout จะได้รับ frontmatter ของหน้าเป็น props (ผ่าน `Astro.props.frontmatter`) และ Markdown ที่ render แล้วจะเติมลงใน default `<slot />` ของ layout
+layout จะได้รับ frontmatter ของหน้าเป็น props (ผ่าน `Astro.props.frontmatter`) และ Markdown ที่ render แล้วจะเติมลงใน default `<slot />` ของ layout:
 
 ```astro
 ---
@@ -54,9 +68,40 @@ const { frontmatter } = Astro.props;
 </html>
 ```
 
-## MDX: Markdown บวก component
+พิสูจน์ตั้งแต่ต้นจนจบด้วย build จริงของคู่นี้เป๊ะ ๆ — `Astro.props.frontmatter` ของ layout ป้อน `<title>` ถูกต้อง แม้ว่า (พิสูจน์แล้วข้างบน) body ของ Markdown เองจะไม่เคย evaluate `{ }` เลยก็ตาม:
 
-`.mdx` คือ Markdown ที่มีพลังแบบ JSX ฟีเจอร์เด่น: คุณ **import แล้ว render component** — component Astro หรือ framework — ได้ตรงในร้อยแก้วของคุณ
+```html
+<html><head><title>Hello Layout</title></head><body><article><p>Body content here.</p>
+</article></body></html>
+```
+
+<Callout title="key layout ใน frontmatter: scope แค่หน้าหลวม ๆ ไม่ได้ถูกเลิกใช้">
+ตามเอกสารทางการ `layout` เป็น frontmatter property พิเศษที่รู้จักเฉพาะไฟล์ `.md`/`.mdx` [แยกที่วางตรงใน `src/pages/`](https://docs.astro.build/en/basics/layouts/#markdown-layouts) ผ่าน file-based routing มัน**ไม่ได้**ถูกเลิกใช้ แต่มันแคบ: "ไม่ถูกรู้จักเป็น property พิเศษเมื่อใช้ content collection" — เมื่อ Markdown ของคุณอยู่ใน collection แล้ว (โมดูลถัดไป) คุณห่อมันด้วย layout เองในหน้าที่เรียก `render()` และ key `layout` ใน frontmatter ก็แค่ถูกเมิน สำหรับหน้าหลวม ๆ ไม่กี่หน้า frontmatter key คือทางเลือกที่ง่ายที่สุด ส่วนไซต์ content จริงจังที่จัดเป็น collection การห่อแบบชัด ๆ คือ pattern ที่คุณจะใช้จริง
+</Callout>
+
+## MDX: Markdown บวก JavaScript จริง
+
+`.mdx` คือ Markdown ที่มีพลังแบบ JSX เปิดใช้ด้วย integration `@astrojs/mdx` ต่างจาก `.md` ธรรมดา `.mdx` evaluate expression `{ }` จริง รับตัวแปรที่ `export` และให้คุณ `import` แล้ว render component ได้ตรงในร้อยแก้วของคุณ:
+
+```mdx
+---
+title: Hello MDX
+---
+export const revision = 3;
+
+# {frontmatter.title}
+
+Revision: {revision}
+```
+
+พิสูจน์ด้วย build จริง — ทั้ง frontmatter interpolation และตัวแปรที่ export evaluate ถูกต้อง ตรงข้ามกับหลักฐานของ .md ธรรมดาข้างบน:
+
+```html
+<h1 id="hello-mdx">Hello MDX</h1>
+<p>Revision: 3</p>
+```
+
+การ import แล้ว render component ก็ทำแบบเดียวกัน รวมถึง island ที่มี client directive — component Astro หรือ framework เพราะ MDX ประกอบกับทุกอย่างใน Astro ได้:
 
 ```mdx
 ---
@@ -79,7 +124,17 @@ And even an interactive island:
 <Chart client:visible data={[1, 2, 3]} />
 ```
 
-MDX เปิดใช้ด้วย integration `@astrojs/mdx` เมื่อติดตั้งแล้ว ไฟล์ `.mdx` เป็นหน้า (หรือ entry ของ collection) ที่ผสม content กับ component ได้อย่างอิสระ — รวมถึง island ที่มี client directive เพราะ MDX ประกอบกับทุกอย่างใน Astro ได้
+`<Fragment>` ก็ใช้ได้ และไม่เพิ่ม wrapper element ให้ร้อยแก้วรอบ ๆ — พิสูจน์ด้วย build จริง (output ของ frontmatter/exported-variable จากข้างบน ตามด้วย content ของ Fragment เองทันที ไม่มี tag พิเศษล้อมรอบ):
+
+```mdx
+<Fragment>
+  <p>a fragment inside prose</p>
+</Fragment>
+```
+
+```html
+<p>a fragment inside prose</p>
+```
 
 <Mermaid title="Markdown render เป็น HTML; MDX ฝัง component ได้ด้วย" code={diagram} />
 
@@ -91,72 +146,227 @@ export const diagram = `flowchart LR
   layout --> out["final page"]
   comp --> out`;
 
-## Astro 7 render Markdown ด้วย Sätteri
+## component `<Content />` กับ `components` prop ของมัน
 
-ตั้งแต่ Astro 7 ไฟล์ `.md` และ `.mdx` ถูก render ด้วย **Sätteri** ซึ่งเป็น Markdown pipeline แบบ native ที่ขับเคลื่อนด้วย Rust ของ Astro เอง แทน pipeline remark/rehype (unified) ที่เป็น JavaScript สำหรับ content ธรรมดาไม่มีอะไรเปลี่ยนนอกจากความเร็ว — นี่เป็นหนึ่งในเหตุผลที่ build ของ Astro 7 เร็วขึ้น 15–61% (แหล่งที่มา: [Astro 7.0 release notes](https://astro.build/blog/astro-7/))
+การ import `Content` (และค่าที่ `export` อะไรก็ตาม) จากไฟล์ `.mdx` ทำให้ไฟล์ `.astro` render output ทั้งหมดของไฟล์นั้นได้ — และ `components` prop remap ว่า element Markdown ไหนถูก render ด้วย component ไหน โดยไม่ต้องแตะไฟล์ `.mdx` เลย:
 
-จุดที่มีผลคือ **plugin** ถ้าโปรเจกต์ของคุณพึ่งพา remark หรือ rehype plugin (custom container, reading-time, image transform) พวกนั้นคือ unified plugin และ Sätteri ไม่รันมัน ต้อง opt กลับไปใช้ unified pipeline อย่างชัดเจน:
+```mdx
+---
+// src/pages/content-comp.mdx
+---
+export const title = 'Custom Content';
+
+# {title}
+
+Some *body* text with a custom heading renderer.
+```
+
+```astro
+---
+// src/pages/content-comp-host.astro
+import { Content } from './content-comp.mdx';
+---
+<Content components={{ h1: 'h2' }} />
+```
+
+พิสูจน์ด้วย build จริง — `title` ที่ export ยัง evaluate อยู่ และ heading `# ...` ที่ปกติจะ compile เป็น `<h1>` กลับ render เป็น `<h2>` แทนเพราะการ remap ของ `components`:
+
+```html
+<h2 id="title">Custom Content</h2>
+<p>Some <em>body</em> text with a custom heading renderer.</p>
+```
+
+นี่คือวิธีที่ design system บังคับใช้ heading component ของตัวเอง (พร้อม style ของ anchor-link ที่สม่ำเสมอ เป็นต้น) ข้ามทุกไฟล์ Markdown/MDX โดยที่ผู้เขียนแต่ละคนไม่ต้อง import มันเอง
+
+## Astro 7 render Markdown ด้วย Sätteri — ยืนยันกับ config schema
+
+ตั้งแต่ Astro 7 ไฟล์ `.md` และ `.mdx` ถูก render ด้วย **Sätteri** ซึ่งเป็น Markdown pipeline แบบ native ที่ขับเคลื่อนด้วย Rust ของ Astro เอง แทน pipeline remark/rehype (unified) ที่เป็น JavaScript โดย default สำหรับ content ธรรมดาไม่มีอะไรเปลี่ยนนอกจากความเร็ว — นี่เป็นหนึ่งในเหตุผลที่ build ของ Astro 7 เร็วขึ้น 15–61% (แหล่งที่มา: [Astro 7.0 release notes](https://astro.build/blog/astro-7/))
+
+จุดที่มีผลคือ **plugin** — และวิธี*ที่แม่นยำ*ในการทำให้มันทำงานต่อก็เปลี่ยนไป เช็คตรงกับ config type schema ของ astro@7.3.5 ที่ติดตั้งจริง `markdown.remarkPlugins`, `markdown.rehypePlugins`, `markdown.gfm`, และ `markdown.smartypants` ทั้งหมดถูก mark เป็น `@deprecated` แต่ละตัวชี้ไปที่ทางแก้เดียวกัน: ส่งมันเข้า `markdown.processor` ที่ตั้งค่าไว้แทน `markdown.shikiConfig` กับ `markdown.syntaxHighlight` **ไม่** ถูก deprecate — syntax highlighting ของ code block เป็น layer แยกที่มีผลไม่ว่า Markdown processor ตัวไหน render ร้อยแก้วรอบ ๆ
 
 ```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
+import remarkToc from 'remark-toc';
+
+export default defineConfig({
+  markdown: {
+    // Correct for 7.3.5: plugins are arguments to unified(), not sibling
+    // top-level markdown.* keys (those are the deprecated form).
+    processor: unified({
+      remarkPlugins: [remarkToc],
+    }),
+  },
+});
+```
+
+```js
+// @expect-error deprecated in astro@7.3.5 — remarkPlugins/rehypePlugins as top-level markdown.* keys still work but are marked @deprecated in the installed config schema; pass them to unified() instead (shown above)
 // astro.config.mjs
 import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 
 export default defineConfig({
   markdown: {
-    processor: unified(),          // keep remark/rehype plugins working
+    processor: unified(),
     remarkPlugins: [/* ... */],
     rehypePlugins: [/* ... */],
   },
 });
 ```
 
-`@astrojs/markdown-remark` ตอนนี้เป็น package ที่ต้องติดตั้งแยก กฎง่าย ๆ คือ เริ่มด้วย Sätteri (default) แล้วค่อยสลับ processor เมื่อ plugin ที่คุณต้องใช้จริง ๆ ไม่มีของ native ให้แทน
+`@astrojs/markdown-remark` เป็น package ที่ต้องติดตั้งแยก (เช่นเดียวกับ `@astrojs/markdown-satteri` ถ้าอยากตั้งค่า option ของ Sätteri เอง เช่น `features: { gfm: false }` แบบชัด ๆ แทนที่จะพึ่ง default ของมัน) กฎง่าย ๆ คือ เริ่มด้วย Sätteri (default ไม่ต้องติดตั้งอะไร) แล้วค่อยสลับ processor เมื่อ plugin ที่คุณต้องใช้จริง ๆ ไม่มีของ native ให้แทน
 
 ## `.md` กับ `.mdx`
 
-หยิบ **`.md`** มาใช้เมื่อไฟล์เป็น content ล้วน ๆ — บล็อกโพสต์, หน้า doc, โน้ต `.md` เรียบง่ายกว่าและไม่มี overhead ของ component
+หยิบ **`.md`** มาใช้เมื่อไฟล์เป็น content ล้วน ๆ — บล็อกโพสต์, หน้า doc, โน้ต `.md` เรียบง่ายกว่า ไม่มี overhead ของ component และ — พิสูจน์แล้วข้างบน — body ของมันเป็นแค่ text เปล่ากับ syntax ของ Markdown เท่านั้น ไม่มี expression
 
-หยิบ **`.mdx`** มาใช้เมื่อ content ต้องฝัง component — กล่อง callout, chart, demo ที่ interactive, figure ที่ใช้ซ้ำได้ ต้นทุนคือ integration เพิ่มและการ process ที่หนักขึ้นเล็กน้อย ดังนั้นอย่า default ทุกอย่างเป็น MDX ใช้ MDX เฉพาะตรงที่คุณผสม content กับ component จริง ๆ
+หยิบ **`.mdx`** มาใช้เมื่อ content ต้องฝัง component หรือ evaluate JavaScript จริง — กล่อง callout, chart, demo ที่ interactive, ตัวแปรที่ export, frontmatter ที่ interpolate ตรงในร้อยแก้ว (พิสูจน์แล้วข้างบน ตรงข้ามกับ .md) ต้นทุนคือ integration เพิ่ม, การ process ที่หนักขึ้นเล็กน้อย และ parser ที่เข้มงวดกว่า — พิสูจน์ในหัวข้อถัดไป — ดังนั้นอย่า default ทุกอย่างเป็น MDX ใช้ MDX เฉพาะตรงที่คุณผสม content, component และ expression จริง ๆ
+
+## ปัญหาของ MDX พิสูจน์ด้วย build error จริง
+
+body ของ MDX ไม่ใช่แค่ Markdown — integration `@astrojs/mdx` parse มันด้วย parser ที่รู้จัก JSX ดังนั้นร้อยแก้วธรรมดาบังเอิญดูเหมือน syntax ได้ สามความล้มเหลวจริง ทำซ้ำกับ build จริง:
+
+**1. `{` โดด ๆ ที่เริ่มดูเหมือน object-literal ในร้อยแก้ว:**
+
+```mdx
+// @expect-error a `{` in prose is parsed as an MDX expression, and this one isn't valid JS
+Set the value like this: { port: 3000 } in your config.
+```
+
+```text
+3:32: Could not parse expression with oxc: Expected `,` or `)` but found `:` (mdx-jsx:unexpected-character)
+```
+
+**2. บรรทัดที่ขึ้นต้นด้วยคำว่า `import` (แม้จะเป็นร้อยแก้วธรรมดา):**
+
+```mdx
+// @expect-error a line beginning with "import" is parsed as the start of an ESM import statement
+import your data from wherever you like.
+```
+
+```text
+3:13: Could not parse esm with oxc: Expected `from` but found `Identifier` (mdxjs-rs:oxc)
+```
+
+**3. การอ้าง type แบบ generic ในร้อยแก้ว เช่น `Array<T>`:**
+
+```mdx
+// @expect-error `<T>` looks like a JSX opening tag with no matching close
+A generic function like Array<T> takes a type parameter.
+```
+
+```text
+3:30: Expected a closing tag for `<T>` (3:30) before the end of `paragraph` (mdx-jsx:unexpected-character)
+```
+
+แต่ละอันแก้ได้แบบเดียวกัน: ใส่ข้อความที่มีปัญหาไว้ใน inline code span (`` `{ port: 3000 }` ``, `` `import` ``, `` `Array<T>` ``) — code span เป็น text เฉื่อยชา ไม่เคยถูก parse เป็น expression หรือ JSX เหมือนกับการ escape `{` ในบทที่พูดถึง `is:raw` ในบท syntax-deep เป๊ะ แต่ตรงนี้เกิดขึ้นอัตโนมัติกับอะไรก็ตามที่อยู่ในเครื่องหมาย backtick อยู่แล้ว
+
+## อ่านโค้ดที่ AI เขียน
+
+- ไฟล์ `.md` ที่ generate มามี `{frontmatter.something}` หรือ expression `{ }` อื่นใน body ไหม copy มาจากตัวอย่าง MDX? พิสูจน์แล้วข้างบน: ใน `.md` ธรรมดามัน render เป็น text ที่ไร้ประโยชน์ตรงตัว — แปลงไฟล์เป็น `.mdx` หรือย้ายค่าไปไว้ใน layout แทน
+- `astro.config.mjs` ที่ generate มาตั้ง `markdown.remarkPlugins` หรือ `markdown.gfm` เป็น key ระดับบนสุดไหม? พิสูจน์แล้วข้างบน (เช็คตรงกับ config schema ที่ติดตั้งจริง): พวกนั้นถูก deprecate ใน astro@7.3.5 — ส่งเข้า `unified()` ผ่าน `markdown.processor` แทน ไม่งั้นอาจเงียบ ๆ หยุดมีผลใน major version ถัดไป
+- config ที่ใช้ remark/rehype plugin ที่ copy มาจากบล็อก Astro รุ่นก่อน 7 ถูกสมมติว่า "ใช้ได้เลย" ไหม? Sätteri คือ default ตัวใหม่ — โปรเจกต์ที่ต้องการ plugin พวกนั้นเป๊ะ ๆ ต้อง opt-in ด้วย `processor: unified({ ... })` ชัด ๆ พิสูจน์แล้วข้างบน
+- ร้อยแก้วของ MDX มี `{` ดิบ ๆ, บรรทัดที่ขึ้นต้นด้วย `import`/`export`, หรือ generic type แบบ `<Word>` อยู่นอก code span ไหม? พิสูจน์แล้วข้างบนด้วย parse error จริงสามแบบต่างกัน — แต่ละอันต้องอยู่ใน backtick หรือ escape ด้วยวิธีอื่น
+
+<SpotTheBug code={`---
+title: My Post
+---
+
+# {frontmatter.title}
+
+Written on { new Date().toDateString() }.`}>
+นี่คือไฟล์ `.md` ธรรมดา (นามสกุลไม่ใช่ `.mdx`) ที่ใช้ syntax เฉพาะของ MDX พิสูจน์แล้วก่อนหน้านี้ในบทนี้: body ของ Markdown ธรรมดาไม่เคย evaluate `{ }` เลย — ทั้ง heading และบรรทัด "Written on" จะ render expression ในปีกกาเป็น text ที่ไร้ประโยชน์ตรงตัว (`{frontmatter.title}`, `{ new Date().toDateString() }`) ไม่ใช่ title ของหน้าหรือวันที่ปัจจุบัน ทางแก้คือเปลี่ยนชื่อไฟล์เป็น `.mdx` (ซึ่ง evaluate สิ่งเหล่านี้จริง) หรือถ้า content ควรเป็น Markdown ธรรมดาต่อไป ให้ย้ายค่าที่ dynamic เข้าไปใน component layout ที่หน้านี้ใช้ผ่าน key `layout` ใน frontmatter แล้วอ้าง `Astro.props.frontmatter` ที่นั่นแทน
+</SpotTheBug>
+
+<Callout title="ทำไม harness พิสูจน์ของบทนี้เช็ค .mdx fence ข้างบนไม่ได้">
+harness เช็ค snippet ของคอร์สนี้เก็บแค่ fence ประเภท `astro`/`ts`/`js`/`mjs`/`tsx`/`jsx` เข้า probe ของมัน — `.mdx` ไม่ใช่หนึ่งในนั้น ดังนั้น fence `.mdx` ทุกอันในบทนี้ (รวมถึงตัวอย่าง `Content`/`components` ข้างบนและ fence ปัญหาข้างบน) จำเป็นต้องเป็นตัวอย่างที่พิสูจน์ด้วย build จริงเท่านั้น ไม่ใช่สิ่งที่ `astro check`/`--test` อัตโนมัติของคอร์สนี้จะ re-verify ทุกครั้งที่รัน behavior เองยังพิสูจน์แล้วอยู่ดี — ด้วย output ของ `astro build` จริงที่ paste ไว้ข้างบน ไม่ใช่สมมติเอา — แค่ไม่ได้ผ่านกลไก collected-fence ของ harness ตัวนี้ เป็นช่องว่างของ harness ที่รายงานได้จริง ไม่ใช่ bug ของ harness
+
+`BaseLayout` ของบทนี้ (ไฟล์ `.astro` ธรรมดาที่ collect ได้) *ถูก* คลุมด้วย container test จริง พิสูจน์อีกครึ่งของ "การใส่ layout ให้ Markdown" — ว่ามันรับ frontmatter เป็น props และเติม default slot ด้วย body:
+</Callout>
+
+```ts
+// src/layouts/BaseLayout.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import BaseLayout from './BaseLayout.astro';
+
+describe('layout receives frontmatter as props', () => {
+  it('renders the title from Astro.props.frontmatter and fills the default slot with the body', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(BaseLayout, {
+      props: { frontmatter: { title: 'Hello Layout' } },
+      slots: { default: '<p>Body content here.</p>' },
+    });
+    expect(html).toContain('<title>Hello Layout</title>');
+    expect(html).toContain('<article');
+    expect(html).toContain('<p>Body content here.</p>');
+  });
+});
+```
 
 ## หมายเหตุเรื่อง content collection
 
 การวางไฟล์ Markdown ตรง ๆ ใน `src/pages/` ใช้ได้ แต่ไม่สเกลไปยังบล็อกหรือไซต์ doc ขนาดใหญ่: ไม่มี schema validation, ไม่มี frontmatter ที่มี type, ไม่มีการ query วิธีสมัยใหม่ในการจัดการไฟล์ Markdown/MDX **จำนวนมาก** คือ **content collection** — ชั้น content ที่มี type, validate และ query ได้ — ที่เป็นเนื้อหาทั้งหมดของโมดูลถัดไป หน้าหลวม ๆ โอเคสำหรับไฟล์ไม่กี่ไฟล์; collection คือวิธีรันไซต์ content จริงจัง
 
+## Mental Model
+
+body ของไฟล์ `.md` คือ Markdown และไม่ใช่อย่างอื่นเลย — ไม่มี expression ไม่มี import ไม่มี component; มีแค่ frontmatter แบบ YAML ของมัน และผ่าน layout เท่านั้นที่ค่าใน frontmatter นั้นจะไปถึง behavior แบบ dynamic ได้ body ของไฟล์ `.mdx` คือ Markdown *บวก* ภาษา JS/JSX ที่ฝังจริง — พิสูจน์แล้วข้างบน `{ }` evaluate, `export`/`import` ทำงาน, component render ได้ — นี่แหละคือเหตุผลที่ parser ของมันเข้มงวดกว่ากับอะไรก็ตามที่แค่ *ดูเหมือน* syntax นั้นโผล่มาในร้อยแก้วธรรมดา
+
+## ข้อแลกเปลี่ยน
+
+| | `.md` | `.mdx` |
+|---|---|---|
+| **body คือ** | Markdown เท่านั้น — `{ }` เป็น text เฉื่อยชา (พิสูจน์แล้วข้างบน) | Markdown + รู้จัก JSX — `{ }` evaluate, `export`/`import` ทำงาน (พิสูจน์แล้วข้างบน) |
+| **component** | ไม่รองรับใน body | import แล้ว render component ของ Astro/framework ได้ รวมถึง island |
+| **จุดเสี่ยงในร้อยแก้ว** | ไม่มีนอกเหนือจาก syntax ของ Markdown เอง | `{` โดด ๆ, บรรทัดที่ขึ้นต้นด้วย `import`/`export`, หรือ text รูปแบบ `<Tag>` ทำ build พังได้ (พิสูจน์แล้วข้างบน สามแบบ) |
+| **เหมาะกับ** | content ล้วน ๆ — โพสต์, doc, โน้ต | content ที่ผสมร้อยแก้วกับ component หรือต้องการค่าที่คำนวณ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`{frontmatter.title}` ทำงานเหมือนกันใน .md กับ .mdx"** พิสูจน์แล้วข้างบน: มัน evaluate ใน .mdx แต่ render เป็น text ตรงตัวใน .md — id `frontmattertitle` บน heading (ที่ผิด) คือหลักฐาน
+- **"Astro 7 เลิกรองรับ remark/rehype plugin ไปเลย"** พิสูจน์แล้วข้างบน: processor `unified()` ของ `@astrojs/markdown-remark` ยังรันมันได้อยู่ — สิ่งที่เปลี่ยนคือมันไม่ถูกตั้งค่าเป็น key ระดับบนสุด `markdown.*` ที่เป็น sibling อีกต่อไป (แบบนั้น deprecate แล้ว) แต่เป็น argument ของ `unified()` แทน
+- **"key `layout` ใน frontmatter ถูกเลิกใช้แล้ว"** ตามเอกสารทางการ: มันไม่ได้ถูกเลิกใช้ มัน scope แคบ — รู้จักเฉพาะหน้าหลวม ๆ ใน `src/pages/` และแค่ไม่ถูกอ่านเลยเมื่อ content อยู่ใน collection
+- **"คำอย่าง `import` หรือ generic type `<T>` ปลอดภัยในร้อยแก้วเสมอเพราะมันแค่ text ภาษาอังกฤษ/ใกล้เคียงโค้ด"** พิสูจน์แล้วข้างบนด้วย MDX parse error จริงสามแบบต่างกัน: parser ของ MDX มองหา syntax แบบ JSX/ESM ทุกที่นอก code span ไม่ว่าคนอ่านจริงจะตีความว่าเป็นร้อยแก้วชัดเจนแค่ไหนก็ตาม
+
 <Callout title="สรุปหนึ่งบรรทัด">
-ไฟล์ `.md` และ `.mdx` ใน `src/pages/` เป็น route ที่ render เป็น HTML โดยมี **frontmatter** สำหรับ metadata และ key `layout` เพื่อห่อ content ใน shell (body เติมลง `<slot />` ของ layout) **MDX** เพิ่มความสามารถ import แล้ว render component — รวมถึง island — ในร้อยแก้ว ใช้ `.md` สำหรับ content ล้วน ๆ และ `.mdx` เมื่อต้องการ component; และสำหรับไฟล์ **จำนวนมาก** ให้เลื่อนขั้นไปใช้ **content collection** ที่มี type (โมดูลถัดไป) Astro 7 render ทั้งสองแบบด้วย pipeline native ชื่อ **Sätteri**; opt ไปใช้ processor `unified()` จาก `@astrojs/markdown-remark` เฉพาะเมื่อต้องใช้ remark/rehype plugin
+ไฟล์ `.md` และ `.mdx` ใน `src/pages/` เป็น route ที่ render เป็น HTML โดยมี **frontmatter** สำหรับ metadata และ key `layout` (scope แค่หน้าหลวม ๆ ไม่ได้ถูกเลิกใช้) เพื่อห่อ content ใน shell พิสูจน์แล้วในบทนี้: body ของ `.md` ธรรมดาไม่เคย evaluate `{ }` — มีแค่ **MDX** เท่านั้นที่ evaluate ได้ พร้อมกับตัวแปรที่ `export`, `import`, และการ render component (รวมถึง island) ในร้อยแก้ว การ import `<Content components={{...}} />` ทำให้ไฟล์ `.astro` remap ได้ว่า element Markdown ไหนถูก render ด้วย component ไหน parser ที่เข้มงวดกว่าของ MDX ยังแปลว่า `{` โดด ๆ, บรรทัดที่ขึ้นต้นด้วย `import`, หรือ text แบบ `<Tag>` ในร้อยแก้วทำ build พังได้ — พิสูจน์แล้วข้างบนด้วย parse error จริงสามแบบต่างกัน — escape มันด้วย code span ใช้ `.md` สำหรับ content ล้วน ๆ และ `.mdx` เมื่อต้องการ component หรือ expression; และสำหรับไฟล์ **จำนวนมาก** ให้เลื่อนขั้นไปใช้ **content collection** ที่มี type (โมดูลถัดไป) Astro 7 render ทั้งสองแบบด้วย pipeline native ชื่อ **Sätteri** โดย default; `remarkPlugins`/`rehypePlugins`/`gfm`/`smartypants` ถูก deprecate เป็น key ระดับบนสุด `markdown.*` (ยืนยันตรงกับ config schema ที่ติดตั้งจริง) — ส่งมันเข้า processor `unified()` ของ `@astrojs/markdown-remark` แทน
 </Callout>
 
 export const quizMarkdown = [
   {
-    q: 'คุณห่อหน้า Markdown ด้วย shell ของไซต์ยังไง?',
+    q: '```md\n---\ntitle: Hello World\n---\n\n# {frontmatter.title}\n```\nพิสูจน์ด้วย build จริง ไฟล์ `.md` ธรรมดานี้ render อะไรออกมาจริง ๆ?',
     options: [
-      'import layout ใน body ของ Markdown',
-      'ตั้งค่า key `layout` ใน frontmatter ให้เป็น component layout; Markdown ที่ render แล้วเติมลง default slot ของตัวเอง',
-      'Markdown ใช้ layout ไม่ได้',
-      'ห่อหน้านั้นใน `<div>`',
+      '`<h1>` ที่มี title ของหน้า "Hello World"',
+      '`<h1>` ที่มี text ตรงตัว "{frontmatter.title}" — Markdown ธรรมดาไม่เคย evaluate expression',
+      'build error',
+      'heading เปล่า',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย output ที่ build จริง: body ของ .md ธรรมดาไม่มี expression syntax เลย ดังนั้น `{frontmatter.title}` render เป็น text ตรงตัว (และ id ของ heading ที่ generate "frontmattertitle" คือหลักฐาน) มีแค่ MDX เท่านั้นที่ evaluate สิ่งนี้ หรือ layout ผ่าน Astro.props.frontmatter',
   },
   {
-    q: 'ความสามารถที่นิยาม MDX เหนือ Markdown ธรรมดาคืออะไร?',
+    q: 'ความสามารถที่นิยาม MDX เหนือ Markdown ธรรมดาคืออะไร พิสูจน์แล้วในบทนี้?',
     options: [
       'render เร็วกว่า',
-      'คุณ import แล้ว render component (รวมถึง island) ในร้อยแก้วได้',
+      'expression `{ }` evaluate ได้, ตัวแปรที่ export และ import ทำงาน และ render component (รวมถึง island) ในร้อยแก้วได้',
       'รองรับ frontmatter',
       'รองรับ heading',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: `{frontmatter.title}` เดียวกันที่ render เป็น text ตรงตัวใน .md evaluate ถูกต้องใน .mdx พร้อมกับค่าจาก export const และ component ที่ import มา',
   },
   {
     q: 'เมื่อไหร่ควรใช้ `.md` มากกว่า `.mdx`?',
     options: [
       'เสมอ — .mdx เลิกใช้แล้ว',
-      'เมื่อไฟล์เป็น content ล้วน ๆ ไม่มี component — .md เรียบง่ายและเบากว่า',
+      'เมื่อไฟล์เป็น content ล้วน ๆ ไม่มี component หรือ expression — .md เรียบง่ายกว่า เบากว่า และจุดเสี่ยงในร้อยแก้วที่เข้มงวดกว่า (พิสูจน์แล้วข้างบนสำหรับ MDX) ไม่มีผลกับมัน',
       'เฉพาะหน้าแรก',
       'ไม่มีวันใช้ — .mdx ดีกว่าเสมอ',
     ],
     answer: 1,
+    explain: '.md ไม่มี parser ของ expression/JSX ให้สะดุด — พิสูจน์แล้วข้างบน parser ของ MDX พังได้กับ `{` โดด ๆ หรือบรรทัดที่ขึ้นต้นด้วย import ซึ่ง Markdown ธรรมดาไม่มีวันเจอ',
   },
   {
     q: 'วิธีสมัยใหม่ในการจัดการไฟล์ Markdown/MDX จำนวนมากในสเกลใหญ่คืออะไร?',
@@ -167,16 +377,40 @@ export const quizMarkdown = [
       'ไฟล์ .mdx ยักษ์ไฟล์เดียว',
     ],
     answer: 1,
+    explain: 'content collection เพิ่ม schema validation, typed frontmatter และการ query — ซึ่งไฟล์หลวม ๆ ใน src/pages/ ไม่มีสักอย่าง พูดถึงลึก ๆ ในโมดูลถัดไป',
   },
   {
     q: 'remark plugin ของคุณหยุดทำงานหลังอัปเกรดเป็น Astro 7 เพราะอะไร และทำยังไง?',
     options: [
       'Astro ไม่รองรับ plugin อีกแล้ว',
-      'Astro 7 render Markdown ด้วย pipeline native ชื่อ Sätteri; ติดตั้ง `@astrojs/markdown-remark` แล้วตั้ง `markdown.processor: unified()` เพื่อให้ remark/rehype plugin ทำงานต่อ',
+      'Astro 7 render Markdown ด้วย pipeline native ชื่อ Sätteri โดย default; ติดตั้ง `@astrojs/markdown-remark` แล้วส่ง plugin ของคุณเข้า `unified({ remarkPlugins: [...] })` ที่ตั้งเป็น `markdown.processor`',
       'เปลี่ยนชื่อไฟล์เป็น .mdx',
       'ย้าย plugin ไปไว้ใน `vite.plugins`',
     ],
     answer: 1,
+    explain: 'ยืนยันตรงกับ config schema ของ astro@7.3.5 ที่ติดตั้งจริง: markdown.remarkPlugins/rehypePlugins ถูก deprecate เป็น key ระดับบนสุด — รูปแบบที่ถูกต้องของ 7.3.5 ส่งมันเป็น option ของ unified() เอง แล้วตั้งให้ markdown.processor',
+  },
+  {
+    q: '```mdx\nimport your data from wherever you like.\n```\nบรรทัดนี้ เขียนเป็นร้อยแก้วธรรมดาในไฟล์ .mdx ทำให้เกิด build error จริง เพราะอะไร?',
+    options: [
+      'MDX ห้ามใช้คำว่า "import" ที่ไหนในไฟล์เลย',
+      'บรรทัดที่ขึ้นต้นด้วย `import` ถูก parse เป็นจุดเริ่มของ ESM import statement จริง และอันนี้ไม่ใช่ JavaScript ที่ valid',
+      'ขาด semicolon',
+      'จริง ๆ build ผ่านปกติ — นี่คือคำถามหลอก',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย error จริง: "Could not parse esm with oxc: Expected `from` but found `Identifier`" — MDX parse บรรทัดที่ขึ้นต้นด้วย import/export เป็น ESM ไม่ว่าคนจะอ่านมันเป็นประโยคหรือไม่',
+  },
+  {
+    q: '```astro\n---\nimport { Content } from \'./post.mdx\';\n---\n<Content components={{ h1: \'h2\' }} />\n```\nพิสูจน์ด้วย build จริง `components` prop ตรงนี้ทำอะไร?',
+    options: [
+      'ไม่ทำอะไรเลย — ถูกเมิน',
+      'remap ว่า element Markdown ไหนถูก render ด้วย component ไหน — ที่นี่ heading `#` ทุกตัวใน post.mdx render เป็น <h2> แทน <h1>',
+      'มันแทนที่ content ทั้งหมดของ post.mdx',
+      'ทำงานได้แค่ในไฟล์ .mdx เท่านั้น ไม่ใช่ไฟล์ .astro ที่ใช้มัน',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วข้างบน: import Content จากไฟล์ .mdx แล้วส่ง components={{ h1: \'h2\' }} จะ render heading ของ markdown ในไฟล์นั้นผ่าน component ที่ถูกแทนที่ โดยไม่ต้องแก้ไฟล์ .mdx เอง',
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: 'Astro Syntax Deep Dive'
-description: 'Template expressions, conditionals and loops, Fragments, set:html and set:text, spread attributes, dynamic tags, and the strict Astro 7 compiler with JSX-style whitespace — the JSX-like syntax that turns data into markup.'
+description: 'Template expressions, conditionals and loops, Fragments, set:html and set:text, spread attributes, dynamic tags, directives (is:raw, define:vars, class:list), Astro.self, Astro.slots, and the strict Astro 7 compiler with JSX-style whitespace — proven with real astro check errors and container output.'
 sidebar:
   order: 2
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Expressions: `{ }` drops into JavaScript
 
@@ -85,21 +86,66 @@ const items = ["a", "b"];
 
 Fragments are also where `set:*` directives live when you have no element to attach them to (next).
 
-## Rendering raw HTML: `set:html` and `set:text`
+## Rendering raw HTML: `set:html` and `set:text`, proven
 
 By default, an expression that produces a string is **escaped** — Astro renders it as text, so `<b>hi</b>` shows the tags literally. That is safe. When you have a trusted HTML string you genuinely want rendered as markup (say, HTML from a CMS you control), use `set:html`:
 
 ```astro
 ---
-const fromCms = "<strong>Bold from the CMS</strong>";
-const plain = "<not a tag>";
+// src/components/SetHtmlDemo.astro
+const untrusted = "<img src=x onerror=alert('xss')>";
 ---
-<div set:html={fromCms} />     <!-- renders as real bold markup -->
-<div set:text={plain} />       <!-- renders the characters, escaped -->
-<Fragment set:html={fromCms} /> <!-- no wrapper element -->
+<div id="raw" set:html={untrusted} />
+<div id="safe" set:text={untrusted} />
 ```
 
-`set:html` **bypasses escaping** — only use it on content you trust, or you open an XSS hole. `set:text` forces the value to be treated as plain text (the safe default made explicit).
+`set:html` **bypasses escaping** — including for content you did not write yourself. Rendered through the Container API against the installed astro@7.3.5, with an XSS-shaped string that a real attacker-controlled field (a comment, a username, a search query) might contain:
+
+```html
+<!-- id="raw" (set:html) -->
+<div id="raw"><img src=x onerror=alert('xss')></div>
+<!-- id="safe" (set:text) -->
+<div id="safe">&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;</div>
+```
+
+The `id="raw"` div emits the `<img onerror=...>` tag **verbatim** — a real XSS payload, executed the instant a browser parses it. `set:text` (the div below it, same input) escapes every character, so the tags show up as inert text. This is not a hypothetical: `set:html` **is** the injection point if its argument ever contains attacker-influenced content — treat it exactly like `dangerouslySetInnerHTML` in React or `v-html` in Vue. Only use it on content you control or that has been sanitized through a real HTML sanitizer.
+
+`set:html`'s type is `any`, and its runtime behavior is more permissive than "a string" — verified directly against the installed compiler:
+
+```astro
+---
+// src/components/SetHtmlTypesDemo.astro
+const promiseVal = Promise.resolve('<b>from a promise</b>');
+const responseVal = new Response('<b>from a response</b>');
+---
+<div id="promise" set:html={promiseVal} />
+<div id="response" set:html={responseVal} />
+```
+
+```html
+<div id="promise"><b>from a promise</b></div>
+<div id="response"><b>from a response</b></div>
+```
+
+A `Promise<string>` is awaited before being injected, and a `Response` has its body read as text — both land as real, un-escaped markup. What it does **not** accept is a JSX/Astro element passed directly as the value — that fails at compile time, not runtime:
+
+```astro
+// @expect-error set:html cannot take a JSX expression directly — only a string, Promise<string>, or Response
+---
+---
+<div set:html={<Fragment><b>from jsx</b></Fragment>} />
+```
+
+Proven against the installed compiler — a real parse failure, not a type warning:
+
+```text
+Parse failure: Parse failed with 1 error:
+Unexpected JSX expression
+  ...${$$unescapeHTML(<Fragment>...
+                       ^
+```
+
+`set:text` forces the value to be treated as plain text (the safe default made explicit) — reach for it whenever you want to *guarantee* no HTML is ever emitted, even if the string later starts containing markup-looking characters.
 
 ## Spread attributes
 
@@ -135,30 +181,107 @@ export const diagram = `flowchart LR
   eval --> raw["set:html bypasses escaping for trusted HTML"]
   raw --> html`;
 
-## Astro 7: a strict compiler and JSX-style whitespace
+## Astro 7's compiler, proven wrong four ways
 
-Astro 7 replaced the old Go-based compiler with a **Rust compiler**, and it is now the only compiler. It is faster, and it is *stricter*: the old compiler silently "corrected" broken HTML, the new one reports it as a build error.
+Astro 7 replaced the old Go-based compiler with a **Rust compiler**, and it is now the only compiler. It is faster, and it is *stricter*: the old compiler silently "corrected" broken HTML, the new one reports it as a build error. Four real failures, run through `astro check` against the installed astro@7.3.5 — not remembered, reproduced:
+
+**1. An unclosed tag:**
 
 ```astro
-<!-- Astro 6 quietly closed the first <p> for you. Astro 7: error, unclosed tag. -->
+// @expect-error unclosed <p> — Astro 6 silently closed it for you, Astro 7 fails the build
+---
+---
 <p>Hello world<p>Hello world</p>
-
-<!-- Write what you mean. -->
-<p>Hello world</p>
-<p>Hello world</p>
 ```
 
-Unclosed tags and invalid nesting (a `<div>` inside a `<p>`, for example) fail the build instead of being patched over. That is a good trade: the corrected output was rarely what you intended.
+```text
+src/pages/unclosed.astro:3:2 - error ts(17008): HTML element 'p' has no corresponding closing tag.
+<p>Hello world<p>Hello world</p>
+ ~
+src/pages/unclosed.astro:4:1 - error astro: Expected a closing tag but instead found the end of the file.
+```
 
-The second change is **whitespace**. The `compressHTML` option now defaults to `'jsx'`, so whitespace between elements follows JSX rules — a newline between two inline elements no longer produces a visible space:
+**2. Elements closed in the wrong order** (a `<span>` closed after its parent `<div>` instead of before it):
 
 ```astro
-<!-- Astro 6 rendered "hello world"; Astro 7 renders "helloworld". -->
+// @expect-error mis-nested closing tags
+---
+---
+<div><span>oops</div></span>
+```
+
+```text
+src/pages/wrongorder.astro:3:24 - error ts(17002): Expected corresponding JSX closing tag for 'Fragment'.
+<div><span>oops</div></span>
+                       ~~~~
+src/pages/wrongorder.astro:3:7 - error ts(17008): HTML element 'span' has no corresponding closing tag.
+<div><span>oops</div></span>
+      ~~~~
+src/pages/wrongorder.astro:3:16 - error astro: Expected a matching closing tag but instead found '</div>'.
+<div><span>oops</div></span>
+               ~~~~~~
+```
+
+**3. A bare `{` in prose** (not meant as an expression — a sentence that happens to use curly braces):
+
+```astro
+// @expect-error a `{` outside a fence is parsed as the start of an expression, not literal text
+---
+---
+<p>Set theory uses { and } to denote a set.</p>
+```
+
+```text
+src/pages/curlytext.astro:3:22 - error ts(2304): Cannot find name 'and'.
+<p>Set theory uses { and } to denote a set.</p>
+                     ~~~
+```
+
+<Callout title="The brief predicted 'Unexpected token' here — the test disagrees">
+This course's own review notes assumed a bare `{` in text would fail with a generic "Unexpected token" parse error. Reproduced against the installed astro@7.3.5 compiler, the real failure is a **TypeScript** diagnostic (`ts(2304): Cannot find name 'and'`) — the compiler *does* parse `{ and }` as an expression (an identifier `and` followed by a syntax error is swallowed into "look up the name `and`"), and only then fails because `and` isn't declared anywhere. Same root cause (stray `{` outside a fence), different reported error — write what you actually see, not what seems intuitive.
+</Callout>
+
+**4. An expression that "returns an object"** — this one does **not** fail the build at all. It is valid JavaScript and valid Astro, and it renders exactly what `String(obj)` would:
+
+```astro
+---
+// src/components/ObjExprDemo.astro
+const obj = { a: 1, b: 2 };
+---
+<p>{obj}</p>
+```
+
+```html
+<p>[object Object]</p>
+```
+
+This is a real footgun, just not a compile-time one: an object dropped into `{ }` stringifies to the useless literal text `[object Object]` instead of erroring, so the mistake only shows up by eyeballing the rendered page (or a snapshot test). If you meant to render a field, write `{obj.a}`; if you meant JSON for debugging, write `{JSON.stringify(obj)}`.
+
+The second Astro 7 change is **whitespace**. The `compressHTML` option now defaults to `'jsx'`, so whitespace between elements follows JSX rules — a newline between two inline elements no longer produces a visible space. Proven with the Container API, `data-astro-source-*` debug attributes stripped for readability:
+
+```astro
+---
+// src/components/WhitespaceDemo.astro
+---
 <span>hello</span>
 <em>world</em>
+```
 
-<!-- Be explicit, exactly as you would in React. -->
+```html
+<span>hello</span><em>world</em>
+```
+
+That renders as **"helloworld"**, no space — confirmed against the real output, not assumed. The fix is explicit, exactly as you would in React:
+
+```astro
+---
+// src/components/WhitespaceFixedDemo.astro
+---
 <span>hello</span>{" "}<em>world</em>
+```
+
+```html
+<span>hello</span> <em>world</em>
 ```
 
 If a large existing template depends on the old behaviour, set `compressHTML: true` in `astro.config.mjs` to keep it while you migrate. New projects should just write `{" "}` where a space matters.
@@ -167,9 +290,145 @@ If a large existing template depends on the old behaviour, set `compressHTML: tr
 
 A subtle but important difference from React: Astro templates use **standard HTML attribute names**. It is `class`, not `className`; `for`, not `htmlFor`. You are writing a superset of HTML, so the HTML names are the real ones.
 
+## Directives: `is:raw`, `define:vars`, `class:list`
+
+`is:raw` tells the compiler to stop parsing the element's children as Astro syntax at all — `{ }` inside it is **literal text**, not an expression:
+
+```astro
+---
+// src/components/IsRawDemo.astro
+---
+<div is:raw>
+  { this is not an expression, is:raw stops the compiler from parsing it }
+  <p>literal { braces } stay literal</p>
+</div>
+```
+
+Proven output — the braces pass through untouched, and the nested `<p>` is not even parsed as an element:
+
+```html
+<div>
+  { this is not an expression, is:raw stops the compiler from parsing it }
+  <p>literal { braces } stay literal</p>
+</div>
+```
+
+Reach for it when you're emitting a code sample or a client-side templating snippet (Handlebars, Vue templates) that is full of `{ }` you don't want Astro to touch.
+
+`define:vars` (introduced earlier for `<style>`) also works on other elements to inject frontmatter values as inline CSS custom properties — covered in depth for `<style>` in the next lesson.
+
+`class:list` merges several class-name sources — arrays, objects (`{ className: boolean }`), conditional strings, and plain strings — into one `class` attribute, applied *in addition to* a static `class`:
+
+```astro
+---
+// src/components/ClassListDemo.astro
+const isActive = true;
+const size = 'lg';
+---
+<div class="base" class:list={['btn', { active: isActive, disabled: false }, size && `size-${size}`]}>x</div>
+```
+
+Proven merged output — `disabled` is dropped (its value is `false`), the falsy-guarded template string wins because `size` is truthy, and the static `class="base"` is preserved and merged in:
+
+```html
+<div class="base btn active size-lg">x</div>
+```
+
+## `Astro.self`: recursive components
+
+A component can render itself with `<Astro.self>`, passing new props each time — this is how you build a tree (nested comments, a recursive nav, a file browser) from one component definition:
+
+```astro
+---
+// src/components/SelfRecursion.astro
+interface Props { depth: number }
+const { depth } = Astro.props;
+---
+{depth > 0 ? (
+  <div class="node">
+    depth {depth}
+    <Astro.self depth={depth - 1} />
+  </div>
+) : <div class="leaf">leaf</div>}
+```
+
+Rendered with `depth={3}` through the Container API — real nested output, one level per recursive call, bottoming out at the `leaf` branch:
+
+```html
+<div class="node">depth 3<div class="node">depth 2<div class="node">depth 1<div class="leaf">leaf</div></div></div></div>
+```
+
+There is no built-in recursion limit beyond your own stack — guard the terminating condition (`depth > 0` above) the same way you would in any recursive function, or a bad prop (say, a negative starting depth that never reaches your base case) recurses until the process gives up.
+
+## `Astro.slots.has` and `Astro.slots.render`
+
+Beyond `<slot />` in the template, `Astro.slots` is a frontmatter API: `has(name)` reports whether a slot received content, and `render(name, args?)` returns the slot's content **as an HTML string** (awaiting it, since rendering is async) — useful when you need the markup as a value rather than something you drop straight into the template with `<slot />`. `slots-and-composition` (next lesson) uses `render`'s `args` parameter to build a function-as-slot (a "scoped slot"); here, the mechanics proven on their own:
+
+```astro
+---
+// src/components/SlotsHasRenderDemo.astro
+const hasDefault = Astro.slots.has('default');
+const rendered = await Astro.slots.render('default', ['scoped-arg']);
+---
+<p>has:{String(hasDefault)}</p>
+<div id="rendered" set:html={rendered} />
+```
+
+## Reading AI-generated code
+
+A generated snippet with template expressions can look right and still be wrong in ways that only show up at runtime or under a specific input. Check for these:
+
+- Is a value ever passed straight into `set:html` without having been sanitized — a comment body, a username, anything that reached the server from a request? Proven above: `set:html` emits its argument **verbatim**, XSS payload included.
+- Does an expression render an object or array directly (`{user}` instead of `{user.name}`)? It won't error — it silently renders `[object Object]`, proven above.
+- Does a `{` appear in plain prose text, outside a code fence and outside an intentional expression? It will be parsed as the start of an expression (proven above with the real `Cannot find name` error), not shown literally.
+- Is `class` written as `className`, or `for` as `htmlFor` — copied from a React example without translating to Astro's HTML-native attribute names?
+- Does the snippet assume `<span>`/`<em>` (or similar inline elements) on separate lines will render with a space between them? Since Astro 7, `compressHTML: 'jsx'` means they won't — proven above — unless `{" "}` is explicit.
+
+<SpotTheBug code={`---
+const comment = Astro.props.comment; // arbitrary user-submitted text
+---
+<div class="comment-body" set:html={comment} />`}>
+This looks like ordinary "render the CMS field" code, but `comment` here is described as user-submitted — the same category of input proven above to come through `set:html` completely unescaped. If `comment` ever contains `<img src=x onerror=...>` (or a `<script>` tag, or an `onclick` attribute), it executes in every visitor's browser exactly as proven earlier in this lesson. The fix is either `set:text={comment}` (if it should never contain markup) or running `comment` through a real HTML sanitizer (e.g. `sanitize-html` or `DOMPurify` server-side) before it ever reaches `set:html` — never trust a raw string labeled "user-submitted" here.
+</SpotTheBug>
+
+## Mental Model
+
+Astro's template layer is JSX's expression rules bolted onto real HTML: `{ }` is "drop into JavaScript," everything else is HTML exactly as browsers already parse it. That means the compiler enforces HTML's own well-formedness (proven above: unclosed and mis-nested tags are now build errors, not silently patched), and it means whitespace between elements follows JSX's collapsing rules, not raw-HTML's. `set:html` is the one deliberate escape hatch from "everything is escaped by default" — treat every value that reaches it as if it will be executed by a browser, because it will.
+
+## Trade-offs
+
+| | Escaped (default) | `set:html` |
+|---|---|---|
+| **Safety** | Safe by default — tags render as text | Only as safe as the input — proven above with a real XSS payload |
+| **Use for** | Any value you didn't personally author and vet as HTML | Trusted HTML (a CMS field you sanitize, your own generated markup) |
+| **Accepts** | Any stringifiable value | A string, a `Promise<string>` (auto-awaited), or a `Response` (body read as text) — not a JSX element directly |
+
+## Common Misconceptions
+
+- **"An object dropped into `{ }` will show an error so I'll notice the mistake."** Proven above: it renders `[object Object]` at runtime, no build error at all.
+- **"`set:html` only accepts a plain string."** Proven above: it also accepts a `Promise<string>` and a `Response`, though not a JSX/Astro element passed directly (a real, different compile error).
+- **"Newlines between inline elements in HTML always render as a space, like they do in the browser normally."** Astro 7's default `compressHTML: 'jsx'` collapses that whitespace — proven above, `<span>hello</span>\n<em>world</em>` renders "helloworld", not "hello world".
+- **"A stray `{` in a sentence just prints literally, like it would in plain HTML."** Proven above: it's parsed as the start of an expression and fails the build unless the content genuinely is one (or the element uses `is:raw`).
+
 <Callout title="The one-line takeaway">
-Astro templating is JSX-like but HTML-native: `{ }` embeds expressions, `{cond && <el/>}` and ternaries handle conditionals, `{items.map(...)}` handles loops (no `key` needed), and `<Fragment>` / `<>` group without a wrapper. `set:html` renders a **trusted** raw HTML string (bypassing escaping — an XSS risk on untrusted input), `set:text` forces plain text, and `{...obj}` spreads attributes. Use real HTML attribute names — `class`, not `className`. Astro 7's Rust compiler rejects unclosed or mis-nested tags instead of fixing them, and `compressHTML: 'jsx'` means whitespace follows JSX rules — write `{" "}` where a space matters.
+Astro templating is JSX-like but HTML-native: `{ }` embeds expressions, `{cond && <el/>}` and ternaries handle conditionals, `{items.map(...)}` handles loops (no `key` needed), and `<Fragment>` / `<>` group without a wrapper. `set:html` renders a **trusted** raw HTML string verbatim — proven above with a real XSS payload — and also accepts a `Promise<string>` or `Response`, but not a JSX element; `set:text` forces plain text. `class:list` merges arrays/objects/strings into one `class`, `is:raw` stops the compiler from parsing `{ }` inside an element, `Astro.self` recurses a component, and `Astro.slots.has`/`render` inspect and render slot content from the frontmatter. Astro 7's Rust compiler rejects unclosed or mis-nested tags (proven above with the real diagnostics) instead of fixing them, and `compressHTML: 'jsx'` means whitespace follows JSX rules — write `{" "}` where a space matters. An object dropped into `{ }` does **not** error — it silently renders `[object Object]`.
 </Callout>
+
+```ts
+// src/components/SetHtmlDemo.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import SetHtmlDemo from './SetHtmlDemo.astro';
+
+describe('set:html vs set:text', () => {
+  it('set:html emits raw markup verbatim; set:text escapes the same input', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(SetHtmlDemo);
+    expect(html).toContain("<img src=x onerror=alert('xss')>");
+    expect(html).toContain('&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;');
+  });
+});
+```
 
 export const quizSyntax = [
   {
@@ -181,6 +440,7 @@ export const quizSyntax = [
       'You cannot loop in templates',
     ],
     answer: 1,
+    explain: 'Astro has no loop directive — you map the array to elements exactly like JSX, and no `key` is needed because there is no client-side reconciliation.',
   },
   {
     q: 'What does `set:html` do, and what is the risk?',
@@ -191,6 +451,7 @@ export const quizSyntax = [
       'It imports an HTML file',
     ],
     answer: 1,
+    explain: 'Proven in this lesson with a real XSS-shaped string: set:html emits its argument verbatim, executable tags included, while set:text on the same input escapes every character.',
   },
   {
     q: 'You want to return two sibling elements without adding a wrapper node. What do you use?',
@@ -201,6 +462,7 @@ export const quizSyntax = [
       'Two separate components',
     ],
     answer: 1,
+    explain: 'A Fragment groups children without introducing a real DOM node — either the named `<Fragment>` or the `<>` shorthand.',
   },
   {
     q: 'Which attribute name is correct in an Astro template?',
@@ -211,16 +473,40 @@ export const quizSyntax = [
       'Both className and class work identically',
     ],
     answer: 1,
+    explain: 'Astro templates are HTML-native, not JSX — use the real HTML attribute names (`class`, `for`), not React\'s JSX-specific ones.',
   },
   {
-    q: 'In Astro 7, `<span>hello</span>` and `<em>world</em>` on separate lines render as "helloworld". Why, and what is the fix?',
+    q: '```astro\n---\n---\n<span>hello</span>\n<em>world</em>\n```\nProven with the Container API against astro@7.3.5, what does this render as, and why?',
     options: [
-      'A bug in the Rust compiler — file an issue',
-      '`compressHTML` now defaults to `\'jsx\'`, so whitespace follows JSX rules; write `{" "}` between them (or set `compressHTML: true` to keep the old behaviour)',
-      'Inline elements can no longer be siblings',
-      'You must wrap them in a Fragment',
+      '"hello world" — whitespace between elements is always preserved',
+      '"helloworld" — `compressHTML` defaults to `\'jsx\'` in Astro 7, so the newline collapses; fix with `{" "}` between them',
+      'A build error — elements must be on the same line',
+      '"hello\\nworld" — the newline is preserved literally',
     ],
     answer: 1,
+    explain: 'Proven in this lesson: the real container output is "helloworld" with no space, because Astro 7\'s default compressHTML: \'jsx\' follows JSX whitespace-collapsing rules — write {" "} explicitly where a space matters.',
+  },
+  {
+    q: '```astro\n---\nconst obj = { a: 1, b: 2 };\n---\n<p>{obj}</p>\n```\nWhat happens when this builds and renders?',
+    options: [
+      'A compile-time type error — objects cannot be rendered',
+      'It builds fine and renders the literal text "[object Object]" at runtime',
+      'It renders valid JSON automatically',
+      'It throws a runtime exception',
+    ],
+    answer: 1,
+    explain: 'Proven in this lesson: rendering an object directly is valid Astro — it just stringifies uselessly to "[object Object]", a runtime footgun rather than a build error.',
+  },
+  {
+    q: 'Astro\'s compiler reports `Cannot find name \'and\'` on `<p>Set theory uses { and } to denote a set.</p>`. What actually caused this?',
+    options: [
+      'A missing import for `and`',
+      'The bare `{` outside a code fence was parsed as the start of a JavaScript expression, not literal text — `and` was read as an identifier reference',
+      'A typo — it should be `add`',
+      'Astro does not support the word "and" in prose',
+    ],
+    answer: 1,
+    explain: 'Proven in this lesson: `{` in prose (outside a fence) is always parsed as an expression start, so `{ and }` is treated as referencing an undeclared identifier `and` — wrap it in a fence, escape it, or use `is:raw`.',
   },
 ];
 

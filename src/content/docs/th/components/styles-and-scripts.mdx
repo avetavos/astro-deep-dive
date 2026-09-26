@@ -1,6 +1,6 @@
 ---
 title: 'Styles & Scripts'
-description: 'scoped vs global CSS, ส่งค่าด้วย define:vars และ script tag ธรรมดาทำงานยังไงจริง ๆ — script รันบน browser แต่ไม่ใช่ island'
+description: 'scoped CSS hashing พิสูจน์จริงด้วย build output จริง, is:global กับ :global(), define:vars สำหรับ style และ script, style ที่ใช้สองครั้งถูก emit ครั้งเดียว, script bundling (script เดียวต่อหน้า ไม่ใช่ต่อ instance) เทียบกับการซ้ำของ is:inline, data-* สำหรับส่งค่า, ClientRouter กับ astro:page-load และ class:list ที่ interplay กับ scoped style'
 sidebar:
   order: 3
 ---
@@ -9,88 +9,175 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## scoped style เป็น default
+## scoped style เป็น default พิสูจน์จริง
 
 บล็อก `<style>` ในไฟล์ `.astro` จะถูก **scope ไว้เฉพาะ component นั้น** โดยอัตโนมัติ Astro เขียน selector ของคุณใหม่ (เติม hash ต่อ component) ดังนั้น rule ของ `h1` ตรงนี้จะไปเลอะ `h1` ของอีก component ไม่ได้
 
 ```astro
-<h1>Title</h1>
-<p>Body</p>
-<style>
-  h1 { color: rebeccapurple; }   /* only THIS component's h1 */
-  p  { line-height: 1.6; }
+---
+// src/components/ScopedCard.astro
+const { accent = '#883AEA' } = Astro.props;
+---
+<div class="card">Scoped card</div>
+<style define:vars={{ accent }}>
+  .card { border: 2px solid var(--accent); }
+  h1 { color: red; }
 </style>
 ```
+
+ใช้ **สองครั้ง** ในหน้าเดียวกันด้วย props ต่างกัน (`<ScopedCard accent="#ff0000" />` กับ `<ScopedCard accent="#00ff00" />`) build output จริง:
+
+```html
+<style>.card[data-astro-cid-aoqubwov]{border:2px solid var(--accent)}h1[data-astro-cid-aoqubwov]{color:red}</style>
+<div class="card" style="--accent: #ff0000;" data-astro-cid-aoqubwov>Scoped card</div>
+<div class="card" style="--accent: #00ff00;" data-astro-cid-aoqubwov>Scoped card</div>
+```
+
+พิสูจน์สองอย่างพร้อมกัน: selector `.card` ใน source กลายเป็น `.card[data-astro-cid-aoqubwov]` ใน CSS ที่ build ออกมา และทุก instance ที่ render มี attribute `data-astro-cid-aoqubwov` ตรงกัน — นั่นคือกลไก scoping เป็น attribute selector บวก attribute ที่ตรงกัน ไม่ใช่การเปลี่ยนชื่อ class และแม้ component ถูกใช้**สองครั้ง** CSS text ของ `<style>` block ของมันก็โผล่ใน stylesheet ของหน้า**ครั้งเดียว** — Astro dedupe style ของ component ที่เหมือนกันข้าม instance ไม่ซ้ำ rule ต่อการใช้งาน
 
 คุณเขียน selector ธรรมดาตรงไปตรงมา แล้วได้ CSS เฉพาะ component — ไม่ต้องมี naming convention ไม่ต้อง CSS-in-JS นี่คือ default ที่คุณจะใช้แทบทุกที่
 
-## opt out ด้วย `is:global`
+## opt out ด้วย `is:global` กับ `:global()` พิสูจน์จริง
 
-บางครั้งคุณอยากให้ rule มีผลทั้งไซต์จริง ๆ — CSS reset, typography พื้นฐาน, theme เติม `is:global` เพื่อ opt ทั้งบล็อกออกจาก scoping
+บางครั้งคุณอยากให้ rule มีผลทั้งไซต์จริง ๆ — CSS reset, typography พื้นฐาน, theme เติม `is:global` เพื่อ opt ทั้งบล็อกออกจาก scoping:
 
 ```astro
+---
+// src/components/GlobalBit.astro
+---
 <style is:global>
-  :root { --brand: #883AEA; }
-  body { margin: 0; font-family: system-ui; }
+  .reset-me { margin: 0; }
 </style>
-```
-
-คุณยัง escape scope ทีละ selector ได้ด้วยฟังก์ชัน `:global()` ภายในบล็อกที่ scoped ตามปกติ
-
-```astro
 <style>
-  /* scoped, except this one rule reaches into slotted/child content */
-  :global(.markdown-body a) { color: var(--brand); }
+  p { color: blue; }
+  :global(.markdown-body a) { color: green; }
 </style>
 ```
 
-## ส่งค่าเข้า CSS ด้วย `define:vars`
+CSS ที่ build จริง อยู่ติดกับ output ของ `ScopedCard` ที่ scoped ข้างบนในหน้าเดียวกัน:
 
-ค่าใน frontmatter อยู่ฝั่ง server ส่วน CSS เป็น text นิ่ง ๆ เพื่อเชื่อมสองอย่างนี้ `define:vars` จะฉีดค่า JavaScript เข้าไปเป็น **CSS custom property** บนบล็อก style
-
-```astro
----
-const accent = "#883AEA";
-const gap = "1.5rem";
----
-<div class="card">Styled by props</div>
-<style define:vars={{ accent, gap }}>
-  .card {
-    border: 2px solid var(--accent);
-    padding: var(--gap);
-  }
-</style>
+```css
+.reset-me{margin:0}
+p[data-astro-cid-yididndw]{color:#00f}
+.markdown-body a{color:green}
 ```
 
-Astro จะออก inline style ที่พก `--accent` กับ `--gap` มาด้วย ดังนั้น prop ขับ style ได้โดยไม่ต้องมี JavaScript ฝั่ง client เลย เป็นวิธีสะอาด ๆ ในการทำให้สีหรือ spacing ของ component ปรับได้ผ่าน props
+`.reset-me` (block `is:global`) **ไม่มี** `data-astro-cid-*` เลย — มีผลทุกที่ที่ใช้ class นี้ ทั้งไซต์ ส่วน `p` ในบล็อกที่สองที่ scoped ปกติ **มี** hash — scoping ใช้ทีละ rule ตามปกติ `:global(.markdown-body a)` ข้างในบล็อกที่ scoped เดียวกันนั้นคือ rule เดียวที่หนี scoping — พิสูจน์เคียงข้างกับ `p` ที่ scoped ใน `<style>` element เดียวกันเป๊ะ
 
-## `<script>` tag: ถูก process และ bundle โดย default
+## ส่งค่าเข้า CSS ด้วย `define:vars` พิสูจน์จริง
 
-`<script>` ในไฟล์ `.astro` **รันบน browser** — แต่ Astro มองเป็น module: script จะถูก process, bundle, compile TypeScript และ resolve import เหมือน JS อื่น ๆ ใน build ของคุณ
+ค่าใน frontmatter อยู่ฝั่ง server ส่วน CSS เป็น text นิ่ง ๆ เพื่อเชื่อมสองอย่างนี้ `define:vars` จะฉีดค่า JavaScript เข้าไปเป็น **CSS custom property** ออกมาเป็น attribute `style` แบบ inline จริง ๆ บน element — พิสูจน์แล้วข้างบน: `<div class="card" style="--accent: #ff0000;" ...>` เป็นวิธีสะอาด ๆ ในการทำให้สีหรือ spacing ของ component ปรับได้ผ่าน props โดยไม่ต้องมี JavaScript ฝั่ง client เลย
+
+## `<script>` tag: ถูก bundle ครั้งเดียวต่อหน้า ไม่ใช่ต่อ component instance
+
+`<script>` ในไฟล์ `.astro` **รันบน browser** — แต่ Astro มองเป็น module: script จะถูก process, bundle, compile TypeScript และ resolve import เหมือน JS อื่น ๆ ใน build ของคุณ ที่สำคัญคือ เมื่อ component ที่มี `<script>` ถูกใช้**หลายครั้งในหน้าเดียว** script จะถูก emit **ครั้งเดียว** ไม่ใช่ครั้งละ instance:
 
 ```astro
-<button id="menu">Menu</button>
+---
+// src/components/CounterScript.astro
+---
+<div class="counter">0</div>
 <script>
-  // Bundled module script. Runs in the browser.
-  import { toggle } from '../scripts/menu';
-  document.getElementById('menu')?.addEventListener('click', toggle);
+  console.log('COUNTER_SCRIPT_RAN');
+  (window as any).__counterRuns = ((window as any).__counterRuns || 0) + 1;
 </script>
 ```
 
-นี่คือ client JavaScript จริง ๆ — จุดเดียวในโมดูลนี้ที่โค้ดไปถึง browser เหมาะกับงาน DOM แบบ imperative เล็ก ๆ: ต่อ event listener, อ่าน `localStorage`, init widget จากภายนอก
+ใช้สามครั้งในหน้าเดียว (`<CounterScript /><CounterScript /><CounterScript />`) build output จริง:
 
-### opt out ด้วย `is:inline`
+```html
+<div class="counter">0</div><script type="module">console.log(`COUNTER_SCRIPT_RAN`),window.__counterRuns=(window.__counterRuns||0)+1;</script><div class="counter">0</div><div class="counter">0</div>
+```
 
-ถ้าคุณต้องการให้ script ออกมา **ตรงตามที่เขียนเป๊ะ ๆ** — ไม่ถูก bundle หรือ process (เช่น snippet analytics แบบ inline หรือ script ที่ต้องรันก่อน hydration) ให้เติม `is:inline`
+มี `<div class="counter">` สามตัว (ต่อ instance) แต่มี `<script type="module">` เพียง**หนึ่ง**tag — ดังนั้น `COUNTER_SCRIPT_RAN` log ครั้งเดียวและ `__counterRuns` จบที่ `1` ไม่ใช่ `3` script ของ component initialize behavior ที่ใช้ร่วมกันของหน้า ไม่ใช่ behavior ต่อ instance ถ้าต้องการ state ต่อ instance ให้ query `document.querySelectorAll` แล้ววนลูป (แบบตัวอย่าง `data-*` ข้างล่าง) คุณไม่ได้ execution แยกสามครั้งฟรี ๆ
+
+<Callout title="ยืนยันกับ astro@7.3.5: ไม่ใช่ external /_astro/*.js file เสมอไป">
+คำอธิบาย behavior นี้บางแหล่งบอกว่า script ที่ dedupe แล้วจะกลายเป็นไฟล์ `<script type="module" src="/_astro/....js">` แบบ external ที่แชร์และ cache ข้ามหน้าได้ ทดสอบตรงกับ static build จริงของหน้านี้เป๊ะ (และ script เวอร์ชันที่ใหญ่ขึ้นแบบเดิม) — ใน configuration นี้ Astro **inline** module script ที่ process แล้วเข้าไปใน HTML ของหน้าโดยตรง เป็น tag `<script type="module">` เดียวพร้อมโค้ดข้างใน ไม่ใช่ reference แบบ `src=` แม้จะข้ามสองหน้าที่ใช้ component เดียวกันก็ตาม claim เรื่อง dedupe-ต่อ-หน้าข้างบนพิสูจน์แล้ว ส่วนว่า build หนึ่ง ๆ จะแยก external chunk ที่แชร์กันเพิ่มเติมด้วยหรือไม่ ขึ้นกับ configuration การ bundle และขนาดของโปรเจกต์เอง ไม่ใช่สิ่งที่ควรสมมติโดยไม่เช็ค output ของ build ตัวเองก่อน
+</Callout>
+
+### opt out ด้วย `is:inline` พิสูจน์ว่าซ้ำ
+
+ถ้าคุณต้องการให้ script ออกมา **ตรงตามที่เขียนเป๊ะ ๆ** — ไม่ถูก bundle หรือ process และไม่ถูก dedupe (เช่น snippet analytics แบบ inline หรือ script ที่ต้องรันก่อน hydration) ให้เติม `is:inline`:
 
 ```astro
+---
+// src/components/InlineScript.astro
+---
+<div class="inline-marker"></div>
 <script is:inline>
-  window.dataLayer = window.dataLayer || [];
+  console.log('INLINE_SCRIPT_RAN');
 </script>
 ```
 
-inline script ข้าม bundling ดังนั้น `import` ในนั้นจะไม่ถูก resolve และไม่ถูก dedupe ข้ามทั้งหน้า ใช้เฉพาะตอนที่คุณต้องการ tag ดิบ ๆ ไม่ถูกแตะจริง ๆ
+ใช้สองครั้งในหน้าเดียวกัน build output จริง — เทียบกับ `CounterScript` ที่ dedupe แล้วข้างบน:
+
+```html
+<div class="inline-marker"></div><script>
+  console.log('INLINE_SCRIPT_RAN');
+</script><div class="inline-marker"></div><script>
+  console.log('INLINE_SCRIPT_RAN');
+</script>
+```
+
+มี `<script>` สองtag ตรงตัวเป๊ะ ตัวละ instance — `is:inline` script ข้ามทั้ง bundling *และ* deduplication ใช้เฉพาะตอนที่คุณต้องการ tag ดิบ ๆ ซ้ำตรงจุดที่เขียนไว้จริง ๆ
+
+### attribute `data-*`: ส่งค่าฝั่ง server เข้า script ที่ bundle แล้ว
+
+script ที่ bundle แล้ว ไม่ใช่ inline อ่าน frontmatter ตรง ๆ ไม่ได้ (มันรันบน browser นานหลังจาก frontmatter รันบน server เสร็จไปแล้ว) — สะพานมาตรฐานคือ attribute `data-*` บน element ที่ script query:
+
+```astro
+---
+// src/components/DataAttrScript.astro
+interface Props { userId: string }
+const { userId } = Astro.props;
+---
+<button class="like-btn" data-user-id={userId}>Like</button>
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.like-btn').forEach((btn) => {
+    const userId: string = btn.dataset.userId!;
+    btn.addEventListener('click', () => console.log('liked by', userId));
+  });
+</script>
+```
+
+ใช้ในสองหน้าที่ต่างกันด้วย props ต่างกัน (`userId="u1"` กับ `userId="u2"`) build output จริงของแต่ละหน้า:
+
+```html
+<!-- page A -->
+<button class="like-btn" data-user-id="u1">Like</button><script type="module">document.querySelectorAll(`.like-btn`).forEach(e=>{let t=e.dataset.userId;e.addEventListener(`click`,()=>console.log(`liked by`,t))});</script>
+<!-- page B -->
+<button class="like-btn" data-user-id="u2">Like</button><script type="module">document.querySelectorAll(`.like-btn`).forEach(e=>{let t=e.dataset.userId;e.addEventListener(`click`,()=>console.log(`liked by`,t))});</script>
+```
+
+TypeScript (`querySelectorAll<HTMLButtonElement>`, annotation `: string`) compile หายไป — script ที่ ship ออกมาเป็น JS ธรรมดา — แต่มัน type-check ตอน build จริง จับ typo ของ key `dataset` หรือ element type ผิดได้ก่อนที่จะ ship
+
+### `define:vars` บน `<script>`: กลไกคนละแบบจากบน `<style>`
+
+`define:vars` ใช้กับ `<script>` ได้ด้วย — แต่มันฉีดค่าเป็น **JavaScript `const`** จริง ๆ ไว้บนสุดของ script ห่อด้วย IIFE ไม่ใช่ CSS custom property:
+
+```astro
+---
+// src/components/ScriptDefineVars.astro
+const apiUrl = 'https://example.com/api';
+---
+<div id="marker"></div>
+<script define:vars={{ apiUrl }}>
+  console.log('API_URL_IS', apiUrl);
+</script>
+```
+
+build output จริง:
+
+```html
+<script>(function(){const apiUrl = "https://example.com/api";
+
+  console.log('API_URL_IS', apiUrl);
+})();</script>
+```
+
+สังเกตความต่างของรูปแบบจาก `data-*`: script นี้ถูก emit แบบ **inline** (ไม่มี `type="module"` ห่อด้วย IIFE ของตัวเอง) แทนที่จะ bundle — `define:vars` บังคับให้ script emit แบบ inline ต่อ instance เหมือนกับที่มันบังคับ attribute `style` แบบ inline ต่อ instance ถ้าต้องการ script ที่ bundle และ dedupe แล้ว (กรณี `CounterScript` ข้างบน) ให้ส่งค่าผ่าน `data-*` attribute แทน ใช้ `define:vars` บน script เฉพาะตอนที่ต้องการค่านั้น bake เข้าไปใน inline tag ของ instance นี้จริง ๆ เท่านั้น
 
 ## จุดสำคัญ: script ไม่ใช่ island
 
@@ -110,6 +197,27 @@ inline script ข้าม bundling ดังนั้น `import` ในนั�
 
 เมื่อคุณอยากได้ความ interactive ระดับ **component** — component React/Vue/Svelte ที่มี state แล้ว hydrate — นั่นคือ **island** สร้างด้วย client directive และเป็นเนื้อหาทั้งโมดูลถัดไป กฎง่าย ๆ: หยิบ `<script>` มาใช้กับงาน DOM แบบ imperative เล็ก ๆ; หยิบ island มาใช้เมื่ออยากได้ UI component ที่มี state รันบน client
 
+### script กับ `ClientRouter`: รันใหม่ตอน navigate ด้วย `astro:page-load`
+
+`<script>` ธรรมดารันแค่ครั้งเดียว ตอนหน้าที่มันอยู่โหลดครั้งแรก ถ้าไซต์ใช้ `ClientRouter` (page transition ฝั่ง client แบบ opt-in ของ Astro, `astro:transitions`) การ navigate ไปหน้าใหม่จะสลับ DOM **โดยไม่ reload หน้าเต็ม** — ดังนั้น script ที่ฟังแค่ `DOMContentLoaded` จะไม่ยิงอีกเลยในการ navigate ครั้งถัด ๆ ไป ยืนยันตรงกับ source ของ astro@7.3.5 ที่ติดตั้งจริง (`node_modules/astro/dist/transitions/events.d.ts`) event ที่ยิงเป็นแค่ string name ธรรมดา — Astro 7 เอา constant `TRANSITION_*` ที่ export ออกไปแล้ว:
+
+```ts
+type Events = 'astro:after-preparation' | 'astro:after-swap' | 'astro:page-load';
+```
+
+ฟัง `astro:page-load` เพื่อให้ setup code ของคุณรันใหม่หลังทุกการ navigate รวมถึงครั้งแรกด้วย:
+
+```astro
+<script>
+  function setup() {
+    document.getElementById('inc')?.addEventListener('click', () => {/* ... */});
+  }
+  document.addEventListener('astro:page-load', setup);
+</script>
+```
+
+`astro:page-load` ยิงครั้งเดียวตอนโหลดครั้งแรก และยิงอีกครั้งหลังทุกการสลับฝั่ง client — script ที่รอแค่ `DOMContentLoaded` อย่างเดียวจะหยุดทำงานเงียบ ๆ หลัง navigate ครั้งแรกบนหน้าที่ใช้ `ClientRouter` เพราะ event นั้นไม่ยิงอีกเลย
+
 <Mermaid title="script กับ island — คนละเรื่องกัน" code={diagram} />
 
 export const diagram = `flowchart TB
@@ -118,9 +226,95 @@ export const diagram = `flowchart TB
   isl["island with a client directive"] --> hyd["framework component hydrates"]
   hyd --> state["has its own state and re-renders"]`;
 
+## `class:list` กับ scoped style: interplay กันได้สะอาด
+
+scoping มีผลกับ*element* ไม่ว่า attribute `class` ของมันถูกสร้างมายังไง — scoped selector ก็ยังจับ class ที่มาจาก `class:list` ได้เหมือนเดิม:
+
+```astro
+---
+// src/components/ClassListScoped.astro
+const isActive = true;
+---
+<div class:list={['card', { active: isActive }]}>x</div>
+<style>
+  .card { border: 1px solid; }
+  .active { font-weight: bold; }
+</style>
+```
+
+build output จริง — class ที่มาจาก `class:list` ทั้งคู่ได้ scoping attribute และ selector ทั้งคู่ก็ scoped:
+
+```html
+<style>.card[data-astro-cid-sr4bmj7r]{border:1px solid}.active[data-astro-cid-sr4bmj7r]{font-weight:700}</style>
+<div class="card active" data-astro-cid-sr4bmj7r>x</div>
+```
+
+ไม่มีอะไรพิเศษต้องจำนอกเหนือจากที่พิสูจน์แล้ว: `class:list` ตัดสินใจแค่ค่าสุดท้ายของ attribute `class` ส่วน scoping เป็น attribute `data-astro-cid-*` ที่ apply เสมอแยกต่างหาก บวก CSS selector ที่ match กัน
+
+## อ่านโค้ดที่ AI เขียน
+
+- บล็อก `<style>` target selector ที่คาดว่าจะ cascade เข้าไปใน markup ของ **component ลูก** ไหม (`.parent .child-heading { ... }`)? scoped style เขียน selector ใหม่เฉพาะที่ match element ที่ render โดย template ของ*component นี้เอง* — ไปถึง component ลูกต้องใช้ `:global()` พิสูจน์แล้วข้างบน
+- `is:inline` ถูกใช้กับ script ที่ตั้งใจจะแชร์/bundle ครั้งเดียวต่อหน้าไหม? พิสูจน์แล้วข้างบน: `is:inline` ซ้ำตรงตัวต่อ component instance และข้าม import resolution — ตรงข้ามกับสิ่งที่ script แบบ "รันครั้งเดียว" มักต้องการ
+- script พึ่งแค่ `DOMContentLoaded`/`window.onload` บนไซต์ที่ใช้ `ClientRouter` ไหม? พิสูจน์แล้วข้างบน: มันไม่ยิงอีกหลัง client-side navigation — ฟัง `astro:page-load` ด้วย
+- script สมมติไหมว่าอ่านค่าจาก frontmatter ได้ตรง ๆ (`{someServerValue}` พิมพ์ตรงเข้าไปใน body ของ script) แทนที่จะส่งผ่าน `data-*` หรือ `define:vars`? `<script>` ที่ไม่ inline รันบน browser หลังจาก server ทำงานเสร็จแล้ว มันต้องมีสะพานส่งค่า ไม่ใช่ reference ตรง ๆ
+
+<SpotTheBug code={`---
+// src/components/RatingWidget.astro
+const productId = Astro.props.productId;
+---
+<button class="rate-btn">Rate this</button>
+<script>
+  document.querySelector('.rate-btn')?.addEventListener('click', () => {
+    fetch('/api/rate', { method: 'POST', body: JSON.stringify({ productId }) });
+  });
+</script>`}>
+`productId` เป็นตัวแปร frontmatter (ฝั่ง server) แต่บล็อก `<script>` รันบน browser ใน JavaScript scope ที่แยกกันโดยสิ้นเชิง — มันมองไม่เห็น `productId` เลย มันจะ compile ไม่ผ่าน (script ธรรมดาที่ไม่ใช้ `define:vars` อ้างถึง identifier ที่ไม่ได้ประกาศ) หรือถ้า `productId` บังเอิญมีอยู่เป็น global ด้วยความบังเอิญ ก็จะใช้ค่าผิดเงียบ ๆ ทางแก้จริงสองแบบ: `<script define:vars={{ productId }}>` เพื่อฉีดมันเป็น `const` แบบ inline (พิสูจน์แล้วข้างบน) หรือ emit เป็น `<button class="rate-btn" data-product-id={productId}>` แล้วอ่าน `.dataset.productId` ข้างใน script bundled ปกติ (พิสูจน์แล้วข้างบนด้วย) — แบบที่สองดีกว่าในกรณีนี้เพราะยังคง script นี้ไว้แบบ bundle/dedupe แทนที่จะถูกบังคับเป็น inline
+</SpotTheBug>
+
+## Mental Model
+
+`<style>` และ `<script>` ของ component ทั้งคู่มี default เป็น "เป็นของ component นี้ ไม่ใช่ของหน้า" — แต่บังคับใช้กันคนละวิธี `<style>` เขียน selector ใหม่และประทับ attribute ที่ตรงกันลงบน markup ของทุก instance (พิสูจน์แล้วข้างบน: *instance* ถูกทำเครื่องหมาย ไม่ใช่ CSS ที่ dedupe ต่อ instance — rule เขียนครั้งเดียว) `<script>` กลับ dedupe*โค้ด*เองข้าม instance ในหน้าเดียวกัน (พิสูจน์แล้วข้างบน: สาม instance, script tag เดียว) — เพราะต่างจาก CSS การรัน JS เดียวกันสามครั้งมักไม่ใช่สิ่งที่คุณต้องการ directive ที่ opt out ทั้งคู่ (`is:global`, `is:inline`) แลก behavior อัตโนมัติระดับหน้าตรงนี้ ไปเป็น "apply/run ตามที่เขียนเป๊ะ ๆ ทุกที่ที่ถูกอ้างถึง"
+
+## ข้อแลกเปลี่ยน
+
+| | scoped `<style>` (default) | `is:global` / `:global()` | `<script>` bundled (default) | script `is:inline` |
+|---|---|---|---|---|
+| **มีผลกับ** | markup ของ component นี้เท่านั้น | ทั้งไซต์ | รันครั้งเดียวต่อหน้า ไม่ว่าจำนวน instance | รันครั้งเดียวต่อ instance ตรงตัว |
+| **import** | n/a | n/a | resolve และ bundle | ไม่ resolve |
+| **เหมาะกับ** | CSS เฉพาะ component (กรณี default) | reset, theme, style เนื้อหาที่ slot/child | setup logic ที่แชร์, event delegation | analytics snippet, script ก่อน hydration |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`<style>` ของ component cascade เข้าไปใน component ลูกที่มัน render"** พิสูจน์แล้วข้างบน: scoping แตะแค่ template ของ component ปัจจุบันเอง ไปถึงลูกต้องใช้ `:global()`
+- **"ใช้ component ที่มี `<style>` block สามครั้ง CSS นั้นจะเพิ่มสามเท่าใน output"** พิสูจน์แล้วข้างบน: rule เขียนครั้งเดียวใน stylesheet ของหน้า มีแค่ attribute `data-astro-cid-*` ที่ซ้ำ บน markup ของแต่ละ instance
+- **"ใช้ component ที่มี `<script>` สามครั้ง script นั้นรันสามครั้ง"** พิสูจน์แล้วข้างบน: มี `<script>` tag เดียวไม่ว่าจำนวน instance — ตรงข้ามกับกรณี `is:inline` ที่ซ้ำจริง
+- **"script แค่ต้องฟัง `DOMContentLoaded` ก็ทำงานถูกต้อง"** พิสูจน์แล้วข้างบน (จาก source ของ `astro:transitions` ที่ติดตั้งจริง): บนหน้าที่ใช้ `ClientRouter` การ navigate ครั้งถัด ๆ ไปไม่ reload document — ต้องรัน setup ใหม่บน `astro:page-load` ด้วย
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`<style>` ของ component เป็น **scoped โดย default**; opt out ด้วย `<style is:global>` หรือ selector `:global()` และส่ง props เข้า CSS ด้วย `define:vars` ส่วน `<script>` **รันบน browser** และถูก bundle/process โดย default (`is:inline` opt out) — แต่ **ไม่ใช่ island**: script แก้ DOM ที่มีอยู่โดยไม่มีการ hydrate component ถ้าอยากได้ UI component ที่มี state และ hydrate คุณต้องใช้ island (โมดูลถัดไป)
+`<style>` ของ component เป็น **scoped โดย default** — พิสูจน์แล้วข้างบนด้วย attribute `data-astro-cid-*` จริงและ selector ที่เขียนใหม่ และ style ที่ใช้หลาย instance ถูกเขียนลงหน้า**ครั้งเดียว** ไม่ใช่ต่อ instance opt out ด้วย `<style is:global>` หรือ selector `:global()` (พิสูจน์เคียงข้างกันข้างบน); ส่ง props เข้า CSS ด้วย `define:vars` ออกมาเป็น attribute `style="--x: ..."` แบบ inline จริง `<script>` **รันบน browser** ถูก bundle/process และ — พิสูจน์แล้วข้างบน — ถูก emit **ครั้งเดียวต่อหน้า** แม้ component ของมันถูกใช้หลายครั้ง; `is:inline` กลับ**ซ้ำต่อ instance**และข้าม bundling เชื่อมค่าฝั่ง server เข้า script ที่ bundle แล้วด้วย attribute `data-*` (พิสูจน์แล้วข้างบน); `define:vars` บน `<script>` กลับบังคับ emit แบบ **inline** ต่อ instance เป็น `const` JS จริง กลไกคนละแบบจากบน `<style>` `class:list` มีผลแค่กับ attribute `class` — scoping มีผลกับ element เสมอ (พิสูจน์แล้วข้างบน) script**ไม่ใช่ island** — ไม่มีการ hydrate เกิดขึ้น — และบนหน้าที่ใช้ `ClientRouter` มันต้องฟัง `astro:page-load` ด้วย (ไม่ใช่แค่ `DOMContentLoaded`) เพื่อรันใหม่หลัง client-side navigation ถ้าอยากได้ UI component ที่มี state และ hydrate คุณต้องใช้ island (โมดูลถัดไป)
 </Callout>
+
+```ts
+// src/components/ScopedCard.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import ScopedCard from './ScopedCard.astro';
+
+describe('scoped style hashing', () => {
+  it('stamps a data-astro-cid-* attribute and the define:vars inline style onto the rendered element', async () => {
+    // Container renderToString returns only this component's own markup — the
+    // extracted <style data-astro-cid-*> stylesheet is assembled separately at
+    // real page/build time (proven in this lesson with real built CSS output);
+    // what the container proves directly is the per-instance scoping attribute
+    // and the define:vars inline style landing on the element itself.
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(ScopedCard, { props: { accent: '#ff0000' } });
+    expect(html).toMatch(/data-astro-cid-[a-z0-9]+/);
+    expect(html).toContain('<div class="card"');
+    expect(html).toContain('style="--accent: #ff0000;"');
+  });
+});
+```
 
 export const quizStyles = [
   {
@@ -132,6 +326,7 @@ export const quizStyles = [
       'inline บนทุก element',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย CSS ที่ build จริง: selector ได้ attribute `[data-astro-cid-*]` ต่อท้าย และทุก instance ที่ render มี attribute ตรงกัน — คู่นี้คือกลไก scoping',
   },
   {
     q: 'คุณส่งค่าจาก frontmatter เข้า CSS ของ component ยังไง?',
@@ -142,6 +337,7 @@ export const quizStyles = [
       'ใช้ client script ตั้งค่า style',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: define:vars ออก attribute `style="--accent: ...;"` แบบ inline จริงบน element ให้ CSS นิ่ง ๆ อ้างผ่าน var(--accent) ได้',
   },
   {
     q: '`<script>` tag ธรรมดาใน component .astro...',
@@ -152,16 +348,40 @@ export const quizStyles = [
       'รันบน server เท่านั้น',
     ],
     answer: 1,
+    explain: '<script> คือ client JavaScript จริง — bundle และ process โดย default — แต่ไม่เคย trigger การ hydrate component เลย นั่นคือกลไกแยกต่างหาก (client directive) พูดถึงในโมดูลถัดไป',
   },
   {
     q: 'การเติม `is:inline` ให้ script ทำอะไร?',
     options: [
       'รัน script บน server',
-      'ออกมาตามที่เขียน — ข้าม bundling/processing ดังนั้น import ในนั้นไม่ถูก resolve',
+      'ออกมาตามที่เขียน — ข้าม bundling/processing ดังนั้น import ในนั้นไม่ถูก resolve และซ้ำต่อ instance',
       'scope script ไว้กับ component',
       'ทำให้ script กลายเป็น island',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: script ที่เป็น is:inline ใช้สองครั้งในหน้าเดียวออกมาเป็น <script> สองtag ตรงตัว ต่างจาก script bundled ปกติ (ที่บทเดียวกันพิสูจน์ว่า dedupe เหลือ tag เดียว)',
+  },
+  {
+    q: '```astro\n---\n// src/components/CounterScript.astro\n---\n<div class="counter">0</div>\n<script>\n  console.log(\'RAN\');\n</script>\n```\nใช้สามครั้งในหน้าเดียว พิสูจน์ด้วย build จริง มี `<script>` tag และ console.log กี่ครั้ง?',
+    options: [
+      'อย่างละสาม — ต่อ component instance',
+      'อย่างละหนึ่ง — script ถูก bundle และ dedupe ข้ามทุก instance ในหน้า',
+      'ศูนย์ — script ต้องมี is:inline ถึงจะรันได้',
+      'script tag สามอันแต่ console.log ครั้งเดียว',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย HTML ที่ build จริง: มี <div class="counter"> สามตัว (ต่อ instance) แต่มี <script type="module"> เพียงหนึ่ง tag — script bundled แบบ default ถูก emit ครั้งเดียวต่อหน้า ไม่ใช่ครั้งละ instance',
+  },
+  {
+    q: 'บนหน้าที่ใช้ `ClientRouter` (astro:transitions) script รัน setup แค่ข้างใน listener `DOMContentLoaded` เท่านั้น ปัญหาที่พิสูจน์แล้วคืออะไร?',
+    options: [
+      'ไม่มีปัญหา — DOMContentLoaded ยิงทุกครั้งที่ navigate เสมอ',
+      'client-side navigation สลับ DOM โดยไม่ reload หน้าเต็ม ดังนั้น DOMContentLoaded ไม่ยิงอีก — ฟัง `astro:page-load` แทน',
+      'script จะรันสองครั้งตอนโหลดครั้งแรก',
+      'ClientRouter ปิด script ทั้งหมด',
+    ],
+    answer: 1,
+    explain: 'ยืนยันตรงกับ source ของ astro@7.3.5 transitions ที่ติดตั้งจริง: event จริงที่ยิงคือ astro:after-preparation, astro:after-swap, และ astro:page-load (string ธรรมดา ไม่มี constant ที่ export ใน Astro 7) — astro:page-load ยิงตอนโหลดครั้งแรกและหลังทุกการสลับฝั่ง client ต่างจาก DOMContentLoaded',
   },
 ];
 

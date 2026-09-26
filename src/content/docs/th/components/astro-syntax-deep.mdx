@@ -1,6 +1,6 @@
 ---
 title: 'Astro Syntax Deep Dive'
-description: 'template expression, conditional กับ loop, Fragment, set:html กับ set:text, spread attribute, dynamic tag และ compiler ที่เข้มงวดของ Astro 7 กับ whitespace แบบ JSX — syntax แบบ JSX ที่เปลี่ยนข้อมูลให้เป็น markup'
+description: 'template expression, conditional กับ loop, Fragment, set:html กับ set:text, spread attribute, dynamic tag, directive (is:raw, define:vars, class:list), Astro.self, Astro.slots และ compiler ที่เข้มงวดของ Astro 7 กับ whitespace แบบ JSX — พิสูจน์ด้วย astro check error จริงและ container output จริง'
 sidebar:
   order: 2
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Expression: `{ }` หย่อนเข้าไปใน JavaScript
 
@@ -24,11 +25,11 @@ const count = 3;
 <p>Total: {count * 2}</p>
 ```
 
-ข้างใน `{ }` ใส่ได้เฉพาะ **expression** เท่านั้น — อะไรที่ประเมินออกมาเป็นค่า ส่วน statement (บล็อก `if`, loop `for`) ต้องอยู่ใน frontmatter ใน template คุณเขียน control flow ในรูปของ expression ตามที่จะเห็นด้านล่าง
+มีแค่ **expression** เท่านั้นที่ใส่ใน `{ }` ได้ — สิ่งที่ evaluate ออกมาเป็นค่า statement (บล็อก `if`, loop `for`) ต้องอยู่ใน frontmatter ใน template คุณเขียน control flow เป็น expression แบบที่แสดงข้างล่างนี้
 
 ## Conditional
 
-ใช้สำนวน logical-AND เพื่อ render บางอย่างเฉพาะตอนเงื่อนไขเป็นจริง และใช้ ternary เพื่อเลือกระหว่างสองทาง
+ใช้ idiom logical-AND เพื่อ render บางอย่างเฉพาะตอนเงื่อนไขเป็นจริง และ ternary เพื่อเลือกระหว่างสองทาง:
 
 ```astro
 ---
@@ -42,11 +43,11 @@ const user = { name: "Ada", role: "admin" };
   : <a href="/account">Your account</a>}
 ```
 
-`{cond && <div/>}` จะ render element เมื่อ `cond` เป็น truthy และไม่ render อะไรเลยถ้าไม่ใช่ ส่วน ternary จะ render หนึ่งในสองทางเสมอ
+`{cond && <div/>}` render element เมื่อ `cond` เป็น truthy และไม่ render อะไรเลยถ้าไม่ใช่ ส่วน ternary จะ render กิ่งใดกิ่งหนึ่งเสมอ
 
 ## Loop
 
-ไม่มี directive สำหรับ loop โดยเฉพาะ — คุณ `map` array ให้เป็น markup เหมือน JSX เป๊ะ ๆ
+ไม่มี loop directive พิเศษ — คุณ `map` array ให้เป็น markup เหมือน JSX เป๊ะ:
 
 ```astro
 ---
@@ -60,11 +61,11 @@ const posts = [
 </ul>
 ```
 
-Astro ไม่ต้องใช้ prop `key` แบบที่ React ต้องใช้ — นี่คือ server rendering ไม่มี reconciliation แค่ map, return element, จบ
+Astro ไม่ต้องการ prop `key` แบบ React — นี่คือ server rendering ไม่มี reconciliation Map แล้ว return element จบ
 
-## Fragment: จัดกลุ่มโดยไม่ต้องมี wrapper
+## Fragment: จับกลุ่มโดยไม่มี wrapper
 
-เวลาที่คุณต้อง return หลาย element โดยไม่อยากเพิ่ม DOM node ห่อ ให้ใช้ **Fragment** Astro รองรับทั้งแบบมีชื่อ `<Fragment>` และแบบย่อ `<>`
+เมื่อต้องการ return หลาย element โดยไม่เพิ่ม DOM node ห่อ ใช้ **Fragment** Astro รองรับทั้ง `<Fragment>` แบบมีชื่อ และ shorthand `<>`:
 
 ```astro
 ---
@@ -83,27 +84,72 @@ const items = ["a", "b"];
 ))}
 ```
 
-Fragment ยังเป็นที่วาง directive `set:*` เวลาที่คุณไม่มี element ให้แปะด้วย (เดี๋ยวจะพูดถึง)
+Fragment ยังเป็นที่อยู่ของ directive `set:*` เมื่อไม่มี element ให้ยึด (ถัดไป)
 
-## Render HTML ดิบ: `set:html` กับ `set:text`
+## Render raw HTML: `set:html` กับ `set:text` พิสูจน์จริง
 
-โดย default expression ที่ให้ค่าออกมาเป็น string จะถูก **escape** — Astro render เป็น text ดังนั้น `<b>hi</b>` จะโชว์ tag ออกมาตรง ๆ นั่นปลอดภัย เมื่อไหร่ที่คุณมี string HTML ที่เชื่อถือได้และอยากให้ render เป็น markup จริง ๆ (เช่น HTML จาก CMS ที่คุณคุมเอง) ให้ใช้ `set:html`
+ค่า default แล้ว expression ที่ได้ string จะถูก **escape** — Astro render เป็น text ดังนั้น `<b>hi</b>` จะโชว์ tag ตรง ๆ ตามตัวอักษร ปลอดภัย เมื่อมี HTML string ที่เชื่อถือได้จริง ๆ ที่อยากให้ render เป็น markup (เช่น HTML จาก CMS ที่คุณควบคุมเอง) ใช้ `set:html`:
 
 ```astro
 ---
-const fromCms = "<strong>Bold from the CMS</strong>";
-const plain = "<not a tag>";
+// src/components/SetHtmlDemo.astro
+const untrusted = "<img src=x onerror=alert('xss')>";
 ---
-<div set:html={fromCms} />     <!-- renders as real bold markup -->
-<div set:text={plain} />       <!-- renders the characters, escaped -->
-<Fragment set:html={fromCms} /> <!-- no wrapper element -->
+<div id="raw" set:html={untrusted} />
+<div id="safe" set:text={untrusted} />
 ```
 
-`set:html` **ข้าม escaping** — ใช้กับ content ที่เชื่อถือได้เท่านั้น ไม่งั้นคุณเปิดช่องโหว่ XSS ส่วน `set:text` บังคับให้ค่าถูกมองเป็น plain text (คือ default ที่ปลอดภัยเขียนออกมาให้ชัด)
+`set:html` **ข้าม escaping** — รวมถึง content ที่คุณไม่ได้เขียนเอง Render ผ่าน Container API กับ astro@7.3.5 ที่ติดตั้งจริง ด้วย string รูปแบบ XSS ที่ field จาก attacker จริง ๆ (comment, username, search query) อาจมี:
+
+```html
+<!-- id="raw" (set:html) -->
+<div id="raw"><img src=x onerror=alert('xss')></div>
+<!-- id="safe" (set:text) -->
+<div id="safe">&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;</div>
+```
+
+div `id="raw"` render tag `<img onerror=...>` **ตรงตัวเป๊ะ** — XSS payload จริง ทำงานทันทีที่ browser parse ส่วน `set:text` (div ข้างล่าง input เดียวกัน) escape ทุกตัวอักษร ดังนั้น tag โผล่มาเป็น text เฉย ๆ นี่ไม่ใช่สมมติฐาน `set:html` **คือ** จุด injection ถ้า argument ของมันมี content ที่ attacker แทรกได้ — คิดเหมือนกับ `dangerouslySetInnerHTML` ใน React หรือ `v-html` ใน Vue ใช้มันกับ content ที่คุณควบคุมเองหรือผ่าน sanitizer จริงแล้วเท่านั้น
+
+type ของ `set:html` คือ `any` และ behavior ตอน runtime ยอมรับมากกว่า "แค่ string" — พิสูจน์ตรงกับ compiler ที่ติดตั้งจริง:
+
+```astro
+---
+// src/components/SetHtmlTypesDemo.astro
+const promiseVal = Promise.resolve('<b>from a promise</b>');
+const responseVal = new Response('<b>from a response</b>');
+---
+<div id="promise" set:html={promiseVal} />
+<div id="response" set:html={responseVal} />
+```
+
+```html
+<div id="promise"><b>from a promise</b></div>
+<div id="response"><b>from a response</b></div>
+```
+
+`Promise<string>` ถูก await ก่อนถูกใส่เข้าไป และ `Response` ถูกอ่าน body เป็น text — ทั้งคู่กลายเป็น markup จริง ไม่ escape สิ่งที่มัน**ไม่**รับคือ element JSX/Astro ที่ส่งเป็นค่าตรง ๆ — ตัวนี้ fail ตอน compile ไม่ใช่ runtime:
+
+```astro
+// @expect-error set:html cannot take a JSX expression directly — only a string, Promise<string>, or Response
+---
+---
+<div set:html={<Fragment><b>from jsx</b></Fragment>} />
+```
+
+พิสูจน์กับ compiler ที่ติดตั้งจริง — parse failure จริง ไม่ใช่แค่ type warning:
+
+```text
+Parse failure: Parse failed with 1 error:
+Unexpected JSX expression
+  ...${$$unescapeHTML(<Fragment>...
+                       ^
+```
+
+`set:text` บังคับให้ค่าถูกปฏิบัติเป็น plain text (ค่า default ที่ปลอดภัย เขียนออกมาชัด ๆ) — ใช้เมื่อต้องการ*รับประกัน*ว่าไม่มี HTML ถูก render เลย แม้ string จะเริ่มมีตัวอักษรหน้าตาเหมือน markup ก็ตาม
 
 ## Spread attribute
 
-เมื่อคุณมี object ของ attribute ให้ spread ลงบน element ด้วย `{...obj}` — สะดวกเวลาส่ง props ต่อ
+เมื่อมี object ของ attribute อยากจะ spread เข้า element ด้วย `{...obj}` — สะดวกสำหรับส่งต่อ prop:
 
 ```astro
 ---
@@ -114,7 +160,7 @@ const attrs = { id: "cta", class: "btn", "data-track": "signup" };
 
 ## Dynamic tag name
 
-คุณคำนวณได้ว่าจะ render *element ตัวไหน* กำหนดตัวแปรที่ขึ้นต้นด้วยตัวใหญ่ให้เป็นชื่อ tag แล้วเรียกใช้ตัวแปรนั้นได้เลย
+คุณคำนวณได้ว่า *tag ไหน* จะ render กำหนดตัวแปรที่ขึ้นต้นด้วยตัวใหญ่ให้เป็นชื่อ tag แล้วใช้มัน:
 
 ```astro
 ---
@@ -124,9 +170,9 @@ const Heading = `h${level}`;   // "h2"
 <Heading>Dynamic heading</Heading>   <!-- renders <h2>Dynamic heading</h2> -->
 ```
 
-ตัวแปรต้อง **ขึ้นต้นด้วยตัวใหญ่** เพื่อให้ Astro มองว่าเป็น reference ไปยัง component/tag ไม่ใช่ HTML tag ที่เขียนตรง ๆ
+ตัวแปรต้อง**ขึ้นต้นด้วยตัวใหญ่** เพื่อให้ Astro ปฏิบัติมันเป็น component/tag reference แทนที่จะเป็น HTML tag ตรงตัว
 
-<Mermaid title="template expression กลายเป็น HTML ได้ยังไง" code={diagram} />
+<Mermaid title="expression ใน template กลายเป็น HTML ได้ยังไง" code={diagram} />
 
 export const diagram = `flowchart LR
   expr["expression in curly braces"] --> eval["evaluated on the server"]
@@ -135,72 +181,288 @@ export const diagram = `flowchart LR
   eval --> raw["set:html bypasses escaping for trusted HTML"]
   raw --> html`;
 
-## Astro 7: compiler ที่เข้มงวดและ whitespace แบบ JSX
+## Compiler ของ Astro 7 พิสูจน์ผิดสี่แบบ
 
-Astro 7 เปลี่ยนจาก compiler ตัวเก่าที่เขียนด้วย Go มาเป็น **Rust compiler** และตอนนี้เป็น compiler เดียวที่มี มันเร็วขึ้น และ *เข้มงวดขึ้น*: compiler เก่าแอบ "แก้" HTML ที่พังให้เงียบ ๆ ส่วนตัวใหม่รายงานเป็น build error
+Astro 7 เปลี่ยน compiler เก่าที่เขียนด้วย Go มาเป็น **Rust compiler** และตอนนี้เป็น compiler เดียวที่ใช้ มันเร็วกว่าและ*เข้มงวดกว่า*: compiler เก่า "แก้ให้" HTML ที่พังแบบเงียบ ๆ ตัวใหม่รายงานเป็น build error สี่ความล้มเหลวจริง รันผ่าน `astro check` กับ astro@7.3.5 ที่ติดตั้งจริง — ไม่ใช่จำมา แต่ทำซ้ำจริง:
+
+**1. tag ที่ไม่ปิด:**
 
 ```astro
-<!-- Astro 6 quietly closed the first <p> for you. Astro 7: error, unclosed tag. -->
+// @expect-error unclosed <p> — Astro 6 silently closed it for you, Astro 7 fails the build
+---
+---
 <p>Hello world<p>Hello world</p>
-
-<!-- Write what you mean. -->
-<p>Hello world</p>
-<p>Hello world</p>
 ```
 
-tag ที่ไม่ปิดและการซ้อนที่ผิด (เช่น `<div>` ใน `<p>`) จะทำให้ build ล้มแทนที่จะถูกแก้ทับให้ ซึ่งเป็น trade ที่คุ้ม เพราะ output ที่ถูก "แก้" ให้มักไม่ใช่สิ่งที่คุณตั้งใจอยู่แล้ว
+```text
+src/pages/unclosed.astro:3:2 - error ts(17008): HTML element 'p' has no corresponding closing tag.
+<p>Hello world<p>Hello world</p>
+ ~
+src/pages/unclosed.astro:4:1 - error astro: Expected a closing tag but instead found the end of the file.
+```
 
-เรื่องที่สองคือ **whitespace** option `compressHTML` ตอนนี้ default เป็น `'jsx'` ดังนั้น whitespace ระหว่าง element จะเป็นไปตามกฎของ JSX — ขึ้นบรรทัดใหม่ระหว่าง inline element สองตัวไม่ทำให้เกิดช่องว่างที่มองเห็นอีกต่อไป:
+**2. Element ที่ปิดผิดลำดับ** (`<span>` ถูกปิดหลัง parent `<div>` ของมันแทนที่จะปิดก่อน):
 
 ```astro
-<!-- Astro 6 rendered "hello world"; Astro 7 renders "helloworld". -->
+// @expect-error mis-nested closing tags
+---
+---
+<div><span>oops</div></span>
+```
+
+```text
+src/pages/wrongorder.astro:3:24 - error ts(17002): Expected corresponding JSX closing tag for 'Fragment'.
+<div><span>oops</div></span>
+                       ~~~~
+src/pages/wrongorder.astro:3:7 - error ts(17008): HTML element 'span' has no corresponding closing tag.
+<div><span>oops</div></span>
+      ~~~~
+src/pages/wrongorder.astro:3:16 - error astro: Expected a matching closing tag but instead found '</div>'.
+<div><span>oops</div></span>
+               ~~~~~~
+```
+
+**3. `{` เดี่ยว ๆ ในเนื้อความ** (ไม่ได้ตั้งใจให้เป็น expression — ประโยคที่บังเอิญใช้ปีกกา):
+
+```astro
+// @expect-error a `{` outside a fence is parsed as the start of an expression, not literal text
+---
+---
+<p>Set theory uses { and } to denote a set.</p>
+```
+
+```text
+src/pages/curlytext.astro:3:22 - error ts(2304): Cannot find name 'and'.
+<p>Set theory uses { and } to denote a set.</p>
+                     ~~~
+```
+
+<Callout title="brief ของคอร์สนี้เดาว่าเป็น 'Unexpected token' — แต่ test บอกอีกอย่าง">
+โน้ตรีวิวของคอร์สนี้เองสมมติว่า `{` เดี่ยว ๆ ในเนื้อความจะ fail ด้วย parse error ทั่วไปแบบ "Unexpected token" ทำซ้ำกับ compiler ของ astro@7.3.5 ที่ติดตั้งจริง ความล้มเหลวจริงเป็น diagnostic ของ **TypeScript** (`ts(2304): Cannot find name 'and'`) — compiler *parse* `{ and }` เป็น expression จริง (identifier `and` ตามด้วย syntax error ถูกกลืนเข้าไปในรูป "หาชื่อ `and`") แล้วค่อย fail เพราะ `and` ไม่ได้ประกาศไว้ที่ไหน สาเหตุเดียวกัน (`{` โดด ๆ นอก fence) แต่ error ที่รายงานต่างกัน — เขียนตามที่เห็นจริง ไม่ใช่ตามสิ่งที่ดูสมเหตุสมผล
+</Callout>
+
+**4. Expression ที่ "return object"** — อันนี้**ไม่** fail build เลย มันเป็น JavaScript และ Astro ที่ valid render ออกมาเหมือนกับที่ `String(obj)` จะทำ:
+
+```astro
+---
+// src/components/ObjExprDemo.astro
+const obj = { a: 1, b: 2 };
+---
+<p>{obj}</p>
+```
+
+```html
+<p>[object Object]</p>
+```
+
+นี่เป็น footgun จริง แค่ไม่ใช่ตอน compile-time: object ที่หย่อนเข้า `{ }` จะ stringify กลายเป็น text ไร้ประโยชน์ `[object Object]` แทนที่จะ error ดังนั้น bug นี้จะโผล่มาแค่ตอนมองหน้าเว็บที่ render ออกมา (หรือ snapshot test) ถ้าตั้งใจจะ render field ให้เขียน `{obj.a}` ถ้าตั้งใจจะ debug ด้วย JSON ให้เขียน `{JSON.stringify(obj)}`
+
+การเปลี่ยนที่สองของ Astro 7 คือ **whitespace** option `compressHTML` ตอนนี้ default เป็น `'jsx'` ดังนั้น whitespace ระหว่าง element เป็นไปตามกฎ JSX — newline ระหว่าง element แบบ inline สอง element ไม่ทำให้เกิดช่องว่างที่เห็นได้อีกต่อไป พิสูจน์ด้วย Container API ตัด attribute debug `data-astro-source-*` ออกเพื่อให้อ่านง่าย:
+
+```astro
+---
+// src/components/WhitespaceDemo.astro
+---
 <span>hello</span>
 <em>world</em>
+```
 
-<!-- Be explicit, exactly as you would in React. -->
+```html
+<span>hello</span><em>world</em>
+```
+
+นั่น render เป็น **"helloworld"** ไม่มีช่องว่าง — ยืนยันกับ output จริง ไม่ใช่สมมติเอา วิธีแก้คือเขียนชัด ๆ เหมือนกับที่จะทำใน React:
+
+```astro
+---
+// src/components/WhitespaceFixedDemo.astro
+---
 <span>hello</span>{" "}<em>world</em>
 ```
 
-ถ้า template เก่าขนาดใหญ่พึ่งพาพฤติกรรมเดิม ให้ตั้ง `compressHTML: true` ใน `astro.config.mjs` เพื่อคงไว้ระหว่าง migrate ส่วนโปรเจกต์ใหม่ก็แค่เขียน `{" "}` ตรงที่ช่องว่างมีความหมาย
+```html
+<span>hello</span> <em>world</em>
+```
 
-## ชื่อ attribute แบบ HTML ไม่ใช่แบบ JSX
+ถ้า template เก่าขนาดใหญ่พึ่ง behavior เดิม ตั้ง `compressHTML: true` ใน `astro.config.mjs` เพื่อคงมันไว้ระหว่าง migrate โปรเจกต์ใหม่ควรเขียน `{" "}` ตรงที่ต้องการช่องว่างเลย
 
-จุดต่างที่ละเอียดแต่สำคัญจาก React: template ของ Astro ใช้ **ชื่อ attribute แบบ HTML มาตรฐาน** เป็น `class` ไม่ใช่ `className`; เป็น `for` ไม่ใช่ `htmlFor` คุณกำลังเขียน superset ของ HTML ดังนั้นชื่อแบบ HTML คือชื่อจริง
+## ชื่อ attribute แบบ HTML ไม่ใช่ชื่อแบบ JSX
+
+ความต่างที่สำคัญแต่ subtle จาก React: template ของ Astro ใช้**ชื่อ attribute แบบ HTML มาตรฐาน** เป็น `class` ไม่ใช่ `className`, `for` ไม่ใช่ `htmlFor` คุณกำลังเขียน superset ของ HTML ดังนั้นชื่อแบบ HTML คือของจริง
+
+## Directive: `is:raw`, `define:vars`, `class:list`
+
+`is:raw` บอก compiler ให้หยุด parse ลูกของ element เป็น syntax ของ Astro เลย — `{ }` ข้างในมันเป็น **text ตรงตัว** ไม่ใช่ expression:
+
+```astro
+---
+// src/components/IsRawDemo.astro
+---
+<div is:raw>
+  { this is not an expression, is:raw stops the compiler from parsing it }
+  <p>literal { braces } stay literal</p>
+</div>
+```
+
+output ที่พิสูจน์แล้ว — ปีกกาผ่านมาโดยไม่ถูกแตะ และ `<p>` ข้างในไม่ถูก parse เป็น element เลยด้วยซ้ำ:
+
+```html
+<div>
+  { this is not an expression, is:raw stops the compiler from parsing it }
+  <p>literal { braces } stay literal</p>
+</div>
+```
+
+ใช้เมื่อกำลัง render ตัวอย่างโค้ดหรือ client-side templating snippet (Handlebars, Vue template) ที่เต็มไปด้วย `{ }` ที่ไม่อยากให้ Astro แตะ
+
+`define:vars` (ที่แนะนำไปก่อนหน้าสำหรับ `<style>`) ก็ใช้กับ element อื่นได้เพื่อฉีดค่าจาก frontmatter เป็น CSS custom property แบบ inline — พูดถึงลึก ๆ สำหรับ `<style>` ในบทถัดไป
+
+`class:list` รวมแหล่งที่มาของ class name หลายแบบ — array, object (`{ className: boolean }`), conditional string, และ plain string — เข้าเป็น `class` attribute เดียว ใช้*เพิ่มเติมจาก* `class` แบบ static:
+
+```astro
+---
+// src/components/ClassListDemo.astro
+const isActive = true;
+const size = 'lg';
+---
+<div class="base" class:list={['btn', { active: isActive, disabled: false }, size && `size-${size}`]}>x</div>
+```
+
+output ที่รวมแล้วพิสูจน์จริง — `disabled` ถูกตัดออก (ค่าเป็น `false`) และ template string ที่มี guard falsy ชนะเพราะ `size` เป็น truthy และ `class="base"` แบบ static ถูกเก็บไว้และรวมเข้าด้วยกัน:
+
+```html
+<div class="base btn active size-lg">x</div>
+```
+
+## `Astro.self`: component แบบ recursive
+
+component render ตัวเองได้ด้วย `<Astro.self>` ส่ง prop ใหม่ทุกครั้ง — นี่คือวิธีสร้าง tree (comment ซ้อนกัน, nav แบบ recursive, file browser) จาก component definition เดียว:
+
+```astro
+---
+// src/components/SelfRecursion.astro
+interface Props { depth: number }
+const { depth } = Astro.props;
+---
+{depth > 0 ? (
+  <div class="node">
+    depth {depth}
+    <Astro.self depth={depth - 1} />
+  </div>
+) : <div class="leaf">leaf</div>}
+```
+
+Render ด้วย `depth={3}` ผ่าน Container API — output ซ้อนกันจริง ระดับละหนึ่ง recursive call จบที่ branch `leaf`:
+
+```html
+<div class="node">depth 3<div class="node">depth 2<div class="node">depth 1<div class="leaf">leaf</div></div></div></div>
+```
+
+ไม่มี recursion limit built-in นอกเหนือจาก stack ของตัวเอง — guard เงื่อนไขจบ (`depth > 0` ข้างบน) แบบเดียวกับที่ทำใน recursive function ปกติ ไม่งั้น prop ที่แย่ (เช่น depth เริ่มต้นติดลบที่ไม่ถึง base case เลย) จะ recurse จนกว่า process จะพัง
+
+## `Astro.slots.has` กับ `Astro.slots.render`
+
+นอกจาก `<slot />` ใน template แล้ว `Astro.slots` เป็น API ใน frontmatter: `has(name)` บอกว่า slot ได้รับ content หรือเปล่า และ `render(name, args?)` return content ของ slot **เป็น HTML string** (await เพราะ render เป็น async) — มีประโยชน์เมื่อต้องการ markup เป็นค่าแทนที่จะหย่อนตรง ๆ ใน template ด้วย `<slot />` `slots-and-composition` (บทถัดไป) ใช้ parameter `args` ของ `render` เพื่อสร้าง function-as-slot ("scoped slot") ที่นี่พิสูจน์แค่กลไกของมันเอง:
+
+```astro
+---
+// src/components/SlotsHasRenderDemo.astro
+const hasDefault = Astro.slots.has('default');
+const rendered = await Astro.slots.render('default', ['scoped-arg']);
+---
+<p>has:{String(hasDefault)}</p>
+<div id="rendered" set:html={rendered} />
+```
+
+## อ่านโค้ดที่ AI เขียน
+
+snippet ที่ generate มาด้วย template expression ดูถูกต้องได้และยังผิดในแบบที่โผล่มาแค่ตอน runtime หรือ input เฉพาะ เช็คสิ่งเหล่านี้:
+
+- มีค่าไหนถูกส่งตรงเข้า `set:html` โดยไม่ผ่านการ sanitize บ้างไหม — comment body, username, อะไรก็ตามที่มาจาก request? พิสูจน์แล้วข้างบน: `set:html` render argument ของมัน**ตรงตัวเป๊ะ** รวม XSS payload
+- Expression render object หรือ array ตรง ๆ ไหม (`{user}` แทนที่จะเป็น `{user.name}`)? มันไม่ error — render เป็น `[object Object]` เงียบ ๆ พิสูจน์แล้วข้างบน
+- มี `{` โผล่ในเนื้อความธรรมดาไหม นอก code fence และไม่ได้ตั้งใจให้เป็น expression? มันจะถูก parse เป็นจุดเริ่ม expression (พิสูจน์แล้วข้างบนด้วย error `Cannot find name` จริง) ไม่ใช่โชว์ตรงตัว
+- `class` ถูกเขียนเป็น `className` หรือ `for` เป็น `htmlFor` ไหม — copy มาจากตัวอย่าง React โดยไม่แปลงเป็นชื่อ attribute แบบ HTML-native ของ Astro?
+- snippet สมมติไหมว่า `<span>`/`<em>` (หรือ inline element คล้าย ๆ กัน) ที่อยู่คนละบรรทัดจะ render มีช่องว่างระหว่างกัน? ตั้งแต่ Astro 7 `compressHTML: 'jsx'` แปลว่าจะไม่มี — พิสูจน์แล้วข้างบน — เว้นแต่จะใส่ `{" "}` ชัด ๆ
+
+<SpotTheBug code={`---
+const comment = Astro.props.comment; // arbitrary user-submitted text
+---
+<div class="comment-body" set:html={comment} />`}>
+โค้ดนี้ดูเหมือนโค้ด "render field จาก CMS" ธรรมดา แต่ `comment` ในที่นี้ถูกอธิบายว่าเป็น text ที่ user ส่งมา — input ประเภทเดียวกับที่พิสูจน์แล้วข้างบนว่าผ่าน `set:html` โดยไม่ถูก escape เลย ถ้า `comment` มี `<img src=x onerror=...>` (หรือ `<script>` tag, หรือ attribute `onclick`) มันจะทำงานใน browser ของทุกคนที่เข้าดู ตรงตามที่พิสูจน์ไว้ก่อนหน้านี้ ทางแก้คือใช้ `set:text={comment}` (ถ้าไม่ควรมี markup เลย) หรือส่ง `comment` ผ่าน HTML sanitizer จริง ๆ (เช่น `sanitize-html` หรือ `DOMPurify` ฝั่ง server) ก่อนที่มันจะไปถึง `set:html` — อย่าเชื่อ string ดิบ ๆ ที่บอกว่า "user-submitted" ในจุดนี้เด็ดขาด
+</SpotTheBug>
+
+## Mental Model
+
+Layer template ของ Astro คือกฎ expression ของ JSX ที่ยึดเข้ากับ HTML จริง: `{ }` คือ "หย่อนเข้าไปใน JavaScript" ที่เหลือคือ HTML ตามที่ browser parse อยู่แล้ว นั่นแปลว่า compiler บังคับใช้ความถูกต้องของ HTML เอง (พิสูจน์แล้วข้างบน: tag ที่ไม่ปิดและซ้อนผิดตอนนี้เป็น build error ไม่ใช่ถูกแก้เงียบ ๆ) และแปลว่า whitespace ระหว่าง element เป็นไปตามกฎ collapse ของ JSX ไม่ใช่ raw-HTML `set:html` คือทางออกเดียวที่ตั้งใจหนีจาก "ทุกอย่าง escape เป็น default" — ปฏิบัติกับทุกค่าที่ไปถึงมันเหมือนกับว่ามันจะถูก execute โดย browser เพราะมันจะเป็นแบบนั้นจริง ๆ
+
+## ข้อแลกเปลี่ยน
+
+| | Escape (default) | `set:html` |
+|---|---|---|
+| **ความปลอดภัย** | ปลอดภัย default — tag render เป็น text | ปลอดภัยเท่าที่ input ปลอดภัย — พิสูจน์แล้วข้างบนด้วย XSS payload จริง |
+| **ใช้กับ** | ค่าไหนก็ตามที่คุณไม่ได้เขียน/ตรวจสอบเองว่าเป็น HTML | HTML ที่เชื่อถือได้ (field จาก CMS ที่ sanitize แล้ว, markup ที่คุณ generate เอง) |
+| **รับ** | ค่าที่ stringify ได้ทุกแบบ | string, `Promise<string>` (await ให้อัตโนมัติ), หรือ `Response` (อ่าน body เป็น text) — ไม่ใช่ JSX element ตรง ๆ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"object ที่หย่อนเข้า `{ }` จะโชว์ error ให้เห็นความผิดพลาด"** พิสูจน์แล้วข้างบน: มัน render เป็น `[object Object]` ตอน runtime ไม่มี build error เลย
+- **"`set:html` รับแค่ plain string"** พิสูจน์แล้วข้างบน: มันรับ `Promise<string>` และ `Response` ด้วย แต่ไม่รับ JSX/Astro element ที่ส่งตรง ๆ (เป็น compile error จริงอีกแบบ)
+- **"Newline ระหว่าง inline element ใน HTML render เป็นช่องว่างเสมอ เหมือนที่ browser ทำปกติ"** `compressHTML: 'jsx'` ที่เป็น default ของ Astro 7 collapse whitespace นั้น — พิสูจน์แล้วข้างบน `<span>hello</span>\n<em>world</em>` render "helloworld" ไม่ใช่ "hello world"
+- **"`{` โดด ๆ ในประโยคแค่ print ตรงตัว เหมือนที่ทำใน HTML ธรรมดา"** พิสูจน์แล้วข้างบน: มันถูก parse เป็นจุดเริ่ม expression และ fail build เว้นแต่ content นั้นจะเป็น expression จริง ๆ (หรือ element ใช้ `is:raw`)
 
 <Callout title="สรุปหนึ่งบรรทัด">
-templating ของ Astro คล้าย JSX แต่เป็น HTML-native: `{ }` ฝัง expression, `{cond && <el/>}` กับ ternary จัดการ conditional, `{items.map(...)}` จัดการ loop (ไม่ต้องใช้ `key`) และ `<Fragment>` / `<>` จัดกลุ่มโดยไม่ต้องมี wrapper `set:html` render string HTML ที่ **เชื่อถือได้** แบบดิบ (ข้าม escaping — เสี่ยง XSS ถ้า input ไม่น่าเชื่อถือ), `set:text` บังคับเป็น plain text และ `{...obj}` spread attribute ใช้ชื่อ attribute แบบ HTML จริง — `class` ไม่ใช่ `className` Rust compiler ของ Astro 7 ปฏิเสธ tag ที่ไม่ปิดหรือซ้อนผิดแทนที่จะแก้ให้ และ `compressHTML: 'jsx'` ทำให้ whitespace เป็นไปตามกฎ JSX — เขียน `{" "}` ตรงที่ช่องว่างมีความหมาย
+Template ของ Astro เป็นแบบ JSX แต่ native HTML: `{ }` ฝัง expression, `{cond && <el/>}` กับ ternary จัดการ conditional, `{items.map(...)}` จัดการ loop (ไม่ต้อง `key`) และ `<Fragment>` / `<>` จับกลุ่มโดยไม่มี wrapper `set:html` render raw HTML string ที่**เชื่อถือได้**ตรงตัวเป๊ะ — พิสูจน์แล้วข้างบนด้วย XSS payload จริง — และรับ `Promise<string>` หรือ `Response` ได้ด้วย แต่ไม่รับ JSX element; `set:text` บังคับเป็น plain text `class:list` รวม array/object/string เข้าเป็น `class` เดียว `is:raw` หยุด compiler ไม่ให้ parse `{ }` ข้างใน element, `Astro.self` recurse component และ `Astro.slots.has`/`render` ตรวจสอบและ render slot content จาก frontmatter Rust compiler ของ Astro 7 ปฏิเสธ tag ที่ไม่ปิดหรือซ้อนผิด (พิสูจน์แล้วข้างบนด้วย diagnostic จริง) แทนที่จะแก้ให้ และ `compressHTML: 'jsx'` แปลว่า whitespace เป็นไปตามกฎ JSX — เขียน `{" "}` ตรงที่ต้องการช่องว่าง object ที่หย่อนเข้า `{ }` **ไม่** error — มัน render เป็น `[object Object]` เงียบ ๆ
 </Callout>
+
+```ts
+// src/components/SetHtmlDemo.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import SetHtmlDemo from './SetHtmlDemo.astro';
+
+describe('set:html vs set:text', () => {
+  it('set:html emits raw markup verbatim; set:text escapes the same input', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(SetHtmlDemo);
+    expect(html).toContain("<img src=x onerror=alert('xss')>");
+    expect(html).toContain('&lt;img src=x onerror=alert(&#39;xss&#39;)&gt;');
+  });
+});
+```
 
 export const quizSyntax = [
   {
-    q: 'คุณ render list จาก array ใน template ของ Astro ยังไง?',
+    q: 'render list จาก array ใน template ของ Astro ทำยังไง?',
     options: [
       'directive พิเศษ <For>',
-      '`{items.map((item) => <li>{item}</li>)}` — map ด้วย JS ธรรมดา ไม่ต้องมี key',
-      'loop for ใน template',
-      'วน loop ใน template ไม่ได้',
+      '`{items.map((item) => <li>{item}</li>)}` — plain JS map ธรรมดา ไม่ต้อง key',
+      'for loop ใน template',
+      'loop ใน template ไม่ได้',
     ],
     answer: 1,
+    explain: 'Astro ไม่มี loop directive — คุณ map array ให้เป็น element เหมือน JSX เป๊ะ และไม่ต้อง key เพราะไม่มี client-side reconciliation',
   },
   {
-    q: '`set:html` ทำอะไร และเสี่ยงอะไร?',
+    q: '`set:html` ทำอะไร และความเสี่ยงคืออะไร?',
     options: [
-      'escape HTML ไม่มีความเสี่ยง',
-      'render string เป็น HTML ดิบ ข้าม escaping — เสี่ยง XSS ถ้า content ไม่น่าเชื่อถือ',
-      'ตั้งค่า id ของ element',
+      'escape HTML; ไม่มีความเสี่ยง',
+      'render string เป็น raw HTML ข้าม escaping ไป — มีความเสี่ยง XSS ถ้า content ไม่น่าเชื่อถือ',
+      'set element id',
       'import ไฟล์ HTML',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย string รูปแบบ XSS จริง: set:html render argument ของมันตรงตัว รวม tag ที่ execute ได้ ในขณะที่ set:text กับ input เดียวกัน escape ทุกตัวอักษร',
   },
   {
-    q: 'คุณอยากคืน element พี่น้องสองตัวโดยไม่เพิ่ม wrapper node ใช้อะไร?',
+    q: 'อยาก return sibling element สองตัวโดยไม่เพิ่ม wrapper node ใช้อะไร?',
     options: [
       '`<div>`',
-      'Fragment — `<Fragment>` หรือแบบย่อ `<>`',
+      'Fragment — `<Fragment>` หรือ shorthand `<>`',
       '`<span>`',
-      'component แยกสองอัน',
+      'แยก component สองตัว',
     ],
     answer: 1,
+    explain: 'Fragment จับกลุ่ม children โดยไม่เพิ่ม DOM node จริง — ทั้ง `<Fragment>` แบบมีชื่อ หรือ shorthand `<>`',
   },
   {
     q: 'ชื่อ attribute ไหนถูกต้องใน template ของ Astro?',
@@ -208,19 +470,43 @@ export const quizSyntax = [
       '`className`',
       '`class` — Astro ใช้ชื่อ attribute แบบ HTML มาตรฐาน ไม่ใช่ชื่อแบบ JSX',
       '`htmlFor`',
-      'ทั้ง className และ class ใช้ได้เหมือนกัน',
+      'className กับ class ใช้แทนกันได้เหมือนกัน',
     ],
     answer: 1,
+    explain: 'template ของ Astro เป็น HTML-native ไม่ใช่ JSX — ใช้ชื่อ attribute แบบ HTML จริง (`class`, `for`) ไม่ใช่ชื่อเฉพาะของ JSX แบบ React',
   },
   {
-    q: 'ใน Astro 7 `<span>hello</span>` กับ `<em>world</em>` ที่อยู่คนละบรรทัด render ออกมาเป็น "helloworld" เพราะอะไร และแก้ยังไง?',
+    q: '```astro\n---\n---\n<span>hello</span>\n<em>world</em>\n```\nพิสูจน์ด้วย Container API กับ astro@7.3.5 อันนี้ render ออกมาเป็นอะไร และทำไม?',
     options: [
-      'เป็น bug ของ Rust compiler — ไปเปิด issue',
-      '`compressHTML` ตอนนี้ default เป็น `\'jsx\'` whitespace จึงเป็นไปตามกฎ JSX; เขียน `{" "}` คั่นระหว่างกัน (หรือตั้ง `compressHTML: true` เพื่อคงพฤติกรรมเดิม)',
-      'inline element เป็น sibling กันไม่ได้อีกแล้ว',
-      'ต้องห่อด้วย Fragment',
+      '"hello world" — whitespace ระหว่าง element ถูกเก็บไว้เสมอ',
+      '"helloworld" — `compressHTML` default เป็น `\'jsx\'` ใน Astro 7 ดังนั้น newline ถูก collapse; แก้ด้วย `{" "}` ระหว่างมัน',
+      'build error — element ต้องอยู่บรรทัดเดียวกัน',
+      '"hello\\nworld" — newline ถูกเก็บไว้ตรงตัว',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: output จริงจาก container คือ "helloworld" ไม่มีช่องว่าง เพราะ compressHTML: \'jsx\' ที่เป็น default ของ Astro 7 ตามกฎ collapse whitespace ของ JSX — เขียน {" "} ชัด ๆ ตรงที่ต้องการช่องว่าง',
+  },
+  {
+    q: '```astro\n---\nconst obj = { a: 1, b: 2 };\n---\n<p>{obj}</p>\n```\nเกิดอะไรขึ้นตอน build และ render?',
+    options: [
+      'compile-time type error — render object ไม่ได้',
+      'build ผ่านปกติ และ render text ตรงตัว "[object Object]" ตอน runtime',
+      'render เป็น JSON ที่ valid อัตโนมัติ',
+      'throw runtime exception',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: render object ตรง ๆ เป็น Astro ที่ valid — มัน stringify กลายเป็น "[object Object]" ที่ไร้ประโยชน์ เป็น footgun ตอน runtime ไม่ใช่ build error',
+  },
+  {
+    q: 'compiler ของ Astro รายงาน `Cannot find name \'and\'` บน `<p>Set theory uses { and } to denote a set.</p>` อะไรคือสาเหตุจริง ๆ?',
+    options: [
+      'ไม่ได้ import `and`',
+      '`{` โดด ๆ นอก code fence ถูก parse เป็นจุดเริ่ม JavaScript expression ไม่ใช่ text ตรงตัว — `and` ถูกอ่านเป็น identifier reference',
+      'พิมพ์ผิด — ควรเป็น `add`',
+      'Astro ไม่รองรับคำว่า "and" ในเนื้อความ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: `{` ในเนื้อความ (นอก fence) ถูก parse เป็นจุดเริ่ม expression เสมอ ดังนั้น `{ and }` ถูกปฏิบัติเป็นการอ้างถึง identifier `and` ที่ไม่ได้ประกาศไว้ — ห่อด้วย fence, escape มัน, หรือใช้ is:raw',
   },
 ];
 

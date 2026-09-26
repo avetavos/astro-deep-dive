@@ -1,6 +1,6 @@
 ---
 title: 'Slots & Composition'
-description: 'default กับ named slot, fallback content, การเช็คว่ามี slot ถูกส่งมาไหม และการใช้ slot สร้าง layout shell ที่ห่อทุกหน้า'
+description: 'default กับ named slot, `slot="..."` บน Fragment, fallback content ที่พิสูจน์จริงทั้งกรณีส่งกับไม่ส่ง, Astro.slots.render สำหรับ scoped-style function-as-slot, การ relay slot ผ่าน layout ที่ซ้อนกัน, ทำไม <slot> ใน framework island ไม่ทำงาน และรูปแบบ composition — พิสูจน์ด้วย Container API'
 sidebar:
   order: 4
 ---
@@ -9,6 +9,7 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทวน slot: การฉีด markup
 
@@ -52,19 +53,60 @@ default slot อันเดียวไม่พอสำหรับ layout �
 </Shell>
 ```
 
-## fallback content
+`slot="x"` บน named slot ยังใช้กับ `<Fragment>` ได้ด้วย — มีประโยชน์เมื่อ named slot เดียวต้องเก็บ sibling element*หลายตัว*โดยไม่เพิ่ม wrapper node:
+
+```astro
+---
+// src/components/FragmentNamedSlot.astro
+---
+<header><slot name="header" /></header>
+<main><slot /></main>
+```
+
+```astro
+---
+// src/components/FragmentNamedSlotHost.astro
+import FragmentNamedSlot from './FragmentNamedSlot.astro';
+---
+<FragmentNamedSlot>
+  <Fragment slot="header">
+    <h1>Title</h1>
+    <p>Subtitle</p>
+  </Fragment>
+  <p>Body</p>
+</FragmentNamedSlot>
+```
+
+พิสูจน์ด้วย Container API — ทั้งสอง element ข้างใน `Fragment` ไปลง slot `header` โดยไม่มี wrapper element เพิ่มเลย:
+
+```html
+<header><h1>Title</h1><p>Subtitle</p></header><main><p>Body</p></main>
+```
+
+## fallback content พิสูจน์จริงทั้งกรณีส่งกับไม่ส่ง
 
 `<slot>` เก็บ **content เริ่มต้น** ที่จะ render เฉพาะตอน parent ไม่ส่งอะไรมาให้ slot นั้นได้
 
 ```astro
-<button class="btn">
-  <slot>Click me</slot>   <!-- "Click me" shows if no children are passed -->
-</button>
+---
+// src/components/FallbackButton.astro
+---
+<button class="btn"><slot>Click me</slot></button>
 ```
 
 ```astro
-<Button />                <!-- renders: Click me -->
-<Button>Save</Button>     <!-- renders: Save -->
+---
+// src/components/FallbackHost.astro
+import FallbackButton from './FallbackButton.astro';
+---
+<FallbackButton />
+<FallbackButton>Save</FallbackButton>
+```
+
+Render ผ่าน Container API — instance แรก (ไม่ส่ง children มา) ตกไปใช้ fallback "Click me" ส่วน instance ที่สอง (ส่ง children มา) แทนที่ด้วย "Save":
+
+```html
+<button class="btn">Click me</button><button class="btn">Save</button>
 ```
 
 ## เช็คว่ามี slot ถูกส่งมาไหม
@@ -84,6 +126,133 @@ const hasAside = Astro.slots.has('aside');
 ```
 
 แบบนี้ทำให้ component ปรับ markup ได้ — เช่น render wrapper `aside` เฉพาะตอนมี aside จะโชว์จริง ๆ เพื่อไม่ให้ปล่อย element ว่างออกมา
+
+## Scoped-style slot: `Astro.slots.render(name, args)`
+
+`<slot>` เดี่ยว ๆ ส่งต่อแค่ markup — มันส่ง*ค่า*ให้ parent ไป render ไม่ได้ สำหรับกรณีนั้น parent ส่ง**function**เป็น content ของ slot แทน แล้ว component เรียก `Astro.slots.render('default', args)` พร้อม argument อะไรก็ตามที่อยากเปิดเผย (item จาก loop, state ที่คำนวณแล้ว) — แนวคิดเดียวกับ "render prop" / "scoped slot" ใน Vue กับ Svelte:
+
+```astro
+---
+// src/components/ScopedChild.astro
+const rendered = await Astro.slots.render('default', ['scoped-arg']);
+---
+<div id="scoped" set:html={rendered} />
+```
+
+```astro
+---
+// src/components/ScopedParent.astro
+import ScopedChild from './ScopedChild.astro';
+---
+<ScopedChild>
+  {(arg: string) => <em>arg was {arg}</em>}
+</ScopedChild>
+```
+
+พิสูจน์ผ่าน Container API — string `'scoped-arg'` ที่ส่งเป็น argument ตัวที่สองของ `Astro.slots.render` ไปถึง parameter `arg` ของ function child:
+
+```html
+<div id="scoped"><em>arg was scoped-arg</em></div>
+```
+
+ใช้แบบนี้เมื่อ component ต้องส่งข้อมูลที่คำนวณแล้วให้ parent *และ* ให้ parent ตัดสินใจ markup เอง — เช่น component แถวตารางที่เปิดเผยข้อมูลของแถวให้ custom cell renderer
+
+## การ relay slot ผ่าน layout ที่ซ้อนกัน
+
+layout ที่ห่อ layout อีกตัวต้อง *relay* slot ที่มันได้รับ ไม่ใช่แค่ body ของตัวเอง — `<slot name="x" slot="x" />` อ่านจาก slot ชั้นนอกแล้วเสนอมันต่อทันทีในฐานะ slot ชื่อเดียวกันของ component ชั้นใน:
+
+```astro
+---
+// src/layouts/InnerLayout.astro
+---
+<header><slot name="head" /></header>
+<main><slot /></main>
+```
+
+```astro
+---
+// src/layouts/OuterLayout.astro
+import InnerLayout from './InnerLayout.astro';
+---
+<InnerLayout>
+  <slot name="head" slot="head" />
+  <slot />
+</InnerLayout>
+```
+
+```astro
+---
+// src/pages/page-using-outer.astro
+import OuterLayout from '../layouts/OuterLayout.astro';
+---
+<OuterLayout>
+  <link slot="head" rel="canonical" href="https://example.com/x" />
+  <p>page body</p>
+</OuterLayout>
+```
+
+พิสูจน์ตั้งแต่ต้นจนจบ — `<link>` ที่อยู่ใน slot `head` และ `<p>` ที่อยู่ใน default slot ของหน้า ไปถึง `InnerLayout` ถูกต้องทั้งคู่ ลึกลงไปสองชั้น:
+
+```html
+<header><link rel="canonical" href="https://example.com/x"></header><main><p>page body</p></main>
+```
+
+## ทำไม `<slot>` ใน framework component ไม่ทำงาน
+
+`<slot>` เป็น syntax ของ Astro template compile โดย Rust compiler ของ Astro component React/Preact/Vue ถูก compile โดย compiler ของ*ตัวมันเอง* ซึ่งไม่รู้จัก `<slot>` ของ Astro เลย — ดังนั้นเขียนมันในไฟล์ `.tsx`/`.jsx` จะไม่ forward อะไรเลย มันจะ render เป็น native `<slot>` HTML element ที่เฉื่อยชา ตัวเปล่า (native `<slot>` tag ของ browser ที่ไม่มี style) และ markup ที่คุณส่งมาจริง ๆ จะไปโผล่ที่อื่นแทน พิสูจน์ด้วย build จริง:
+
+```tsx
+// src/components/ReactBoxWithSlot.tsx — a common AI-generated mistake
+export default function ReactBoxWithSlot() {
+  return <div class="react-box"><slot /></div>;
+}
+```
+
+```astro
+---
+// src/components/ReactBoxWithSlotHost.astro
+import ReactBoxWithSlot from './ReactBoxWithSlot.tsx';
+---
+<ReactBoxWithSlot client:load>
+  <p>This will NOT appear</p>
+</ReactBoxWithSlot>
+```
+
+markup ที่ build จริง (ตัด script bootstrap ของ island ออก) — `<p>` ที่ส่งมาจบลงเฉื่อยชาข้างใน `<template>` ไม่เคยอยู่ใน `<div>` ที่ component render เลย และ `<slot></slot>` ถูกทิ้งไว้เป็น native element เปล่า ๆ ตรงตัว:
+
+```html
+<astro-island ... component-url=".../ReactBoxWithSlot.tsx" ssr client="load" ...>
+  <div class="react-box"><slot></slot></div>
+  <template data-astro-template><p>This will NOT appear</p></template>
+</astro-island>
+```
+
+วิธีที่ถูกต้องให้ framework component รับ markup ที่ Astro ส่งมาคือกลไก children ของ**framework ตัวมันเอง** — `{children}` ใน React/Preact, `<slot />` ใน SFC compiler ของ Vue *เอง* (คนละตัวกับ `<slot>` นี้) หรือ `{$$slots.default?.()}` ใน Svelte:
+
+```tsx
+// src/components/ReactBox.tsx
+export default function ReactBox({ children }: { children?: any }) {
+  return <div class="react-box">{children ?? 'no children received'}</div>;
+}
+```
+
+```astro
+---
+// src/pages/react-box-host.astro
+import ReactBox from '../components/ReactBox.tsx';
+---
+<ReactBox client:load>
+  <p>Hello from Astro markup</p>
+</ReactBox>
+```
+
+พิสูจน์แล้ว — Astro serialize markup ที่ส่งมาเข้า wrapper `<astro-slot>` แล้วส่งให้ component เป็น prop `children` (ตัด script bootstrap ของ island ออก):
+
+```html
+<astro-island ... component-url=".../ReactBox.tsx" ssr client="load" ...>
+  <div class="react-box"><astro-slot><p>Hello from Astro markup</p></astro-slot></div>
+</astro-island>
+```
 
 ## slot สร้าง layout
 
@@ -131,11 +300,85 @@ export const diagram = `flowchart TB
 
 ## รูปแบบ composition
 
-ด้วย slot คุณประกอบ component เล็ก ๆ ให้เป็นหน้าได้แบบเดียวกับที่ประกอบฟังก์ชัน: `Card` ที่มี default slot สำหรับ body, `Grid` ที่ default slot เก็บ card, `Section` ที่มี named slot `header` และ `body` คุณเก็บแต่ละชิ้นให้โฟกัสแล้วให้ parent ตัดสินใจว่าจะใส่อะไรข้างใน เพราะทั้งหมด render บน server composition แทบไม่มีต้นทุนตอน runtime — เป็นแค่การประกอบ HTML เท่านั้น
+ด้วย slot คุณประกอบ component เล็ก ๆ ให้เป็นหน้าได้แบบเดียวกับที่ประกอบฟังก์ชัน เพราะทั้งหมด render บน server composition แทบไม่มีต้นทุนตอน runtime — เป็นแค่การประกอบ HTML เท่านั้น
+
+| รูปแบบ | โครงสร้าง | ตัวอย่าง |
+|---|---|---|
+| **Wrapper** | default slot อย่างเดียว | `Card` — กล่องมีเส้นขอบรอบ body content ที่ parent ส่งมา |
+| **Container** | default slot เก็บ child ที่ซ้ำ ๆ | `Grid` ที่ default slot เก็บ `Card` หลายตัว |
+| **Multi-region** | named slot หลายตัว | `Section` ที่มี named slot `header` กับ `body` |
+| **Shell** | named + default slot อยู่บนสุดของ tree | `Layout` — `head`, default (body หน้า) และมักมี `footer` |
+| **Relay** | slot ที่ถูกเสนอต่อให้ component ที่ซ้อนอยู่ข้างใน | layout ที่ห่อ layout อีกตัว — พิสูจน์แล้วข้างบนด้วย `<slot name="x" slot="x" />` |
+| **Render prop** | function ที่ส่งเป็น content ของ slot | component ที่เปิดเผยข้อมูลที่คำนวณแล้วผ่าน `Astro.slots.render(name, args)` — พิสูจน์แล้วข้างบน |
+
+คุณเก็บแต่ละชิ้นให้โฟกัสแล้วให้ parent ตัดสินใจว่าจะใส่อะไรข้างใน
+
+## อ่านโค้ดที่ AI เขียน
+
+- framework component แบบ `.tsx`/`.jsx` ใช้ `<slot />` โดยคาดว่า children ที่ Astro ส่งมาจะไปโผล่ตรงนั้นไหม? พิสูจน์แล้วข้างบน: มัน render เป็น native `<slot>` element ที่เปล่าและเฉื่อยชา ส่วน content จริงถูกทิ้งไว้ใน `<template>` ที่เฉื่อยชาแทน — ทางแก้คือกลไก `children` ของ framework เอง
+- layout ที่ห่อ layout*อีกตัว*แค่ render `<slot />`/`<slot name="x" />` สำหรับ body ของตัวเองเงียบ ๆ ทิ้ง named slot อื่นที่ผู้เรียกชั้นนอกส่งมาไหม? named slot ทุกตัวที่ layout ชั้นนอกไม่ relay ชัด ๆ (`<slot name="x" slot="x" />`) จะหายไป
+- `Astro.slots.has('x')` ถูกเช็คก่อน render wrapper element สำหรับ slot นั้นไหม หรือ component render wrapper (`<aside></aside>` เปล่า) เสมอแม้ไม่มีอะไรส่งมา?
+- function ของ scoped slot ได้รับ argument ที่ component ส่งให้ `Astro.slots.render(name, args)` จริงไหม หรือ pattern function-as-child ถูกใช้แค่เพื่อ "ส่ง markup มา" (default slot ธรรมดาจะง่ายและชัดกว่า)?
+
+<SpotTheBug code={`// src/components/UserCard.tsx
+export default function UserCard({ user }: { user: { name: string } }) {
+  return (
+    <div class="card">
+      <h2>{user.name}</h2>
+      <slot />
+    </div>
+  );
+}`}>
+`UserCard` เป็นไฟล์ `.tsx` compile ด้วย JSX ของ framework เอง ไม่ใช่ Astro — `<slot />` เดี่ยว ๆ ตรงนี้ไม่ใช่กลไก slot ของ Astro เลย พิสูจน์แล้วก่อนหน้านี้ในบทนี้: เขียน `<slot />` ในไฟล์ framework component จะ render เป็น native `<slot>` HTML element ที่เฉื่อยชาและเปล่า ส่วน markup ที่ผู้เรียกวางไว้ระหว่าง tag `<UserCard>...</UserCard>` ถูก serialize เข้า `<template>` (หรือ `<astro-slot>` แล้วแต่วิธี consume) แทนที่จะไปโผล่ใน `<div>` นี้เลย ทางแก้คือรับ `children` เป็น prop แล้ว render `{children}` ตรงที่ `<slot />` อยู่ตอนนี้ — นั่นคือกลไกที่ framework component ใช้จริง ๆ ในการรับ markup ที่ Astro ส่งมาให้
+</SpotTheBug>
+
+## Mental Model
+
+slot คือช่องว่างที่ถูกเติมตรง call site ไม่ใช่ prop ที่ resolve ข้างใน component — parent ตัดสินใจ markup, component ตัดสินใจว่ามัน*ไปอยู่ตรงไหน* (และด้วย `Astro.slots.has` ตัดสินใจได้ด้วยว่าจะสร้างโครงสร้างอะไรรอบมันหรือเปล่า) สัญญานั้นมีอยู่แค่ข้างใน compiler ของ Astro เอง — ข้ามขอบไปยัง framework component แล้ว `<slot>` จะไม่มีความหมายอะไรเลย — พิสูจน์แล้วข้างบน มันเป็นแค่ HTML element ที่เฉื่อยชาตรงนั้น และกลไก children ของ*framework เอง*เข้ามาทำหน้าที่แทน
+
+## ข้อแลกเปลี่ยน
+
+| | default slot ธรรมดา | named slot | scoped slot (`Astro.slots.render`) |
+|---|---|---|---|
+| **parent ควบคุม** | markup | markup ไหนไปอยู่ตรงไหน | markup และรับข้อมูลกลับจาก component ด้วย |
+| **component ควบคุม** | ไม่มีอะไรเกี่ยวกับ content | โครงสร้างรอบแต่ละ region ที่มีชื่อ | จะเปิดเผยข้อมูลอะไรให้ function ของ parent |
+| **ความซับซ้อน** | ต่ำที่สุด | กลาง — ต้องบันทึกชื่อ slot แต่ละตัว | สูงที่สุด — parent เขียน function ไม่ใช่แค่ markup |
+| **เหมาะกับ** | ห่อ region เดียว (body ของ `Card`) | layout shell ที่มีหลาย region | component ที่คำนวณอะไรบางอย่างที่ parent ต้อง render ด้วย |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`<slot />` ทำงานเหมือนกันข้างใน React/Preact/Vue component เหมือนที่ทำในไฟล์ `.astro`"** พิสูจน์แล้วข้างบน: ข้างใน framework component มันเป็นแค่ native HTML `<slot>` element ที่เฉื่อยชาตรงตัว — กลไก `children` (หรือเทียบเท่า) ของ framework เองต่างหากที่รับ markup ที่ Astro ส่งมาจริง ๆ
+- **"layout ที่ห่อ layout อีกตัวจะ forward slot ทุกตัวที่ผู้เรียกชั้นนอกส่งมาโดยอัตโนมัติ"** พิสูจน์แล้วข้างบน: named slot แต่ละตัวต้องถูก relay ชัด ๆ ด้วย `<slot name="x" slot="x" />` ไม่งั้นจะไม่มีทางไปถึง layout ชั้นใน
+- **"`Astro.slots.has('x')` เหมือนกับการเช็ค prop"** มันสะท้อนว่ามี*markup*ถูกส่งมาสำหรับชื่อ slot นั้นที่ call site หรือเปล่า แยกจาก prop ใด ๆ — component อาจมี prop แต่ไม่มี slotted content หรือกลับกันก็ได้
+- **"fallback content ข้างใน `<slot>` ใช้ได้แค่กับ text"** มันคือ markup ธรรมดา — element ไหนก็ตามที่วางระหว่าง `<slot>` กับ `</slot>` จะ render เมื่อ parent ไม่ส่งอะไรมา พิสูจน์แล้วข้างบนด้วย fallback button
 
 <Callout title="สรุปหนึ่งบรรทัด">
-slot ให้ component render markup ที่ parent ป้อนมา: **default slot** ที่ `<slot />`, **named slot** (`<slot name="x" />` เติมด้วย `slot="x"`) สำหรับจุดฉีดหลายจุด และ **fallback content** ใน `<slot>…</slot>` ตอนไม่มีอะไรส่งมา `Astro.slots.has('x')` ให้ component ปรับโครงสร้างตาม slot ที่ถูกเติม การใช้งานเด่นคือ **layout** — component shell ที่มี slot ที่ทุกหน้าห่อ content ของตัวเองไว้
+**default slot** (`<slot />`) render markup ที่ parent วางไว้ระหว่าง tag ของ component; **named slot** (`<slot name="x" />` เติมด้วย `slot="x"` — รวมถึงบน `<Fragment>` พิสูจน์แล้วข้างบน) ให้จุดฉีดหลายจุด; **fallback content** ข้างใน `<slot>…</slot>` render เฉพาะตอนไม่มีอะไรส่งมา (พิสูจน์แล้วข้างบน ทั้งกรณีส่งกับไม่ส่ง); `Astro.slots.has('x')` ให้ component ปรับโครงสร้างได้; และ `Astro.slots.render(name, args)` ขับเคลื่อน scoped-style slot ที่ parent ส่ง*function*มา รับข้อมูลของ component เป็น argument (พิสูจน์แล้วข้างบน) layout ที่ห่อ layout อีกตัวต้อง relay named slot แต่ละตัวชัด ๆ (`<slot name="x" slot="x" />`) ไม่งั้นจะหายไป ที่สำคัญคือ `<slot>` มีความหมายแค่ข้างใน compiler ของ Astro เอง — ข้างใน framework island มันจะ render เป็น element ที่เฉื่อยชาตรงตัว และ markup ที่ Astro ส่งมาจะไปถึง component ผ่านกลไก `children` ของ framework ตัวเองแทน (พิสูจน์แล้วข้างบนด้วย build จริง) การใช้งานเด่นของ slot ยังคงเป็น **layout** — component shell ที่ทุกหน้าห่อ content ของตัวเองไว้
 </Callout>
+
+```ts
+// src/components/FallbackButton.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { describe, it, expect } from 'vitest';
+import FallbackButton from './FallbackButton.astro';
+
+describe('slot fallback content', () => {
+  it('renders the fallback when no children are passed', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(FallbackButton);
+    expect(html).toContain('Click me');
+  });
+
+  it('renders the passed children instead of the fallback', async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(FallbackButton, {
+      slots: { default: 'Save' },
+    });
+    expect(html).toContain('Save');
+    expect(html).not.toContain('Click me');
+  });
+});
+```
 
 export const quizSlots = [
   {
@@ -147,16 +390,18 @@ export const quizSlots = [
       'ทำไม่ได้',
     ],
     answer: 1,
+    explain: 'component ประกาศ named slot ได้กี่ตัวก็ได้ (`<slot name="x" />`) ส่วน parent เติมแต่ละตัวด้วย `slot="x"` บน child ที่ควรอยู่ตรงนั้น',
   },
   {
-    q: '`<slot>Click me</slot>` render อะไรเมื่อ parent ไม่ส่ง children มา?',
+    q: '```astro\n---\n// src/components/FallbackButton.astro\n---\n<button><slot>Click me</slot></button>\n```\nพิสูจน์ด้วย Container API แล้ว `<FallbackButton />` ที่ไม่มี children เลย render อะไร?',
     options: [
-      'ไม่มีอะไรเลย',
+      'ปุ่มเปล่า',
       'fallback content — "Click me"',
       'error',
       'props ของ parent',
     ],
     answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย container render จริง: ไม่ส่ง children มา slot ใช้ fallback content ("Click me") ของตัวเอง; ส่ง children มา (เช่น "Save") จะแทนที่ทั้งหมด',
   },
   {
     q: 'component เช็คว่า slot ได้รับ content ยังไง?',
@@ -167,6 +412,7 @@ export const quizSlots = [
       '`slot.exists()`',
     ],
     answer: 1,
+    explain: '`Astro.slots.has(name)` return boolean ที่สะท้อนว่ามี markup ถูกส่งมาสำหรับชื่อ slot นั้นหรือไม่ แยกจาก props',
   },
   {
     q: 'การใช้งานหลักของ slot ในไซต์ Astro จริง ๆ คืออะไร?',
@@ -177,6 +423,40 @@ export const quizSlots = [
       'routing ฝั่ง client',
     ],
     answer: 1,
+    explain: 'การใช้งานเด่นคือ layout: component shell (html/head/nav/footer) ที่มี slot สำหรับ body หน้าและ head content ต่อหน้า ที่ทุกหน้าห่อตัวเองไว้',
+  },
+  {
+    q: '```tsx\n// src/components/ReactBoxWithSlot.tsx\nexport default function ReactBoxWithSlot() {\n  return <div class="react-box"><slot /></div>;\n}\n```\nพิสูจน์ด้วย build จริง เกิดอะไรขึ้นเมื่อ markup ของ Astro ถูกส่งเป็น children ให้ component นี้?',
+    options: [
+      'markup render ข้างใน div เหมือนในไฟล์ .astro',
+      '`<slot />` render เป็น native HTML element ที่เปล่าและเฉื่อยชา — markup ที่ส่งมาถูก serialize ไปที่อื่นและไม่โผล่ใน div เลย',
+      'build error เพราะไฟล์ .tsx ใช้ slot ไม่ได้',
+      'มัน hydrate เป็น island อัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้ด้วย markup ที่ build จริง: `<slot />` ในไฟล์ .tsx ไม่ใช่กลไก slot ของ Astro — มัน render เป็น native <slot> element ที่เฉื่อยชา และ content ที่ส่งมาไปจบที่ <template> แทน framework component ต้องใช้กลไก children ของตัวเอง (`{children}`) เพื่อรับมันจริง ๆ',
+  },
+  {
+    q: '```astro\n---\n// src/layouts/OuterLayout.astro\nimport InnerLayout from \'./InnerLayout.astro\';\n---\n<InnerLayout>\n  <slot />\n</InnerLayout>\n```\nหน้าที่ใช้ `OuterLayout` ยังส่ง slot ชื่อ `head` มาด้วย เกิดอะไรขึ้นกับมัน พิสูจน์แล้วข้างบน?',
+    options: [
+      'มันถูก forward ไปให้ head slot ของ InnerLayout อัตโนมัติ',
+      'มันหายไป — ต้องมี `<slot name="head" slot="head" />` ชัด ๆ ใน OuterLayout เพื่อ relay named slot ไปให้ component ชั้นใน',
+      'มันทำให้เกิด build error',
+      'มันแทนที่ default slot',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: layout ที่ห่อ layout อีกตัวต้อง relay named slot แต่ละตัวชัด ๆ ด้วย `<slot name="x" slot="x" />` — `<slot />` เดี่ยว ๆ relay แค่ default slot ดังนั้น head slot ในที่นี้จะถูกทิ้งเงียบ ๆ',
+  },
+  {
+    q: '`Astro.slots.render(\'default\', [\'scoped-arg\'])` เปิดใช้อะไรได้ พิสูจน์แล้วในบทนี้?',
+    options: [
+      'ไม่มีอะไรเกินกว่า default slot ธรรมดา',
+      'scoped-style slot: parent ส่ง function เป็น content ของ slot และ component ควบคุมว่า function นั้นจะได้รับ argument อะไร',
+      'มัน render slot สองครั้ง',
+      'มันแปลง slot ให้เป็น named slot อัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'พิสูจน์แล้วในบทนี้: ส่ง function แบบ `{(arg) => <em>{arg}</em>}` เป็น children ของ component แล้วเรียก `Astro.slots.render(\'default\', [\'scoped-arg\'])` ข้างใน จะส่ง \'scoped-arg\' ไปถึง parameter `arg` ของ function — pattern render-prop / scoped-slot',
   },
 ];
 
