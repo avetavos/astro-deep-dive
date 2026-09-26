@@ -1,0 +1,304 @@
+---
+title: Verification tools
+description: 'What astro check (exit codes, --minimumSeverity vs --minimumFailingSeverity), astro build, astro sync, the Container API, eslint-plugin-astro, astro dev''s JSON logs and background mode, the AstroPlayground compile check, and this course''s own verify-snippets.mjs each actually catch — with real output.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
+
+This course has no in-browser playground for the real Astro 7 compiler the way a runnable sandbox would give you — the only way to prove a claim about generated Astro is a real project, a real `astro check`/`astro build` run, or a real test. Every output below is real, captured against the installed astro@7.3.5 in this course's own probe. None of these tools overlap perfectly, and none is close to complete on its own — the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**'s "Caught by" line for each of its 22 entries names exactly which one (if any) of the tools below would have caught it, and 18 of those 22 name none of them.
+
+## `astro check` — the fast, first pass, and its two severity flags
+
+`astro check` type-checks `.astro`/`.ts`/`.tsx` files with real diagnostics at three severities — `error`, `warning`, `hint` — and prints a summary line. Proven against the installed 7.3.5, a clean project exits `0`; a project with at least one `error` exits `1`:
+
+```bash
+npx astro check; echo "exit: $?"
+```
+
+```text
+Result (100+ files):
+- 0 errors
+- 0 warnings
+- 11 hints
+exit: 0
+```
+
+Two separate flags control two separate things — verified directly in `astro check --help`:
+
+```text
+--minimumFailingSeverity  Minimum error severity needed to exit with an
+                          error code. [choices: "error", "warning", "hint"] [default: "error"]
+--minimumSeverity         Minimum diagnostic severity to show. Choosing
+                          `warning` will, for example, show both errors
+                          and warnings, but not hints. [choices: "error", "warning", "hint"] [default: "hint"]
+```
+
+`--minimumSeverity` controls what gets **printed**; `--minimumFailingSeverity` controls what makes the **exit code** non-zero. By default only `error`-severity diagnostics fail the command — this is exactly why entry 21 in the AI Bug Catalog (a deprecated top-level `markdown.remarkPlugins` key) prints a real `warning ts(6385)` and still exits `0`, easy to miss in CI unless `--minimumFailingSeverity` is tightened to `"warning"`.
+
+Type-checking alone catches surprisingly little of this course's catalog by design — 18 of the 22 entries pass `astro check` cleanly, because most of Astro's own failure modes (a missing adapter, a silent `transition:persist` mismatch, a leaked secret in an island's props) are runtime/behavioral concerns a type checker has no way to see. What it *does* catch reliably: a removed `Astro.glob()` call, a function prop into a strictly-typed island, the old `entry.render()` method, and the renamed `<ViewTransitions />` import — entries 9, 6, 12, and 19, respectively.
+
+## `astro build` — reading the output, not just its exit code
+
+`astro build`'s own log tells you more than pass/fail — it names exactly which routes it prerendered to static files:
+
+```bash
+npx astro build --outDir dist
+```
+
+```text
+ prerendering static routes 
+  ├─ /mixed/static-about/index.html (+13ms)
+  ├─ /index.html (+1ms)
+✓ Completed in 27ms.
+
+[build] Rearranging server assets...
+[build] Server built in 467ms
+[build] Complete!
+```
+
+Anything *not* in the "prerendering static routes" list, in a server-enabled project, was compiled into the server entry instead — the build log itself is proof of which rendering mode a route actually got, not just what its source file declares (this is exactly how the [Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/) lesson proves `prerender` per-route). A real build is also the only way this course reproduces most of the AI Bug Catalog's named errors — `NoAdapterInstalled`, `GetStaticPathsRequired`, `MISSING_EXPORT`, `InvalidContentEntryDataError` — none of which `astro check` ever runs into.
+
+## `astro sync` — generating collection types, and running the loaders for real
+
+`astro sync` (which `astro dev`/`build`/`check` all run automatically first) calls every collection's `load()` for real and writes `.astro/content.d.ts`:
+
+```bash
+npx astro sync
+```
+
+```text
+[content] Syncing content
+[content] Synced content
+[types] Generated 1.16s
+```
+
+Because it actually runs loaders, `astro sync` is also where a schema/frontmatter mismatch first surfaces — `InvalidContentEntryDataError` (the AI Bug Catalog's entry 11) is a sync-time error, not a check-time one, since a lesson's own `content.config.ts` fence type-checks as a plain module under this course's default check mode and never runs against real content.
+
+## Container API test skeleton — a real, passing test
+
+The Astro Container API (`experimental_AstroContainer`) renders a component to an HTML string with no browser needed — the same tool the **[Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/)** lesson covers in depth. A minimal, real skeleton for this exact lesson:
+
+```astro
+---
+// src/components/Greeting.astro
+interface Props {
+  name: string;
+}
+const { name } = Astro.props as Props;
+---
+<p class="greeting">Hello, {name}!</p>
+```
+
+```ts
+// src/__tests__/greeting-render.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Greeting from '../components/Greeting.astro';
+
+test('Greeting renders the given name into real HTML', async () => {
+  const container = await AstroContainer.create();
+  const result = await container.renderToString(Greeting, {
+    props: { name: 'Ava' },
+  });
+
+  expect(result).toContain('Hello, Ava!');
+});
+```
+
+Run with this course's own harness, scoped to this exact lesson:
+
+```bash
+node tools/verify-snippets.mjs --test reading-astro/verification-tools
+```
+
+```text
+reading-astro/verification-tools: 1/1 passed
+
+1/1 test(s) passed across 1 file(s).
+```
+
+A Container API test is the right layer for exactly one question — "does this component render the expected HTML for these props/slots" — never for anything that needs a browser (an island's hydrated behavior, a client-side navigation) or a real request (an Action's auth check, a build-time-only error).
+
+## `eslint-plugin-astro` — current version, flat config only
+
+`eslint-plugin-astro` lints `.astro` files — frontmatter, template, directives, and (with `eslint-plugin-jsx-a11y` installed alongside) accessibility rules. Verified directly against the registry, not remembered:
+
+```bash
+npm view eslint-plugin-astro version
+```
+
+```text
+3.2.1
+```
+
+It's flat-config only. The real shape, straight from its own docs:
+
+```js
+// eslint.config.js
+import eslintPluginAstro from 'eslint-plugin-astro';
+
+export default [
+  ...eslintPluginAstro.configs.recommended,
+];
+```
+
+`configs.recommended` is a spread-in array (multiple flat-config objects), not a single object — a generated snippet that writes `rules: eslintPluginAstro.configs.recommended` without the `...` spread produces a broken config array, not a working ruleset.
+
+## `astro dev`'s background mode and JSON logs
+
+Astro 7's dev server has two flags this course's harness leans on for automation, verified directly against the installed CLI:
+
+```bash
+npx astro dev --help
+```
+
+```text
+   Commands 
+                     stop  Stop a running background dev server.
+                   status  Check if a dev server is running.
+          logs [--follow]  View logs from a background dev server.
+
+   Flags 
+             --background  Start the dev server as a background process.
+```
+
+```bash
+npx astro --help
+```
+
+```text
+   Global Flags 
+             --json  Enables JSON logging.
+```
+
+`--background` lets a script (or an AI coding agent) start the dev server, keep working, and check on it later with `astro dev status`/`astro dev logs` instead of blocking on a foreground process. `--json` turns every log line into structured JSON instead of colored terminal text — the combination is exactly what an automated tool (or an agent driving this course's own harness) needs to read dev-server errors without scraping ANSI-colored output.
+
+## This course's own harness: compile every snippet
+
+Every code fence in this course tagged with a real path first line is a real file, collected by `tools/verify-snippets.mjs` and type-checked with `astro check` in one pass across the whole course:
+
+```bash
+npm run verify
+```
+
+```text
+Per-module fence summary (collected / skipped-no-path / expect-error / tests):
+  ...
+  reading-astro: 42 / 4 / 4 / 1
+  ...
+  TOTAL: 180 / 107 / 12 / 15
+```
+
+A run with zero real errors anywhere prints `no errors, no warnings.` above this same per-module summary; any error found anywhere in the course prints one `error <file>:fence #N ...` line per failure first, then this identical summary — this module's own 0-error count is what matters for this lesson, whatever another module's count happens to be on a given run.
+
+A fence deliberately showing broken or misbehaving code (most of the AI Bug Catalog's "code AI typically writes" examples) starts with `// @expect-error <reason>` so the harness skips collecting it — the lesson prose carries the real, separately-captured `astro check`/build/curl output instead of asking every run to reproduce a deliberate failure. `node tools/verify-snippets.mjs --build <module>/<lesson>` goes further for one lesson at a time: it writes that lesson's fences to their real paths and runs a genuine `astro build`, printing the tail — the only way this course's harness reproduces a build-only error like `NoAdapterInstalled` or `GetStaticPathsRequired` for real, on demand.
+
+## The AstroPlayground compile check — and its real, honest limits
+
+Two earlier lessons in this course (`components/astro-syntax-deep.mdx`, `components/styles-and-scripts.mdx`) embed `<AstroPlayground>`, an in-browser, compile-only check. Worth being precise about what it actually runs: per `astro-playground-runtime.ts`'s own module doc comment, it cannot load this course's real Rust compiler in a browser at all (the only WASM build of `@astrojs/compiler-rs` fails to even link when loaded from a CDN — a real `LinkError` naming a missing `napi_create_async_work` import) — so it instead loads the classic, pre-7.0 **Go** compiler (`@astrojs/compiler@4.0.0` from esm.sh), the same package the official Astro REPL has always used for in-browser compiles.
+
+That substitution has a real, proven consequence for what it can and can't catch: the classic compiler is markedly more lenient than Astro 7's real Rust compiler — an unclosed tag or mis-nested HTML that `astro check` rejects outright compiles through this playground with **zero diagnostics**. What it *does* reliably catch is `set:html` on an element that still has a **text-node** child:
+
+<AstroPlayground code={setHtmlChildrenVerifyCode} id="playground-verify-set-html" title="set:html with a text-node child" />
+
+export const setHtmlChildrenVerifyCode = `---
+---
+<div set:html={"<mark>Highlighted</mark>"}>
+  New here? Read the guide first.
+</div>
+`;
+
+Click Compile: the diagnostics panel shows a real `WARNING_SET_WITH_CHILDREN` — the same genuine, version-independent Astro mistake proven in the syntax-deep-dive lesson. But this playground's own leniency cuts the other way too, and it's worth knowing before you trust a "no diagnostics" result: swap the text-node child above for a nested **element** child (`<p>...</p>` instead of plain text) and, in this exact compiler build, the warning silently disappears — a real, reproducible gap, not every "still has children" case is actually caught here. Use this playground to sanity-check a suspect `set:html` usage's *shape*, never as proof that a snippet is clean — `astro check` against the real, installed Rust compiler (or a real build) is the only check this course treats as authoritative.
+
+## Mental Model
+
+<Mermaid title="Static tools prove things from source alone; dynamic tools need a real render, a real request, or a real build" code={verificationToolsDiagram} />
+
+export const verificationToolsDiagram = `flowchart TD
+  subgraph Static["Static (source only)"]
+    Check["astro check<br/>real type errors: Astro.glob, entry.render(), ViewTransitions, strict island props"]
+    Eslint["eslint-plugin-astro@3.2.1<br/>flat config only, lints .astro files"]
+    Verify["tools/verify-snippets.mjs<br/>astro check across the whole course"]
+  end
+  subgraph Runtime["Runtime (needs a real render, request, or build)"]
+    Container["Container API<br/>a component's real rendered HTML, no browser"]
+    Build["astro build / astro sync<br/>NoAdapterInstalled, GetStaticPathsRequired, InvalidContentEntryDataError"]
+    Curl["curl against a real server<br/>Action auth, Cache-Control, secrets in built HTML"]
+  end
+  subgraph Browser["Needs a real browser"]
+    Playground["AstroPlayground<br/>classic Go compiler — lenient, not this course's Rust compiler"]
+    Real["a real browser session<br/>hydration, transition:persist matching, client directives"]
+  end
+`;
+
+<Callout title="The one-line takeaway">
+Every tool on this page is a filter, not a verdict — even run together, they leave most of the AI Bug Catalog's 22 patterns (18 of which pass `astro check` cleanly) completely uncaught. Run `astro check` and `npm run verify` first, then `astro build`/`astro sync` for anything build-time, a Container API test for a component's rendered HTML, and still work through the <a href="/astro/en/reading-astro/review-checklist/">Review Checklist</a> by eye.
+</Callout>
+
+export const quizVerificationTools = [
+  {
+    q: "```text\n--minimumFailingSeverity  ... [default: \"error\"]\n--minimumSeverity         ... [default: \"hint\"]\n```\nA project has 1 warning and 0 errors. With default flags, what is `astro check`'s exit code, and why?",
+    options: [
+      "1 — any diagnostic at all fails the command",
+      "0 — only error-severity diagnostics fail the command by default (--minimumFailingSeverity defaults to \"error\"); a warning alone does not affect the exit code unless that flag is tightened",
+      "It depends on --minimumSeverity",
+      "astro check has no concept of an exit code",
+    ],
+    answer: 1,
+    explain: "The two flags are independent: --minimumSeverity controls what's printed, --minimumFailingSeverity controls the exit code. Proven in this lesson: entry 21's deprecated remarkPlugins key prints a real warning and still exits 0.",
+  },
+  {
+    q: "Why does a real `astro build` reproduce errors like `NoAdapterInstalled` and `GetStaticPathsRequired` that `astro check` never reports?",
+    options: [
+      "astro check is broken",
+      "Those errors happen while Astro actually compiles the server entry and generates real routes — steps astro check's type-only pass never performs, so the underlying code can type-check with 0 errors and still fail a real build",
+      "They only happen in astro dev, never astro build",
+      "astro build and astro check run identical checks",
+    ],
+    answer: 1,
+    explain: "Proven throughout the AI Bug Catalog: entries like a missing adapter or a missing getStaticPaths() type-check clean with 0 errors and only fail once a genuine build tries to compile the server entry or generate routes.",
+  },
+  {
+    q: "What does registering a component with the Container API actually prove, and what does it NOT prove?",
+    options: [
+      "It proves the component works correctly in every browser",
+      "It proves the component renders the expected HTML string for given props/slots — it proves nothing about hydration, client-side behavior, or anything needing a real browser or request",
+      "It proves the component has no accessibility issues",
+      "It is identical to a real astro build",
+    ],
+    answer: 1,
+    explain: "Proven above with a real passing Greeting test: renderToString gives you the rendered HTML, full stop — an island's hydrated behavior, a real request, or a browser-only mechanism like transition:persist matching are outside what this tool can ever show.",
+  },
+  {
+    q: "Why can't `<AstroPlayground>` be trusted as proof that a suspect `.astro` snippet is actually correct?",
+    options: [
+      "It always agrees with astro check, so it can be trusted fully",
+      "It loads a different, more lenient compiler (the classic pre-7.0 Go compiler) than this course's real Rust compiler — proven above, it lets unclosed/mis-nested HTML through with zero diagnostics, and even its one reliably-caught mistake (set:html with children) silently stops firing once the child is an element instead of plain text",
+      "It cannot run in a browser at all",
+      "It only checks CSS, never markup",
+    ],
+    answer: 1,
+    explain: "Verified directly in astro-playground-runtime.ts's own doc comment and proven in this lesson: the real Rust compiler (@astrojs/compiler-rs) cannot even link as WASM from a CDN, so the playground substitutes the older, more forgiving Go compiler — useful for a quick shape-check, never a substitute for astro check.",
+  },
+  {
+    q: "Why does this course's harness mark most of the AI Bug Catalog's 'code AI typically writes' fences with `// @expect-error <reason>` instead of a plain path comment?",
+    options: [
+      "To hide the bugs from readers",
+      "So the harness skips type-checking a fence that is deliberately broken — the lesson prose carries the real, separately-captured astro check/build/curl output instead of asking every run to reproduce an intentional failure",
+      "Because @expect-error fences run faster",
+      "It has no effect on the harness at all",
+    ],
+    answer: 1,
+    explain: "Without the marker, a deliberately buggy example would make every run of tools/verify-snippets.mjs report a real error for code that is intentionally wrong — the marker tells the harness this fence is deliberately uncollected, matching the same technique used across this course.",
+  },
+];
+
+<Quiz client:visible id="reading-astro/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-astro/verification-tools" />

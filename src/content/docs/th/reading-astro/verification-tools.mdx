@@ -1,0 +1,302 @@
+---
+title: เครื่องมือตรวจสอบ
+description: 'สิ่งที่ astro check (exit code, --minimumSeverity เทียบกับ --minimumFailingSeverity), astro build, astro sync, Container API, eslint-plugin-astro, JSON log กับ background mode ของ astro dev, การตรวจสอบด้วย AstroPlayground, และ verify-snippets.mjs ของคอร์สนี้เอง จับได้จริง ๆ — พร้อมผลลัพธ์จริง'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.astro';
+
+คอร์สนี้ไม่มี playground ในเบราว์เซอร์สำหรับ compiler จริงของ Astro 7 แบบที่ sandbox ที่รันได้จริงจะให้ได้ — วิธีเดียวที่จะพิสูจน์ข้ออ้างเกี่ยวกับโค้ด Astro ที่ generate มาคือโปรเจกต์จริง, การรัน `astro check`/`astro build` จริง, หรือ test จริง ผลลัพธ์ทุกอันด้านล่างเป็นของจริง เก็บมาจาก astro@7.3.5 ที่ติดตั้งใน probe ของคอร์สนี้เอง ไม่มีเครื่องมือไหนซ้อนทับกันสมบูรณ์ และไม่มีตัวไหนใกล้เคียงครบถ้วนด้วยตัวมันเอง — บรรทัด "จับได้ด้วย" ของแต่ละ 22 entry ใน **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** ระบุเป๊ะ ๆ ว่าเครื่องมือไหนด้านล่าง (ถ้ามี) ที่จะจับมันได้ และ 18 จาก 22 นั้นไม่มีตัวไหนเลย
+
+## `astro check` — รอบแรกที่เร็ว และ flag severity สองตัว
+
+`astro check` type-check ไฟล์ `.astro`/`.ts`/`.tsx` ด้วย diagnostic จริงที่สามระดับ — `error`, `warning`, `hint` — และพิมพ์บรรทัดสรุป พิสูจน์แล้วกับ 7.3.5 ที่ติดตั้ง โปรเจกต์ที่สะอาด exit `0`; โปรเจกต์ที่มี `error` อย่างน้อยหนึ่งอัน exit `1`:
+
+```bash
+npx astro check; echo "exit: $?"
+```
+
+```text
+Result (100+ files):
+- 0 errors
+- 0 warnings
+- 11 hints
+exit: 0
+```
+
+flag สองตัวที่แยกกันควบคุมคนละเรื่อง — ตรวจตรงจาก `astro check --help`:
+
+```text
+--minimumFailingSeverity  Minimum error severity needed to exit with an
+                          error code. [choices: "error", "warning", "hint"] [default: "error"]
+--minimumSeverity         Minimum diagnostic severity to show. Choosing
+                          `warning` will, for example, show both errors
+                          and warnings, but not hints. [choices: "error", "warning", "hint"] [default: "hint"]
+```
+
+`--minimumSeverity` ควบคุมสิ่งที่ **แสดง**; `--minimumFailingSeverity` ควบคุมสิ่งที่ทำให้ **exit code** ไม่เป็นศูนย์ โดยปริยายมีแค่ diagnostic ระดับ `error` เท่านั้นที่ทำให้คำสั่งล้มเหลว — นี่คือเหตุผลเป๊ะ ๆ ที่ entry 21 ใน AI Bug Catalog (key `markdown.remarkPlugins` ระดับบนสุดที่เลิกใช้แล้ว) พิมพ์ `warning ts(6385)` จริงและยัง exit `0` พลาดง่ายใน CI เว้นแต่ `--minimumFailingSeverity` จะถูกตั้งให้เข้มขึ้นเป็น `"warning"`
+
+การ type-check อย่างเดียวจับ catalog ของคอร์สนี้ได้น้อยอย่างน่าประหลาดใจโดยการออกแบบ — 18 จาก 22 entry ผ่าน `astro check` สะอาด เพราะความล้มเหลวส่วนใหญ่ของ Astro เอง (adapter ที่ขาด, `transition:persist` ที่ไม่ตรงกันแบบเงียบ, secret ที่หลุดใน prop ของ island) เป็นเรื่อง runtime/พฤติกรรมที่ type checker ไม่มีทางมองเห็น สิ่งที่มัน *จับได้* จริงคือ: การเรียก `Astro.glob()` ที่ถูกเอาออก, function prop เข้า island ที่ type เข้มงวด, method `entry.render()` เก่า, และ import `<ViewTransitions />` ที่เปลี่ยนชื่อแล้ว — entry 9, 6, 12, และ 19 ตามลำดับ
+
+## `astro build` — อ่าน output ไม่ใช่แค่ exit code
+
+log ของ `astro build` เองบอกมากกว่าผ่าน/ไม่ผ่าน — มันระบุเป๊ะ ๆ ว่า route ไหนถูก prerender เป็นไฟล์ static:
+
+```bash
+npx astro build --outDir dist
+```
+
+```text
+ prerendering static routes 
+  ├─ /mixed/static-about/index.html (+13ms)
+  ├─ /index.html (+1ms)
+✓ Completed in 27ms.
+
+[build] Rearranging server assets...
+[build] Server built in 467ms
+[build] Complete!
+```
+
+อะไรก็ตามที่ *ไม่* อยู่ใน list "prerendering static routes" ในโปรเจกต์ที่เปิดใช้ server ถูก compile เข้า server entry แทน — build log เองคือหลักฐานว่า route หนึ่งได้ rendering mode ไหนจริง ๆ ไม่ใช่แค่สิ่งที่ source file ประกาศไว้ (นี่คือวิธีเป๊ะ ๆ ที่บทเรียน [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/) พิสูจน์ `prerender` ต่อ route) build จริงยังเป็นวิธีเดียวที่คอร์สนี้ reproduce error ที่มีชื่อส่วนใหญ่ของ AI Bug Catalog ได้ — `NoAdapterInstalled`, `GetStaticPathsRequired`, `MISSING_EXPORT`, `InvalidContentEntryDataError` — ซึ่งไม่มีตัวไหนที่ `astro check` เจอเลย
+
+## `astro sync` — generate type ของ collection และรัน loader จริง
+
+`astro sync` (ที่ `astro dev`/`build`/`check` ทั้งหมดรันให้อัตโนมัติก่อน) เรียก `load()` ของทุก collection จริง ๆ และเขียน `.astro/content.d.ts`:
+
+```bash
+npx astro sync
+```
+
+```text
+[content] Syncing content
+[content] Synced content
+[types] Generated 1.16s
+```
+
+เพราะมันรัน loader จริง `astro sync` จึงเป็นจุดที่ frontmatter ไม่ตรงกับ schema ปรากฏก่อนใคร — `InvalidContentEntryDataError` (entry 11 ของ AI Bug Catalog) เป็น error ตอน sync ไม่ใช่ตอน check เพราะ fence `content.config.ts` ของบทเรียนเอง type-check เป็น module ธรรมดาภายใต้โหมด check เริ่มต้นของคอร์สนี้ และไม่เคยรันกับ content จริงเลย
+
+## โครงร่างการทดสอบด้วย Container API — test ที่รันจริงและผ่านจริง
+
+Astro Container API (`experimental_AstroContainer`) render component เป็น HTML string โดยไม่ต้องใช้ browser — เครื่องมือเดียวกับที่บทเรียน **[Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/)** ครอบคลุมแบบเต็ม โครงร่างขั้นต่ำ จริง สำหรับบทเรียนนี้เป๊ะ ๆ:
+
+```astro
+---
+// src/components/Greeting.astro
+interface Props {
+  name: string;
+}
+const { name } = Astro.props as Props;
+---
+<p class="greeting">Hello, {name}!</p>
+```
+
+```ts
+// src/__tests__/greeting-render.test.ts
+import { experimental_AstroContainer as AstroContainer } from 'astro/container';
+import { expect, test } from 'vitest';
+import Greeting from '../components/Greeting.astro';
+
+test('Greeting renders the given name into real HTML', async () => {
+  const container = await AstroContainer.create();
+  const result = await container.renderToString(Greeting, {
+    props: { name: 'Ava' },
+  });
+
+  expect(result).toContain('Hello, Ava!');
+});
+```
+
+รันด้วย harness ของคอร์สนี้เอง เจาะจงเฉพาะบทเรียนนี้:
+
+```bash
+node tools/verify-snippets.mjs --test reading-astro/verification-tools
+```
+
+```text
+reading-astro/verification-tools: 1/1 passed
+
+1/1 test(s) passed across 1 file(s).
+```
+
+test ด้วย Container API เหมาะกับคำถามเดียวเท่านั้น — "component นี้ render HTML ที่คาดไว้สำหรับ prop/slot เหล่านี้หรือไม่" — ไม่เคยเหมาะกับอะไรที่ต้องใช้ browser (พฤติกรรม hydrate ของ island, การนำทางฝั่ง client) หรือ request จริง (การตรวจ auth ของ Action, error ที่เกิดแค่ตอน build)
+
+## `eslint-plugin-astro` — เวอร์ชันปัจจุบัน flat config เท่านั้น
+
+`eslint-plugin-astro` lint ไฟล์ `.astro` — frontmatter, template, directive, และ (พร้อม `eslint-plugin-jsx-a11y` ที่ติดตั้งคู่กัน) กฎ accessibility ตรวจตรงจาก registry ไม่ใช่จากความจำ:
+
+```bash
+npm view eslint-plugin-astro version
+```
+
+```text
+3.2.1
+```
+
+มันเป็น flat-config เท่านั้น รูปร่างจริง ตรงจากเอกสารของมันเอง:
+
+```js
+// eslint.config.js
+import eslintPluginAstro from 'eslint-plugin-astro';
+
+export default [
+  ...eslintPluginAstro.configs.recommended,
+];
+```
+
+`configs.recommended` เป็น array ที่ spread เข้าไป (flat-config object หลายตัว) ไม่ใช่ object เดียว — snippet ที่ generate มาที่เขียน `rules: eslintPluginAstro.configs.recommended` โดยไม่มี `...` spread จะได้ config array ที่พังไม่ใช่ ruleset ที่ทำงานได้
+
+## Background mode กับ JSON log ของ `astro dev`
+
+dev server ของ Astro 7 มี flag สองตัวที่ harness ของคอร์สนี้พึ่งพาสำหรับ automation ตรวจตรงจาก CLI ที่ติดตั้ง:
+
+```bash
+npx astro dev --help
+```
+
+```text
+   Commands 
+                     stop  Stop a running background dev server.
+                   status  Check if a dev server is running.
+          logs [--follow]  View logs from a background dev server.
+
+   Flags 
+             --background  Start the dev server as a background process.
+```
+
+```bash
+npx astro --help
+```
+
+```text
+   Global Flags 
+             --json  Enables JSON logging.
+```
+
+`--background` ให้ script (หรือ AI coding agent) เริ่ม dev server ทำงานต่อ แล้วมาตรวจดูทีหลังด้วย `astro dev status`/`astro dev logs` แทนที่จะบล็อกอยู่กับ process ที่ทำงานอยู่หน้าจอ `--json` เปลี่ยนทุกบรรทัด log เป็น JSON ที่มีโครงสร้างแทนที่จะเป็นข้อความสีบน terminal — การรวมกันนี้คือสิ่งที่เครื่องมืออัตโนมัติ (หรือ agent ที่ขับ harness ของคอร์สนี้เอง) ต้องการเพื่ออ่าน error ของ dev server โดยไม่ต้องขูด output ที่มีสี ANSI
+
+## Harness ของคอร์สนี้เอง: compile ทุก snippet
+
+code fence ทุกอันในคอร์สนี้ที่มีบรรทัดแรกเป็น path จริง คือไฟล์จริง ถูกเก็บโดย `tools/verify-snippets.mjs` และ type-check ด้วย `astro check` ในรอบเดียวทั่วทั้งคอร์ส:
+
+```bash
+npm run verify
+```
+
+```text
+Per-module fence summary (collected / skipped-no-path / expect-error / tests):
+  ...
+  reading-astro: 42 / 4 / 4 / 1
+  ...
+  TOTAL: 180 / 107 / 12 / 15
+```
+
+การรันที่ไม่มี error จริงเลยที่ไหนพิมพ์ `no errors, no warnings.` เหนือบรรทัดสรุปต่อโมดูลเดียวกันนี้; error ที่พบที่ไหนก็ตามในคอร์สพิมพ์บรรทัด `error <file>:fence #N ...` หนึ่งบรรทัดต่อความล้มเหลวก่อน แล้วจึงสรุปแบบเดียวกัน — จำนวน error ที่เป็นศูนย์ของโมดูลนี้เองคือสิ่งที่สำคัญสำหรับบทเรียนนี้ ไม่ว่าโมดูลอื่นจะมีจำนวนเท่าไหร่ในการรันครั้งใดครั้งหนึ่งก็ตาม fence ที่ตั้งใจแสดงโค้ดที่พังหรือมีพฤติกรรมผิด (ตัวอย่าง "โค้ดที่ AI มักเขียน" ส่วนใหญ่ใน AI Bug Catalog) เริ่มด้วย `// @expect-error <reason>` เพื่อให้ harness ข้ามการเก็บมัน — เนื้อหาบทเรียนพก `astro check`/build/curl output จริงที่เก็บแยกไว้แทนที่จะให้ทุกการรันพยายาม reproduce ความล้มเหลวที่ตั้งใจไว้ `node tools/verify-snippets.mjs --build <module>/<lesson>` ไปไกลกว่านั้นสำหรับบทเรียนเดียวต่อครั้ง: มันเขียน fence ของบทเรียนนั้นลง path จริง แล้วรัน `astro build` จริง พิมพ์ส่วนท้ายออกมา — วิธีเดียวที่ harness ของคอร์สนี้ reproduce error ที่เกิดแค่ตอน build อย่าง `NoAdapterInstalled` หรือ `GetStaticPathsRequired` ได้จริง ตามต้องการ
+
+## การตรวจสอบด้วย AstroPlayground — และขีดจำกัดจริงที่ต้องพูดตรง ๆ
+
+บทเรียนสองบทก่อนหน้าในคอร์สนี้ (`components/astro-syntax-deep.mdx`, `components/styles-and-scripts.mdx`) ฝัง `<AstroPlayground>` การตรวจสอบแบบ compile-only ในเบราว์เซอร์ ควรพูดให้ชัดว่ามันรันอะไรจริง ๆ: ตาม module doc comment ของ `astro-playground-runtime.ts` เอง มันโหลด compiler Rust จริงของคอร์สนี้ในเบราว์เซอร์ไม่ได้เลย (WASM build เดียวของ `@astrojs/compiler-rs` link ไม่ได้ด้วยซ้ำเมื่อโหลดจาก CDN — `LinkError` จริงที่ระบุ import `napi_create_async_work` ที่หายไป) — มันเลยโหลด compiler **Go** รุ่นเก่าก่อน 7.0 แทน (`@astrojs/compiler@4.0.0` จาก esm.sh) ตัวเดียวกับที่ Astro REPL ทางการใช้มาตลอดสำหรับการ compile ในเบราว์เซอร์
+
+การสลับตัวนั้นมีผลจริงที่พิสูจน์แล้วต่อสิ่งที่มันจับได้และจับไม่ได้: compiler รุ่นเก่านี้หย่อนกว่า Rust compiler จริงของ Astro 7 อย่างเห็นได้ชัด — tag ที่ไม่ปิดหรือ HTML ที่ซ้อนผิดที่ `astro check` ปฏิเสธตรง ๆ compile ผ่าน playground นี้ได้โดย **ไม่มี diagnostic เลย** สิ่งที่มัน *จับได้* จริงคือ `set:html` บน element ที่ยังมี child เป็น **text-node**:
+
+<AstroPlayground code={setHtmlChildrenVerifyCode} id="playground-verify-set-html" title="set:html ที่มี child เป็น text-node" />
+
+export const setHtmlChildrenVerifyCode = `---
+---
+<div set:html={"<mark>Highlighted</mark>"}>
+  New here? Read the guide first.
+</div>
+`;
+
+กด Compile: แผง diagnostic จะแสดง `WARNING_SET_WITH_CHILDREN` จริง — ความผิดพลาดของ Astro ที่แท้จริงและไม่ขึ้นกับเวอร์ชันเดียวกับที่พิสูจน์แล้วในบทเรียน syntax-deep-dive แต่ความหย่อนของ playground นี้เองก็กลับด้านได้เช่นกัน และควรรู้ไว้ก่อนจะเชื่อผลลัพธ์ "ไม่มี diagnostic": เปลี่ยน child ที่เป็น text-node ข้างบนให้เป็น child ที่เป็น **element** ซ้อนอยู่ (`<p>...</p>` แทนข้อความธรรมดา) แล้วใน compiler build เป๊ะ ๆ นี้ warning จะหายไปแบบเงียบ ๆ — ช่องว่างจริงที่ reproduce ได้ ไม่ใช่ทุกกรณี "ยังมี children อยู่" จะถูกจับได้ที่นี่ ใช้ playground นี้เพื่อตรวจสอบ *รูปร่าง* ของการใช้ `set:html` ที่น่าสงสัยคร่าว ๆ ไม่ใช่เพื่อพิสูจน์ว่า snippet สะอาด — `astro check` กับ Rust compiler จริงที่ติดตั้งไว้ (หรือ build จริง) คือการตรวจสอบเดียวที่คอร์สนี้ถือว่าเชื่อถือได้
+
+## Mental Model
+
+<Mermaid title="เครื่องมือ static พิสูจน์สิ่งต่าง ๆ จาก source ได้เลย; เครื่องมือ dynamic ต้องมีการ render จริง, request จริง, หรือ build จริง" code={verificationToolsDiagram} />
+
+export const verificationToolsDiagram = `flowchart TD
+  subgraph Static["Static (source only)"]
+    Check["astro check<br/>type error จริง: Astro.glob, entry.render(), ViewTransitions, island prop เข้มงวด"]
+    Eslint["eslint-plugin-astro@3.2.1<br/>flat config เท่านั้น lint ไฟล์ .astro"]
+    Verify["tools/verify-snippets.mjs<br/>astro check ทั่วทั้งคอร์ส"]
+  end
+  subgraph Runtime["Runtime (ต้อง render จริง, request จริง, หรือ build จริง)"]
+    Container["Container API<br/>HTML จริงของ component ไม่ต้องใช้ browser"]
+    Build["astro build / astro sync<br/>NoAdapterInstalled, GetStaticPathsRequired, InvalidContentEntryDataError"]
+    Curl["curl กับ server จริง<br/>auth ของ Action, Cache-Control, secret ใน HTML ที่ build แล้ว"]
+  end
+  subgraph Browser["ต้องใช้ browser จริง"]
+    Playground["AstroPlayground<br/>compiler Go รุ่นเก่า — หย่อนกว่า ไม่ใช่ Rust compiler ของคอร์สนี้"]
+    Real["session browser จริง<br/>hydration, การจับคู่ transition:persist, client directive"]
+  end
+`;
+
+<Callout title="สรุปหนึ่งบรรทัด">
+เครื่องมือทุกอันในหน้านี้เป็นตัวกรอง ไม่ใช่คำตัดสิน — แม้จะรันรวมกันทั้งหมด ก็ยังพลาด pattern ส่วนใหญ่ใน 22 pattern ของ AI Bug Catalog (18 ในนั้นผ่าน `astro check` สะอาด) ไปเลย รัน `astro check` กับ `npm run verify` ก่อน แล้วค่อย `astro build`/`astro sync` สำหรับอะไรที่เกิดแค่ตอน build, test ด้วย Container API สำหรับ HTML ที่ component render ออกมา และยังต้องไล่ <a href="/astro/th/reading-astro/review-checklist/">Review Checklist</a> ด้วยสายตาอยู่ดี
+</Callout>
+
+export const quizVerificationTools = [
+  {
+    q: "```text\n--minimumFailingSeverity  ... [default: \"error\"]\n--minimumSeverity         ... [default: \"hint\"]\n```\nโปรเจกต์มี 1 warning และ 0 error ด้วย flag ค่าเริ่มต้น `astro check` จะ exit code อะไร และทำไม?",
+    options: [
+      "1 — diagnostic อะไรก็ตามทำให้คำสั่งล้มเหลว",
+      "0 — โดยปริยายมีแค่ diagnostic ระดับ error เท่านั้นที่ทำให้คำสั่งล้มเหลว (--minimumFailingSeverity ค่าเริ่มต้นคือ \"error\"); warning เดี่ยว ๆ ไม่มีผลต่อ exit code เว้นแต่ flag นั้นจะถูกตั้งให้เข้มขึ้น",
+      "ขึ้นกับ --minimumSeverity",
+      "astro check ไม่มีแนวคิดเรื่อง exit code",
+    ],
+    answer: 1,
+    explain: "flag ทั้งสองแยกกัน: --minimumSeverity ควบคุมสิ่งที่พิมพ์ --minimumFailingSeverity ควบคุม exit code พิสูจน์แล้วในบทเรียนนี้: key remarkPlugins ที่เลิกใช้แล้วของ entry 21 พิมพ์ warning จริงและยัง exit 0",
+  },
+  {
+    q: "ทำไม `astro build` จริงถึง reproduce error อย่าง `NoAdapterInstalled` และ `GetStaticPathsRequired` ที่ `astro check` ไม่เคยรายงาน?",
+    options: [
+      "astro check พัง",
+      "error เหล่านั้นเกิดขึ้นตอนที่ Astro compile server entry จริงและสร้าง route จริง — ขั้นตอนที่ astro check ซึ่งเป็นแค่ type-only pass ไม่เคยทำเลย เพราะฉะนั้นโค้ดที่อยู่ข้างใต้ type-check ผ่านโดยไม่มี error และยังล้มเหลวตอน build จริงได้",
+      "สิ่งเหล่านั้นเกิดแค่ใน astro dev เท่านั้น ไม่เคยเกิดใน astro build",
+      "astro build กับ astro check ตรวจแบบเดียวกันเป๊ะ",
+    ],
+    answer: 1,
+    explain: "พิสูจน์แล้วตลอดทั้ง AI Bug Catalog: entry อย่าง adapter ที่ขาดหรือ getStaticPaths() ที่ขาด type-check สะอาดโดยไม่มี error และล้มเหลวแค่เมื่อ build จริงพยายาม compile server entry หรือสร้าง route เท่านั้น",
+  },
+  {
+    q: "การลงทะเบียน component ด้วย Container API พิสูจน์อะไรจริง ๆ และไม่พิสูจน์อะไร?",
+    options: [
+      "มันพิสูจน์ว่า component ทำงานถูกต้องในทุกเบราว์เซอร์",
+      "มันพิสูจน์ว่า component render HTML string ที่คาดไว้สำหรับ prop/slot ที่กำหนด — มันไม่พิสูจน์อะไรเลยเรื่อง hydration, พฤติกรรมฝั่ง client, หรืออะไรก็ตามที่ต้องใช้ browser หรือ request จริง",
+      "มันพิสูจน์ว่า component ไม่มีปัญหา accessibility",
+      "มันเหมือนกับ astro build จริงทุกประการ",
+    ],
+    answer: 1,
+    explain: "พิสูจน์แล้วข้างต้นด้วย test Greeting ที่ผ่านจริง: renderToString ให้ HTML ที่ render แล้วแค่นั้น — พฤติกรรม hydrate ของ island, request จริง, หรือกลไกที่ต้องใช้ browser อย่างการจับคู่ transition:persist อยู่นอกเหนือสิ่งที่เครื่องมือนี้จะแสดงได้เลย",
+  },
+  {
+    q: "ทำไมถึงเชื่อ `<AstroPlayground>` ไม่ได้ว่าเป็นหลักฐานว่า snippet `.astro` ที่น่าสงสัยถูกต้องจริง ๆ?",
+    options: [
+      "มันเห็นด้วยกับ astro check เสมอ เลยเชื่อถือได้เต็มที่",
+      "มันโหลด compiler ที่ต่างออกไปและหย่อนกว่า (compiler Go รุ่นเก่าก่อน 7.0) แทน Rust compiler จริงของคอร์สนี้ — พิสูจน์แล้วข้างต้น มันปล่อย HTML ที่ไม่ปิด/ซ้อนผิดผ่านได้โดยไม่มี diagnostic เลย และแม้แต่ความผิดพลาดเดียวที่มันจับได้เชื่อถือได้ (set:html ที่มี children) ก็หยุดทำงานแบบเงียบ ๆ ทันทีที่ child เป็น element แทนข้อความธรรมดา",
+      "มันรันในเบราว์เซอร์ไม่ได้เลย",
+      "มันตรวจแค่ CSS เท่านั้น ไม่เคยตรวจ markup",
+    ],
+    answer: 1,
+    explain: "ตรวจตรงจาก module doc comment ของ astro-playground-runtime.ts เองและพิสูจน์แล้วในบทเรียนนี้: Rust compiler จริง (@astrojs/compiler-rs) link เป็น WASM จาก CDN ไม่ได้ด้วยซ้ำ playground เลยสลับไปใช้ compiler Go รุ่นเก่าที่หย่อนกว่าแทน — มีประโยชน์สำหรับตรวจรูปร่างคร่าว ๆ ไม่เคยแทน astro check ได้",
+  },
+  {
+    q: "ทำไม harness ของคอร์สนี้ถึงแปะ `// @expect-error <reason>` บน fence 'โค้ดที่ AI มักเขียน' ส่วนใหญ่ใน AI Bug Catalog แทนที่จะเป็น path comment ธรรมดา?",
+    options: [
+      "เพื่อซ่อนบั๊กจากผู้อ่าน",
+      "เพื่อให้ harness ข้ามการ type-check fence ที่ตั้งใจให้พังไว้ — เนื้อหาบทเรียนพก astro check/build/curl output จริงที่เก็บแยกไว้แทนที่จะให้ทุกการรันพยายาม reproduce ความล้มเหลวที่ตั้งใจไว้",
+      "เพราะ fence @expect-error รันเร็วกว่า",
+      "มันไม่มีผลอะไรกับ harness เลย",
+    ],
+    answer: 1,
+    explain: "ถ้าไม่มี marker ตัวอย่างที่พังโดยตั้งใจจะทำให้ทุกการรัน tools/verify-snippets.mjs รายงาน error จริงสำหรับโค้ดที่ตั้งใจให้ผิด — marker บอก harness ว่า fence นี้ตั้งใจไม่เก็บ ตรงกับเทคนิคเดียวกันที่ใช้ทั่วทั้งคอร์สนี้",
+  },
+];
+
+<Quiz client:visible id="reading-astro/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-astro/verification-tools" />

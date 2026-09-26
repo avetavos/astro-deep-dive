@@ -1,0 +1,177 @@
+---
+title: How to read Astro you did not write
+description: 'A reading order for AI-generated Astro code — rendering mode and adapter first, then islands and client directives, then content and data, then server-side Astro, then security, then performance and caching, then tooling — because most of Astro''s own failure modes are silent, not compiler errors.'
+sidebar:
+  order: 0
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Every earlier module in this course taught you to *write* Astro. This module teaches the other half: reading Astro someone — or something — else wrote, and deciding whether it is correct. An AI assistant hands you a `.astro` file that compiles, that `astro check` accepts, and that looks exactly like the examples you have been studying. None of that proves it is correct — most of what makes AI-generated Astro wrong is invisible to the type checker on purpose. Astro's own training-data problem makes this worse than most frameworks: the bulk of public Astro code an LLM has seen is shaped like Astro 2, 3, or 4 — `output: 'hybrid'`, `<ViewTransitions />`, `Astro.glob()`, collections with no `loader` — all of it fluent-looking, all of it wrong on the Astro 7.3.5 this course documents. The seven steps below are the order that actually surfaces these failures, and every later lesson in this module drills one part of it.
+
+<Mermaid title="Reading order for an Astro file you did not write" code={readingOrderDiagram} />
+
+export const readingOrderDiagram = `flowchart TD
+  A["1. Rendering mode & adapter<br/>static vs on-demand, prerender, is an adapter even installed"] --> B["2. Islands & client directives<br/>client:load reflex, serializable props, client:only"]
+  B --> C["3. Content & data<br/>loader required, render(entry), Astro.glob() is gone"]
+  C --> D["4. Server-side Astro<br/>every action is a public endpoint"]
+  D --> E["5. Security<br/>set:html, secrets crossing the island boundary"]
+  E --> F["6. Performance & caching<br/>routeRules vs Cache-Control, is:inline, transition:persist"]
+  F --> G["7. Tooling & production<br/>deprecated config keys, astro preview is not a server"]
+`;
+
+## 1. Rendering mode & adapter
+
+Before anything else, work out *when* a piece of Astro actually runs — at build time, once, or per request, on a server — because every later question (can this read a cookie, does this need an adapter, will this header do anything) depends on the answer. AI-generated code frequently assumes a page renders per-request when it's actually prerendered (or the reverse), and training data older than Astro v5 still reaches for a three-mode system Astro no longer has.
+
+- **What to look for:** does the project (or the specific route) actually set `export const prerender = false` anywhere, or is it relying on a project-wide `output: 'server'`? Does the config still set `output: 'hybrid'` — a value Astro v5 removed entirely? Is there an adapter configured at all, if any route (or Action, or server island) needs on-demand rendering? Does a page read `Astro.cookies`, `Astro.session`, or `Astro.request.headers` while everything around it still says static?
+- **The question to ask:** does this file's HTML genuinely depend on who's asking, or is it the same for every visitor — and does the code's own rendering-mode declaration actually match that answer?
+- **Which lesson explains it:** **[Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/)** for static vs on-demand and the real, proven build warning a prerendered page gets for reading request data; **[SSR & Adapters](/astro/en/server-side/ssr-and-adapters/)** for adapters, `output`, and why `'hybrid'` is a legacy term now.
+
+## 2. Islands & client directives
+
+Once you know what renders when, check what actually ships to the browser. A framework component imported into `.astro` is static HTML until a client directive turns it into an island — and the directive an LLM reaches for by default is almost never the right one.
+
+- **What to look for:** is every interactive component `client:load`, regardless of where it sits on the page? Does `client:only` ever appear without naming a framework? Is a prop passed into an island a plain value (serializable), or a function/class instance the wire format can't carry? Does a framework component (`.tsx`/`.jsx`) use Astro's own `<slot />` syntax, expecting it to work the way it does inside a `.astro` file?
+- **The question to ask:** does this component need to be interactive the instant the page loads, or would a later trigger (`client:visible`, `client:idle`) serve it just as well with less upfront JavaScript — and will every prop this island receives actually survive being serialized into the HTML?
+- **Which lesson explains it:** **[Client Directives](/astro/en/islands/client-directives/)** for all five directives, the real `<astro-island>` markup, and the proven `NoClientOnlyHint` error; **[Framework Integrations](/astro/en/islands/framework-integrations/)** for what changes with more than one UI framework installed; **[Sharing State](/astro/en/islands/sharing-state/)** for state that has to cross the island boundary correctly.
+
+## 3. Content & data
+
+Content collections are where pre-v5 training data is most obviously stale — the whole API (a required `loader`, `render(entry)` as a standalone function, `Astro.glob()` gone) changed shape, and old-looking code fails in specific, nameable ways rather than just "not compiling."
+
+- **What to look for:** does every `defineCollection` call declare a `loader`? Does the code call `entry.render()` as a method, instead of importing `render` from `astro:content`? Does a dynamic route that's meant to be static actually export `getStaticPaths()`? Does frontmatter get validated by a schema that actually matches its real fields? Does anything still call `Astro.glob()`?
+- **The question to ask:** is this the current Content Layer API (a `loader`, a Zod `schema`, `render(entry)`), or does it read like a tutorial written before Astro 5 — and would `astro check`/`astro sync` actually catch the difference, or only a real build?
+- **Which lesson explains it:** **[Content Collections](/astro/en/content-and-data/content-collections/)** for the `loader`/`schema` shape and the real `entry.render()` runtime error; **[Dynamic Routes](/astro/en/content-and-data/dynamic-routes/)** for `getStaticPaths()` and its own real, named build error; **[Data Fetching](/astro/en/content-and-data/data-fetching/)** for why `Astro.glob()` is a type error now, not a style choice; **[Schemas & References](/astro/en/content-and-data/schemas-and-references/)** for the real Zod validation error a schema/frontmatter mismatch produces.
+
+## 4. Server-side Astro
+
+Astro's server-side surface — Actions, endpoints, middleware, sessions — looks like ordinary function calls from inside the codebase, which is exactly what makes it easy to forget that most of it is also a public network endpoint the moment it's on-demand.
+
+- **What to look for:** does an Action's handler check `context.locals.user` (or an equivalent) as its first line, or does it assume the caller is authenticated because the *form* only renders behind a login? Does middleware always call (and return) `next()` on every path through the function? After a login, is the session ever regenerated?
+- **The question to ask:** if I `curl` this exact endpoint directly, with no session cookie at all, what happens — and is that answer the same one the UI's own gating implies?
+- **Which lesson explains it:** **[Actions](/astro/en/server-side/actions/)** for the real, proven 401 a missing auth check produces; **[Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/)** for `sequence()` ordering, `context.locals`, and session fixation; **[Endpoints & API Routes](/astro/en/server-side/endpoints-and-api-routes/)** for the same public-reachability rule applied to a plain endpoint file.
+
+## 5. Security
+
+Two Astro-specific security failure modes recur constantly in generated code, and neither one is a compiler error: raw HTML injection, and a secret that crosses from server-only code into something the browser actually receives.
+
+- **What to look for:** does `set:html` ever render a string that traces back to user input, without a real sanitizer in between? Does a value read from `import.meta.env`/`astro:env/server` ever get handed to a client-hydrated island as a prop — even if the module it came from is genuinely server-only?
+- **The question to ask:** if this exact value ends up in the page's source (view-source, not just server logs), is that acceptable — and does anything in this code path actually stop that from happening, or does it only look like it does?
+- **Which lesson explains it:** **[Astro Syntax Deep Dive](/astro/en/components/astro-syntax-deep/)** for the real XSS payload `set:html` executes, proven with the Container API; **[SSR & Adapters](/astro/en/server-side/ssr-and-adapters/)** for what `astro:env`'s `context`/`access` boundary actually enforces — and, just as important, what it doesn't.
+
+## 6. Performance & caching
+
+Astro gives you several independent levers that all *sound* like the same lever — caching headers, route caching config, image optimization, shared vs. duplicated scripts, persisted DOM across a navigation — and generated code constantly assumes one of them does another one's job.
+
+- **What to look for:** does `routeRules`/`cache` get treated as if it sets the browser-facing `Cache-Control` header? Is `is:inline` used on a script that was meant to run once, shared, per page? Does a remote `<Image>` with hardcoded `width`/`height` assume `image.domains` is protecting it? Does `transition:persist` appear on an element that has no guaranteed matching counterpart on the destination page?
+- **The question to ask:** trace this specific header, script tag, or persisted node all the way to what a real browser receives — is it actually the mechanism the code assumes it is, or a different, similarly-named one?
+- **Which lesson explains it:** **[Caching & Edge](/astro/en/rendering-and-performance/caching-and-edge/)** for the real, proven split between `Astro.response.headers` and `routeRules`/`cache`; **[Images & Assets](/astro/en/rendering-and-performance/images-and-assets/)** for exactly where `image.domains` is (and isn't) enforced; **[View Transitions](/astro/en/rendering-and-performance/view-transitions/)** for `transition:persist` matching and the renamed `<ClientRouter />`.
+
+## 7. Tooling & production
+
+Last, check whether the surrounding project setup — config keys, the command used to "test" a production build — is itself current, since a generated snippet can be locally correct and still sit inside a stale or misleading setup.
+
+- **What to look for:** does `astro.config.mjs` set `markdown.remarkPlugins`/`rehypePlugins`/`gfm` as top-level `markdown.*` keys? Is `astro preview` ever treated as (or scripted to run as) the actual production server?
+- **The question to ask:** does the *installed* Astro version's config schema still accept this key the way the snippet assumes — and is the command being used to "prove this works in production" actually the one Astro's own docs say is safe to use that way?
+- **Which lesson explains it:** **[Config & Integrations](/astro/en/tooling-and-production/config-and-integrations/)** for the deprecated top-level Markdown keys; **[Testing & Tooling](/astro/en/tooling-and-production/testing-and-tooling/)** for `astro check`'s exit codes and where `eslint-plugin-astro` fits.
+
+## What this module covers next
+
+- **[The AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)** — 22 specific patterns, each with the code AI typically writes, the real error/warning/behavior it produces, and the fix.
+- **[Review Checklist](/astro/en/reading-astro/review-checklist/)** — the same 22 patterns as a one-page, seven-group checklist.
+- **[Verification Tools](/astro/en/reading-astro/verification-tools/)** — what `astro check`, `astro build`, the Container API, `eslint-plugin-astro`, and this course's own harness each actually prove.
+- Three worked reviews — **[Worked Review 1](/astro/en/reading-astro/worked-review-1/)**, **[Worked Review 2](/astro/en/reading-astro/worked-review-2/)**, **[Worked Review 3](/astro/en/reading-astro/worked-review-3/)** — applying this reading order to full, AI-generated files.
+
+## Mental Model
+
+```text
+Reading order for an Astro file you did not write:
+
+1. Rendering mode & adapter → when does this actually run, and does the config agree?
+2. Islands & client directives → what ships to the browser, and can every prop survive the trip?
+3. Content & data           → is this the current Content Layer API, or pre-v5 shaped?
+4. Server-side Astro        → if I curl this directly, with no session, what happens?
+5. Security                 → does raw HTML or a secret ever cross a trust boundary?
+6. Performance & caching    → is this lever the one the code assumes, or a similarly-named other one?
+7. Tooling & production     → is the config current, and is "preview" being used as "production"?
+
+Skipping straight to "does astro check pass" answers almost none of these — most of this
+module's catalog passes astro check with zero errors or warnings.
+```
+
+## Common Misconceptions
+
+- **"If `astro check` passes, the code is correct."** Most entries in this module's catalog pass `astro check` clean — it type-checks `.astro`/`.ts`/`.tsx`, it does not execute a page, run a build, or curl an endpoint.
+- **"AI-generated Astro just needs a newer prompt."** The problem isn't staleness alone — `output: 'hybrid'`, `Astro.glob()`, and `<ViewTransitions />` are specifically *fluent-looking*, syntactically plausible Astro that happens to target a version this course's installed 7.3.5 no longer has.
+- **"A silent failure is rarer than a build error, so it matters less."** The opposite is closer to true in this catalog: a leaked secret in an island's serialized props, or a `transition:persist` that silently stops persisting, ships to production with zero errors, zero warnings, and zero indication anything is wrong.
+- **"Astro's rendering model is simple, so there's less to review than in a client framework."** Astro adds a whole axis client frameworks don't have at all — *when* a piece of code runs (build time vs. request time) changes what every API in this catalog is even allowed to do.
+
+<Callout title="The one-line takeaway">
+Read an Astro file in this order — rendering mode and adapter, islands and client directives, content and data, server-side Astro, security, performance and caching, then tooling and production — because each step changes what the next one means, and because `astro check` passing tells you the code compiles, never that it is correct.
+</Callout>
+
+export const quizReadingAstroIndex = [
+  {
+    q: "Why does this module check rendering mode and adapter before checking anything about islands or content?",
+    options: [
+      "Because rendering mode is always the shortest thing to read",
+      "Because whether a route runs at build time or per request changes what every later question (can it read a cookie, does it need an adapter, will a header do anything) is even asking about",
+      "Because islands are only relevant in on-demand projects",
+      "The order does not matter",
+    ],
+    answer: 1,
+    explain: "Every later step in this reading order — content freshness, server-side auth, caching — depends on knowing whether the surrounding code runs once at build time or per request. Getting that wrong first makes every subsequent read start from a false premise.",
+  },
+  {
+    q: "```js\n// astro.config.mjs\nimport { defineConfig } from 'astro/config';\nexport default defineConfig({ output: 'hybrid' });\n```\nWhat does reading this config first reveal?",
+    options: [
+      "Nothing — hybrid is still a valid, current output mode",
+      "The code is shaped by pre-v5 training data — 'hybrid' was merged into 'static' in Astro v5 and is a real config validation error on the installed 7.3.5",
+      "It means the project has no adapter",
+      "It only affects Markdown rendering",
+    ],
+    answer: 1,
+    explain: "Proven in the SSR & Adapters lesson and this module's own catalog: output: 'hybrid' fails config validation on Astro 7.3.5 with a real, named error — it is not a soft-deprecated alias.",
+  },
+  {
+    q: "Why does 'does astro check pass' fail to answer most of the seven reading-order questions in this module?",
+    options: [
+      "astro check does not exist in Astro 7",
+      "astro check type-checks source files — it never executes a page, runs a build, or sends a request, so it cannot see a leaked secret, a silent transition:persist mismatch, or a mis-set Cache-Control header",
+      "astro check only works on .md files",
+      "astro check always fails on AI-generated code",
+    ],
+    answer: 1,
+    explain: "Type-checking proves shapes are valid, not that runtime behavior is correct — most of this catalog's 22 patterns type-check cleanly and need a real build, request, or browser to surface at all.",
+  },
+  {
+    q: "Which step in this reading order specifically asks 'if I curl this directly, with no session, what happens'?",
+    options: [
+      "Islands & client directives",
+      "Server-side Astro",
+      "Content & data",
+      "Tooling & production",
+    ],
+    answer: 1,
+    explain: "The server-side step exists precisely because an Action or endpoint is reachable by direct request regardless of what the UI gates — the curl test is how you check that directly, proven with a real 401 in the Actions lesson.",
+  },
+  {
+    q: "Why does this module treat 'a secret passed into an island's props' as a Security concern rather than an Islands concern, even though it involves a client directive?",
+    options: [
+      "It doesn't matter which group covers it",
+      "The reading order groups by what actually crosses a trust boundary — a leaked secret is a security failure that happens to manifest through the islands mechanism, not a problem with the directive itself",
+      "Islands can never leak data",
+      "Security only applies to Actions",
+    ],
+    answer: 1,
+    explain: "The same serialization mechanism that makes islands work (props encoded into the HTML) is exactly what turns a secret value into a client-visible one the moment it's forwarded as a prop — proven in this module's catalog by inspecting the built HTML directly.",
+  },
+];
+
+<Quiz client:visible id="reading-astro/index" questions={quizReadingAstroIndex} />
+
+<ProgressTracker client:visible id="reading-astro/index" />

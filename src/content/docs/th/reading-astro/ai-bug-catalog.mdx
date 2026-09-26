@@ -1,0 +1,1037 @@
+---
+title: แคตตาล็อกบั๊กที่ AI สร้าง
+description: '22 บั๊กที่โค้ด Astro ซึ่ง AI เขียนสร้างซ้ำ ๆ — โค้ดที่ AI มักเขียน เหตุผลที่มันผิด ผลลัพธ์จริงจาก astro check/build/curl/console และวิธีแก้'
+sidebar:
+  order: 1
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+pattern ทุกอันด้านล่างเขียนขึ้นให้มีหน้าตาเหมือน Astro ที่ AI ผู้ช่วยเขียนออกมาจริง ๆ — ส่วนใหญ่ลื่นไหล น่าเชื่อถือ และมีรูปร่างจาก training data ตั้งแต่ Astro 2 ถึง 4 — แล้วนำไป type-check, build, หรือรันจริงกับ probe Astro 7.3.5 จริง ๆ ผลลัพธ์ `astro check`, `astro build`, curl, และ console ที่ยกมาคัดลอกมาตรงตัวจากการรันจริงเหล่านั้น ไม่ได้เขียนจากความจำ สังเกตว่าอันไหน type-check สะอาด: **18 จาก 22 pattern นี้ผ่าน `astro check` โดยไม่มี error เลย** — มีแค่ entry 6, 9, 12, และ 19 เท่านั้นที่เป็น type error จริงในปัจจุบัน ที่เหลือทั้งหมดต้องมี build จริง, request จริง, หรือการอ่าน source ที่ติดตั้งจริงถึงจะเห็นได้ 22 pattern จัดกลุ่มตามลำดับการอ่านเดียวกับ **[วิธีอ่านโค้ด Astro ที่ไม่ได้เขียนเอง](/astro/th/reading-astro/)**: rendering mode & adapter, island & client directive, content & data, Astro ฝั่ง server, security, performance & caching, และ tooling & production ดู **[Review Checklist](/astro/th/reading-astro/review-checklist/)** ต่อจากบทเรียนนี้สำหรับ 22 คำถามเดียวกันในรูปแบบหน้าเดียว
+
+## Rendering mode & adapter
+
+### 1. `output: 'hybrid'` ใน config ของ Astro 7
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'hybrid',
+  adapter: node({ mode: 'standalone' }),
+});
+```
+
+Astro 4.x มี output mode สามแบบ — `'static'`, `'hybrid'`, `'server'` Astro v5 รวม `'hybrid'` เข้ากับ `'static'` ซึ่งตั้งแต่นั้นมาหมายถึง "static โดยปริยาย โดยให้ `prerender = false` เลือก route แต่ละอันเข้าสู่ on-demand rendering" training data ที่เขียนอิง Astro 2–4 (และ tutorial จำนวนมากที่ยังอยู่ออนไลน์) ไม่เคยรู้เรื่องนี้ — `output: 'hybrid'` คือรูปร่าง config ที่ LLM มักเลือกใช้สำหรับเว็บไซต์ที่ผสม static/dynamic
+
+**อาการ — ผลลัพธ์จริง จากการโหลด config นี้จริง ๆ** (`astro dev`/`build`/`sync`/`preview` ตรวจสอบ config เหมือนกันทุกคำสั่ง; harness โหมด check ของคอร์สนี้เก็บ fence `astro.config.mjs` ของบทเรียนไว้ใน module tree ที่ไม่มีผล เพื่อไม่ให้ config ของบทเรียนหนึ่งไปทับของอีกบทเรียน — ซึ่งเป็นเหตุผลว่าทำไม fence นี้ผ่าน `astro check` โดยไม่มี error แม้ว่ามันจะพังทันทีในฐานะ config จริง):
+
+```text
+[config] Astro found issue(s) with your configuration:
+
+! The output: "hybrid" option has been removed. Use output: "static" (the default) instead, which now behaves the same way.
+```
+
+**วิธีแก้:** ตัด `output` ออกไปเลย (หรือตั้งเป็น `'static'` ค่าเริ่มต้น) และเก็บ adapter ไว้ — `prerender = false` ต่อ route ทำสิ่งที่ `'hybrid'` เคยทำอยู่แล้ว:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'static', // the default — already includes per-route prerender = false
+  adapter: node({ mode: 'standalone' }),
+});
+```
+
+**จับได้ด้วย:** ไม่ใช่ `astro check` ใน harness ของคอร์สนี้ (fence config ถูกตรวจในฐานะ module ที่ไม่มีผลจริง ไม่ได้ถูกโหลดเป็น config จริง) — มีแค่ `astro dev`/`build`/`sync`/`preview` ที่ตรวจสอบไฟล์จริง ให้ผลเหมือนกันทุกคำสั่ง พิสูจน์แล้วข้างต้น
+
+### 2. Route แบบ on-demand ที่ไม่มีการติดตั้ง adapter
+
+```astro
+---
+// src/pages/dashboard.astro
+export const prerender = false;
+const now = new Date().toISOString();
+---
+<p>Rendered at {now}</p>
+```
+
+ไม่มีอะไรผิดในไฟล์นี้เอง — `prerender = false` คือวิธีที่บันทึกไว้ตรง ๆ สำหรับให้ route หนึ่งเข้าสู่ on-demand rendering บั๊กอยู่ที่สิ่งที่ *ขาดหายไป* จากโปรเจกต์: ไม่มี `adapter` ใน `astro.config.mjs` โค้ดที่ AI เขียนมักเขียนหน้าเพจถูกต้องแต่ลืมว่า config เป็นชิ้นส่วนที่จำเป็นแยกต่างหาก
+
+**อาการ — ผลลัพธ์จริง จาก `astro build` จริงของโปรเจกต์นี้เป๊ะ ๆ:**
+
+```text
+[NoAdapterInstalled] Cannot use server-rendered pages without an adapter. Please install and configure the appropriate server adapter for your final deployment.
+  Hint:
+    See https://docs.astro.build/en/guides/on-demand-rendering/ for more information.
+  Error reference:
+    https://docs.astro.build/en/reference/errors/no-adapter-installed/
+```
+
+หน้านี้เป๊ะ ๆ — `export const prerender = false`, การอ่าน `Date` ธรรมดา — ผ่าน `astro check` โดยไม่มี error เลย ไม่มีอะไรดูผิดจนกว่าจะลอง build หรือ deploy จริง
+
+**วิธีแก้:** ติดตั้งและตั้งค่า adapter สำหรับแพลตฟอร์มเป้าหมาย:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),
+});
+```
+
+**จับได้ด้วย:** ไม่ใช่ `astro check` — พิสูจน์แล้วข้างต้น หน้านี้ type-check สะอาด มีแค่ `astro build`/deploy จริงเท่านั้นที่เจอ `NoAdapterInstalled`
+
+### 3. อ่าน `Astro.cookies`/`Astro.session` บนหน้าที่ prerender
+
+```astro
+---
+// src/pages/account.astro
+const userId = Astro.cookies.get('session_id')?.value;
+// no `export const prerender` anywhere in this file — the project's own
+// output default (static) applies, and nothing here overrides it
+---
+<h1>Welcome back{userId ? `, ${userId}` : ''}</h1>
+```
+
+โดยไม่มีการ override ต่อ route และไม่มี `output: 'server'` ระดับโปรเจกต์ route นี้ prerender แค่ครั้งเดียวตอน build — ไม่มี request จริงให้ `Astro.cookies` อ่านได้ `userId` จะได้ `undefined` สำหรับทุกคนตลอดไป ไม่ใช่ต่อผู้เข้าชมแต่ละคนตามที่โค้ดสื่อ
+
+**อาการ — build warning จริง** (`Astro.cookies` อ่าน request header ภายในตัวเอง เลยขึ้น warning เดียวกันเป๊ะที่โมดูล rendering ของคอร์สนี้บันทึกไว้กับ `Astro.session`):
+
+```text
+[WARN] `Astro.request.headers` was used when rendering the route `src/pages/account.astro'`. `Astro.request.headers` is not available on prerendered pages. If you need access to request headers, make sure that the page is server-rendered using `export const prerender = false;` or by setting `output` to `"server"` in your Astro config to make all your pages server-rendered by default.
+```
+
+**วิธีแก้:** ให้ route นี้เข้าสู่ on-demand rendering:
+
+```astro
+---
+// src/pages/account-fixed.astro
+export const prerender = false;
+const userId = Astro.cookies.get('session_id')?.value;
+---
+<h1>Welcome back{userId ? `, ${userId}` : ''}</h1>
+```
+
+**จับได้ด้วย:** ไม่ใช่ `astro check` — ไฟล์นี้ type-check สะอาดทั้งสองแบบ มีแค่ `astro build` จริง (พิสูจน์แล้วในบทเรียน [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/)) ที่พิมพ์ warning นี้
+
+### 4. อ่าน `Astro.request.headers` บนหน้าที่ prerender
+
+```astro
+---
+// src/pages/analytics-banner.astro
+const ua = Astro.request.headers.get('user-agent') ?? 'unknown';
+---
+<p data-ua={ua}>Personalized for your browser</p>
+```
+
+ต้นเหตุเดียวกับ entry 3 แค่ API ต่างกัน: การอ่าน header ของ request ตรง ๆ แทนที่จะผ่าน `Astro.cookies`/`Astro.session` ก็ยังต้องการ request จริงที่หน้า prerender ไม่มี
+
+**อาการ — build warning จริงตัวเดียวกัน กลไกเดียวกัน:**
+
+```text
+[WARN] `Astro.request.headers` was used when rendering the route `src/pages/analytics-banner.astro'`. `Astro.request.headers` is not available on prerendered pages.
+```
+
+`ua` ถูกฝังไว้ตอน build เป็นค่าอะไรก็ตามที่ synthetic request ของ build process มีติดมา — string เดียวกัน สำหรับ browser ของผู้เข้าชมจริงทุกคน ตลอดไป
+
+**วิธีแก้:** `export const prerender = false` บน route เหมือน entry 3
+
+**จับได้ด้วย:** ไม่ใช่ `astro check` มีแค่ build จริง พิสูจน์แล้วข้างต้นและใน [Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/)
+
+## Island & client directive
+
+### 5. `client:load` บนทุก island ไม่ว่าจะอยู่ตำแหน่งไหน
+
+```tsx
+// src/components/WidgetCounter.tsx
+import { useState } from 'preact/hooks';
+
+export default function WidgetCounter({ start }: { start: number }) {
+  const [n, setN] = useState(start);
+  return <button onClick={() => setN(n + 1)}>Count: {n}</button>;
+}
+```
+
+```astro
+---
+// src/pages/dashboard-widgets.astro
+import WidgetCounter from '../components/WidgetCounter.tsx';
+---
+<WidgetCounter start={0} client:load />
+<WidgetCounter start={0} client:idle />
+<WidgetCounter start={0} client:load />
+```
+
+`client:load` คือ directive ที่ LLM เลือกโดยปริยาย บน component ที่โต้ตอบได้ทุกตัว ไม่ว่าจะอยู่ตำแหน่งไหนของหน้า มันไม่ใช่ "JavaScript มากกว่า" ในแง่ bundle ใหญ่กว่า — มันคือ JavaScript *ชิ้นเดียวกัน* กับ directive อื่น แค่ถูก fetch และ hydrate โดยไม่มีเงื่อนไขใด ๆ เลย ทันทีที่หน้าโหลด ไม่ว่า component จะอยู่เหนือ fold หรือลึกไปสามหน้าจอ
+
+**อาการ — markup ที่ build จริง component เดียวกันกับสาม directive ต่างกัน** (`astro build`, tag `<astro-island>` สำหรับสามการเรียกข้างบน):
+
+```html
+<astro-island uid="2equCG" component-url="/_astro/Counter.CZh5qZhJ.js" renderer-url="/_astro/client.CYoOuZrL.js" props="{&quot;start&quot;:[0,0]}" ssr client="load" ...>
+<astro-island uid="2equCG" component-url="/_astro/Counter.CZh5qZhJ.js" renderer-url="/_astro/client.CYoOuZrL.js" props="{&quot;start&quot;:[0,0]}" ssr client="idle" ...>
+<astro-island uid="2equCG" component-url="/_astro/Counter.CZh5qZhJ.js" renderer-url="/_astro/client.CYoOuZrL.js" props="{&quot;start&quot;:[0,0]}" ssr client="load" ...>
+```
+
+`component-url` กับ `renderer-url` — สอง chunk ที่ประกอบเป็นน้ำหนัก JavaScript ของ island นี้ — เหมือนกันตัวต่อตัวไม่ว่าจะเป็น `client:load`, `client:idle`, หรือ `client:visible` มีแค่ attribute `client="..."` (ว่า loader script ตัวไหนรัน) ที่ต่างกัน `client:load` ไม่ได้ส่งโค้ดมากกว่า — มันส่งโค้ด *ชุดเดียวกัน* โดยไม่มีการเลื่อนเวลาเลย แย่งชิง main thread กับทุกอย่างทันทีที่หน้าโหลด
+
+**วิธีแก้:** สงวน `client:load` ไว้กับสิ่งที่ต้องทำงานทันทีที่หน้าใช้งานได้จริง ๆ ตั้งค่าที่เหลือเป็น `client:visible` โดยปริยาย:
+
+```astro
+---
+// src/pages/dashboard-widgets-fixed.astro
+import WidgetCounter from '../components/WidgetCounter.tsx';
+---
+<WidgetCounter start={0} client:load />
+<WidgetCounter start={0} client:visible />
+<WidgetCounter start={0} client:visible />
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — ไม่มี lint rule ไม่มี diagnostic ของ `astro check` ที่ตรวจ directive ที่เร่งเกินไป มีแค่การตรวจ markup `<astro-island>` ที่ build จริง, Lighthouse trace, หรือแผง Network ของ browser เท่านั้นที่เห็น พิสูจน์แล้วข้างต้น ดู [Client Directives](/astro/th/islands/client-directives/) สำหรับ directive ทั้งห้าและข้อแลกเปลี่ยนของแต่ละอัน
+
+### 6. Function prop ที่ส่งเข้า island
+
+```tsx
+// src/components/SelectableProductCard.tsx
+export default function SelectableProductCard({ name, price }: { name: string; price: number }) {
+  return <div class="card"><h3>{name}</h3><p>${price}</p></div>;
+}
+```
+
+```astro
+---
+// @expect-error ts(2322) — onSelect isn't declared on SelectableProductCard's Props, so the extra prop is rejected at the type level
+// src/pages/shop-item.astro
+import SelectableProductCard from '../components/SelectableProductCard.tsx';
+---
+<SelectableProductCard name="Mug" price={12} onSelect={() => console.log('selected')} client:visible />
+```
+
+Prop ของ island เดินทางไป browser เป็น string แบบ JSON ใน attribute `props` ของ element `<astro-island>` เพราะฉะนั้นต้อง serializable — function ข้ามการเดินทางนี้ไม่ได้ เพราะ `Props` type ของ `SelectableProductCard` ข้างบนซื่อสัตย์ (`{ name: string; price: number }` ไม่มี `onSelect`) TypeScript จับความไม่ตรงกันได้ก่อนที่จะ ship อะไรเลย:
+
+**อาการ — ผลลัพธ์จริงของ `astro check`:**
+
+```text
+src/pages/shop-item.astro:5:33 - error ts(2322): Type '{ name: string; price: number; onSelect: () => void; "client:visible": true; }'
+is not assignable to type 'IntrinsicAttributes & { name: string; price: number; }'.
+  Property 'onSelect' does not exist on type 'IntrinsicAttributes & { name: string; price: number; }'.
+```
+
+แต่ถ้า prop type ของ component หลวม (`.jsx` ธรรมดา หรือ prop ที่ไม่มี type/`any`) ไม่มีอะไรหยุด build — และพฤติกรรมตอน runtime ก็ไม่ใช่ error เช่นกัน มันคือข้อมูลหายไปแบบเงียบ ๆ: serializer ของ Astro ตกไปใช้ `JSON.stringify` สำหรับอะไรก็ตามที่มันไม่รู้จักเป็นพิเศษ และการ stringify function ในตำแหน่งของ array จะได้ `null` ไม่ใช่ exception ถ้า component เรียก `props.onSelect()` มันจะ throw `onSelect is not a function` ตอน hydration — runtime error ที่งงงวยหนึ่งหน้าเพจหลังจากความผิดพลาดจริง
+
+**วิธีแก้:** เก็บ handler ไว้ฝั่ง server (Action หรือ `<form>`) หรือปรับโครงสร้างให้ island รับแค่ข้อมูลที่ serializable แล้ว dispatch event ของตัวเอง:
+
+```astro
+---
+// src/pages/shop-item-fixed.astro
+import SelectableProductCard from '../components/SelectableProductCard.tsx';
+---
+<SelectableProductCard name="Mug" price={12} client:visible />
+```
+
+**จับได้ด้วย:** `astro check` ทันที เมื่อ `Props` type ของ component ซื่อสัตย์ — พิสูจน์แล้วข้างต้นด้วย `ts(2322)` จริง ถ้า prop type หลวม/`any` ไม่มีอะไรจับได้เลย ดู [Client Directives](/astro/th/islands/client-directives/) สำหรับความผิดพลาดรูปแบบเดียวกันเป๊ะที่พิสูจน์กับ `DirectiveCounter` ของคอร์สนี้เอง รวมถึงกรณี `null` แบบเงียบ
+
+### 7. `client:only` โดยไม่ระบุ framework
+
+```jsx
+// src/components/OnlyCounter.jsx
+import { useState } from 'preact/hooks';
+
+export default function OnlyCounter({ start }) {
+  const [n, setN] = useState(start);
+  return <button onClick={() => setN(n + 1)}>Count: {n}</button>;
+}
+```
+
+```astro
+---
+// src/pages/only-demo.astro — a project with both @astrojs/preact and @astrojs/react installed
+import OnlyCounter from '../components/OnlyCounter.jsx';
+---
+<OnlyCounter start={0} client:only />
+```
+
+`client:only` ข้ามการ render บน server ไปเลย เพราะฉะนั้น Astro ไม่มีอะไร render ไว้ให้ infer framework ได้ ถ้าติดตั้ง UI integration แค่ **หนึ่งตัว** Astro จะ infer ให้เงียบ ๆ — โค้ดเป๊ะ ๆ นี้ build ผ่านสบายบนไซต์ของคอร์สนี้ที่มี integration เดียว (Preact) ทันทีที่มี integration ที่รองรับ JSX ตัวที่ **สอง** ถูกเพิ่มเข้ามาที่ไหนก็ตามในโปรเจกต์ การ infer นั้นจะกำกวมทันที และการ build `client:only` เปล่า ๆ จะ throw จริง:
+
+```text
+[NoClientOnlyHint] Unable to render `Counter`. When using the `client:only` hydration
+strategy, Astro needs a hint to use the correct renderer.
+  Hint:
+    Did you mean to pass `client:only="react|preact|solid-js|vue (jsx)"`?
+  Error reference:
+    https://docs.astro.build/en/reference/errors/no-client-only-hint/
+```
+
+ส่วนที่อันตรายสำหรับการ review: โค้ดนี้ *ถูกต้องวันนี้* บนโปรเจกต์ที่มี integration เดียว และกลายเป็น build ล้มเหลวในวันที่เพื่อนร่วมทีมเพิ่ม framework ตัวที่สองสำหรับ component ที่ไม่เกี่ยวข้องกันเลย — โดยไม่มีการเปลี่ยนแปลงไฟล์นี้เลย
+
+**วิธีแก้:** ระบุชื่อ framework เสมอ ไม่ว่าจะติดตั้ง integration กี่ตัวในตอนนี้:
+
+```astro
+---
+// src/pages/only-demo-fixed.astro
+import OnlyCounter from '../components/OnlyCounter.jsx';
+---
+<OnlyCounter start={0} client:only="preact" />
+```
+
+**จับได้ด้วย:** ไม่ใช่ `astro check` (การ infer renderer เกิดตอน build ไม่ใช่ตอน type-check) มีแค่ `astro build` จริง และเฉพาะเมื่อมี integration ตัวที่สองอยู่จริง ดู [Client Directives](/astro/th/islands/client-directives/) สำหรับ error เป๊ะ ๆ นี้ที่พิสูจน์กับ build จริงที่มีสอง integration
+
+### 8. `<slot />` ใน component ของ Preact/React
+
+```tsx
+// src/components/Card.tsx
+export default function Card({ title }: { title: string }) {
+  return (
+    <div class="card">
+      <h2>{title}</h2>
+      <slot />
+    </div>
+  );
+}
+```
+
+```astro
+---
+// src/pages/card-demo.astro
+import Card from '../components/Card.tsx';
+---
+<Card title="Hello"><p>child content</p></Card>
+```
+
+`<slot />` เป็น syntax template ของ Astro เอง มีความหมายแค่ในตัว compiler ของไฟล์ `.astro` เท่านั้น ภายใน component ของ framework `<slot />` เป็นแค่ JSX ของ element `<slot>` ของ HTML ธรรมดาที่ว่างเปล่า (ตัวเดียวกับที่ Shadow DOM ใช้) — มันไม่เกี่ยวอะไรกับการ render สิ่งที่ถูกส่งมาเป็น children เลย และ children ก็ถูกทิ้งไปแบบเงียบ ๆ
+
+**อาการ — ผลลัพธ์ที่ build จริง `astro build`, `<p>child content</p>` ไม่ปรากฏเลย:**
+
+```html
+<!DOCTYPE html><div class="card"><h2>Hello</h2><slot></slot></div>
+```
+
+build ไม่มี error และไม่มี warning เลย — tag `<slot>` เปล่า ๆ ตามธรรมชาติ render อยู่ใน output และ `<p>child content</p>` หายไปทั้งหมด ไม่มีอยู่ที่ไหนในหน้าเลย
+
+**วิธีแก้:** ใช้กลไก children ของ framework เองแทน:
+
+```tsx
+// src/components/CardFixed.tsx
+import type { ComponentChildren } from 'preact';
+
+export default function CardFixed({ title, children }: { title: string; children?: ComponentChildren }) {
+  return (
+    <div class="card">
+      <h2>{title}</h2>
+      {children}
+    </div>
+  );
+}
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — `<slot />` เป็น JSX ที่ถูกต้อง (element ของ DOM จริง) เพราะฉะนั้นทั้ง `astro check` และ build ไม่เคยตี flag เลย พิสูจน์แล้วข้างต้น build เสร็จสมบูรณ์ สะอาด ในขณะที่ทิ้ง content ไปแบบเงียบ ๆ
+
+## Content & data
+
+### 9. `Astro.glob()` ใน Astro 7
+
+```astro
+---
+// @expect-error ts(2339) — Astro.glob no longer exists on the global
+// src/pages/blog-index.astro
+const posts = await Astro.glob('../data/blog/*.md');
+---
+<ul>
+  {posts.map((p) => <li>{p.frontmatter.title}</li>)}
+</ul>
+```
+
+`Astro.glob()` ถูก deprecate ใน Astro 5 และถูกเอาออกทั้งหมดใน Astro 6 — training data ก่อนหน้านั้นยังผลิตโค้ดแบบนี้อยู่ตลอด เพราะมันเคยเป็นวิธีมาตรฐานในการดึงไฟล์ Markdown จำนวนมากในท้องถิ่นมาทีเดียวมานานหลายปี
+
+**อาการ — ผลลัพธ์จริงของ `astro check` ก่อนที่ build จะรันเลยด้วยซ้ำ:**
+
+```text
+error ts(2339): Property 'glob' does not exist on type
+'Readonly<AstroGlobal<Record<string, any>, AstroComponentFactory, Record<string, string | undefined>>>'.
+```
+
+**วิธีแก้:** content collection ที่มี `glob` loader มาแทนที่ พร้อมการตรวจสอบ schema และ type ที่ generate ให้ ซึ่ง API เก่าไม่เคยมี:
+
+```astro
+---
+// src/pages/blog-index-fixed.astro
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog');
+---
+<ul>
+  {posts.map((p) => <li>{p.data.title}</li>)}
+</ul>
+```
+
+**จับได้ด้วย:** `astro check` ทันที — type error จริงในปัจจุบัน ไม่ใช่เรื่องประหลาดใจตอน runtime ดู [Data Fetching](/astro/th/content-and-data/data-fetching/) สำหรับประวัติการเอาออกเต็ม ๆ และทางเลือก live collection สำหรับข้อมูลที่ต้องสดจริง ๆ ตอน request
+
+### 10. Dynamic route แบบ static ที่ไม่มี `getStaticPaths()`
+
+```astro
+---
+// src/pages/products/[slug].astro
+const { slug } = Astro.params;
+---
+<p>Product: {slug}</p>
+```
+
+ส่วน dynamic ของ route (`[slug]`) ในโปรเจกต์ static ต้องมี `getStaticPaths()` เพื่อบอก Astro ว่าจะสร้างหน้าไหนบ้าง — ถ้าไม่มี ก็ไม่มีอะไรให้ build วนสร้าง ไฟล์นี้เป๊ะ ๆ ผ่าน type-check โดยไม่มี error: `Astro.params.slug` เป็นการอ่านที่ถูกต้องสมบูรณ์แบบ
+
+**อาการ — build error จริงที่มีชื่อ:**
+
+```text
+[GetStaticPathsRequired] `getStaticPaths()` function is required for dynamic routes.
+Make sure that you `export` a `getStaticPaths()` function from your dynamic route.
+  Hint:
+    If you meant for this route to be server-rendered, set `export const prerender = false;` in the page.
+```
+
+**วิธีแก้:** export `getStaticPaths()` (หรือถ้า route นี้ต้องการเป็น on-demand จริง ๆ ก็ถอนตัวจาก static generation ไปเลย):
+
+```astro
+---
+// src/pages/products/[slug]-fixed.astro
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({ params: { slug: post.id } }));
+}
+
+const { slug } = Astro.params;
+---
+<p>Product: {slug}</p>
+```
+
+**จับได้ด้วย:** ไม่ใช่ `astro check` — พิสูจน์แล้วข้างต้น (และใน [Dynamic Routes](/astro/th/content-and-data/dynamic-routes/)) ไฟล์นี้เป๊ะ ๆ type-check สะอาด มีแค่ `astro build`/`astro sync` รอบสร้าง route จริงเท่านั้นที่รายงาน `GetStaticPathsRequired`
+
+### 11. Frontmatter ที่ไม่ตรงกับ schema ของ collection
+
+```ts
+// src/content.config.ts
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/data/blog' }),
+  schema: z.object({
+    title: z.string(),
+    pubDate: z.coerce.date(),
+  }),
+});
+
+export const collections = { blog };
+```
+
+```md
+---
+title: "Bad Post"
+pubDate: "soon"
+---
+```
+
+`pubDate: z.coerce.date()` รัน `"soon"` ผ่าน `new Date("soon")` ซึ่งได้ object `Invalid Date` ของ JavaScript จริง ๆ — ไม่ใช่ string ไม่ใช่การ parse ที่ล้มเหลวแล้วถูกจับ — และ Zod รายงาน object นั้นว่าเป็น type ผิด
+
+**อาการ — error จริง ระบุชื่อ collection, entry, และ field:**
+
+```text
+[InvalidContentEntryDataError] blog → bad-post data does not match collection schema.
+pubDate: Expected type "date", received "object"
+```
+
+"received `object`" (ไม่ใช่ "string") คือสัญญาณว่า coercion สร้าง `Invalid Date` ขึ้นมา ไม่ใช่แค่ปฏิเสธ string ตรง ๆ — ควรอ่านให้ละเอียด เพราะง่ายที่จะสมมติว่าการ parse ล้มเหลวใด ๆ จะบอกว่า "received string"
+
+**วิธีแก้:** เขียนวันที่จริงที่ parse ได้ใน frontmatter (`pubDate: 2026-01-03`) — schema และ loader คงเดิมตามที่เขียนไว้
+
+**จับได้ด้วย:** ไม่ใช่ harness โหมด check เริ่มต้นของคอร์สนี้ (`content.config.ts` ของบทเรียนเอง type-check เป็น module ธรรมดา; ชื่อ/field ของ collection มาจาก collection คงที่ของ probe คอร์สนี้ ไม่ใช่ schema ของบทเรียน) มีแค่ `astro sync`/`astro build` จริงกับไฟล์ของบทเรียนเอง พิสูจน์แล้วใน [Schemas & References](/astro/th/content-and-data/schemas-and-references/) ที่รายงาน `InvalidContentEntryDataError` ทันที
+
+### 12. `entry.render()` แทน `render(entry)`
+
+```astro
+---
+// @expect-error ts(2551) — render is not a method on a collection entry; see prose
+// src/pages/blog/hello-world.astro
+import { getEntry } from 'astro:content';
+
+const post = await getEntry('blog', 'hello-world');
+if (!post) throw new Error('Post not found');
+
+const { Content } = await post.render();
+---
+<article><Content /></article>
+```
+
+`entry.render()` ถูก deprecate ตั้งแต่ Astro 5 และ Astro 6 เอาออกทั้งหมด — training data ก่อนหน้านั้นยังเขียนมันเป็นการเรียก method อยู่ entry ที่ได้จาก `getCollection`/`getEntry` เป็น object ธรรมดาที่ serializable (เพื่อให้ส่งเป็น page `props` จาก `getStaticPaths` ได้ เป็นต้น) method จะรอดจากการเดินทางนั้นไม่ได้ ซึ่งเป็นเหตุผลเป๊ะ ๆ ว่าทำไม `render` ถึงมีอยู่แค่ในรูป standalone import ตอนนี้ และทำไม type ของ entry ที่ generate ถึงไม่มี method `render` เลย
+
+**อาการ — ผลลัพธ์จริงของ `astro check` ในปัจจุบัน กับ type ที่ generate จากการติดตั้ง 7.3.5 (type error จริง ไม่ใช่แค่เรื่องประหลาดใจตอน runtime):**
+
+```text
+error ts(2551): Property 'render' does not exist on type '{ id: string; body?: string; collection: "blog";
+data: {...}; rendered?: RenderedContent; filePath?: string; digest?: string | number }'. Did you mean 'rendered'?
+```
+
+การข้าม type system ไป (entry ที่ type หลวม หรือแปะ `// @ts-expect-error` เพื่อปิดเสียงมัน) ยังคงล้มเหลวตอน runtime อยู่ดี โยนมาจากในหน้าที่ render:
+
+```text
+[ERROR] TypeError: post.render is not a function
+    at .../chunks/index_*.mjs:699:33
+    at async renderToString (.../chunks/server_*.mjs:1861:25)
+[ERROR] [build] Caught error rendering /blog/hello-world/: TypeError: post.render is not a function
+```
+
+**วิธีแก้:** import `render` จาก `astro:content` และเรียกเป็น standalone function:
+
+```astro
+---
+// src/pages/blog/hello-world-fixed.astro
+import { getEntry, render } from 'astro:content';
+
+const post = await getEntry('blog', 'hello-world');
+if (!post) throw new Error('Post not found');
+
+const { Content } = await render(post);
+---
+<article><Content /></article>
+```
+
+**จับได้ด้วย:** `astro check` ทันที — type ของ entry ที่ generate ไม่มี method `render` เลย พิสูจน์แล้วข้างต้นด้วย `ts(2551)` จริงพร้อมคำแนะนำ "Did you mean 'rendered'?" ดู [Content Collections](/astro/th/content-and-data/content-collections/) สำหรับ `TypeError` ตอน runtime ที่เกิดขึ้นถ้า type error ถูกข้ามไป
+
+## Astro ฝั่ง server
+
+### 13. Action ที่ไม่มีการตรวจสอบสิทธิ์
+
+```ts
+// src/actions/index.ts
+import { defineAction, ActionError } from 'astro:actions';
+import { z } from 'astro/zod';
+
+const db = { comments: { delete: async (id: string) => ({ ok: true }) } };
+
+export const server = {
+  // "the delete button only shows for the comment's author, so this is safe"
+  deleteComment: defineAction({
+    input: z.object({ commentId: z.string() }),
+    handler: async (input) => {
+      await db.comments.delete(input.commentId);
+      return { ok: true };
+    },
+  }),
+};
+```
+
+Astro compile ทุก action เป็น HTTP endpoint จริงที่ `/_actions/<name>` — เข้าถึงได้โดยใครก็ตามที่รู้หรือเดาชื่อถูก ไม่ว่าจะเคยโหลดหน้าที่มีปุ่มลบหรือไม่ก็ตาม comment ในโค้ดที่ generate มาบอกบั๊กจริงตรง ๆ: การซ่อนปุ่มควบคุมสิ่งที่ UI *แสดง* ไม่ใช่สิ่งที่ endpoint *ยอมรับ* ไม่มีอะไรตรงนี้ตรวจว่าใครเป็นคนเรียกก่อนจะลบ
+
+**อาการ — ผลลัพธ์จริง จาก build ที่รันอยู่ของ handler นี้เป๊ะ ๆ ไม่มี session cookie เลย:**
+
+```text
+$ curl -s -X POST http://127.0.0.1:4351/_actions/deleteComment \
+    -H "Content-Type: application/json" -d '{"commentId":"42"}' \
+    -w "\nHTTP %{http_code}\n"
+{"ok":true}
+HTTP 200
+```
+
+`200` โดยไม่มีการตรวจ auth เลย — ผู้เรียกนิรนามคนไหนก็ลบ comment ไหนก็ได้ด้วยการเดาหรือไล่ `commentId` เหมือนที่บทเรียน [Actions](/astro/th/server-side/actions/) พิสูจน์ไว้ด้วยตัวอย่าง `deletePost` ของตัวเองและ `401` จริงเมื่อแก้แล้ว
+
+**วิธีแก้:** ปฏิเสธก่อน ก่อนจะแตะฐานข้อมูล และจำกัดขอบเขตการแก้ไขให้เฉพาะผู้เรียก:
+
+```ts
+// src/actions/index-fixed.ts
+import { defineAction, ActionError } from 'astro:actions';
+import { z } from 'astro/zod';
+
+const db = { comments: { deleteOwned: async (id: string, userId: string) => ({ ok: true }) } };
+
+export const server = {
+  deleteComment: defineAction({
+    input: z.object({ commentId: z.string() }),
+    handler: async (input, context) => {
+      if (!context.locals.user) {
+        throw new ActionError({ code: 'UNAUTHORIZED', message: 'You must be signed in.' });
+      }
+      await db.comments.deleteOwned(input.commentId, context.locals.user.id);
+      return { ok: true };
+    },
+  }),
+};
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — ไม่มี diagnostic ของ `astro check` ไม่มี lint rule ที่ตรวจการขาด auth check ในตัว handler ของ Action มีแค่ `curl` จริงกับ endpoint (พิสูจน์แล้วข้างต้น และด้วย `401` จริงเมื่อแก้แล้วใน [Actions](/astro/th/server-side/actions/)) เท่านั้นที่เห็น
+
+## Security
+
+### 14. Secret ที่ถูกส่งเข้า prop ของ island ที่ hydrate
+
+```tsx
+// src/components/CheckoutBadge.tsx
+export default function CheckoutBadge({ apiKey }: { apiKey: string }) {
+  return <span data-key={apiKey}>configured</span>;
+}
+```
+
+```astro
+---
+// src/pages/checkout.astro
+import CheckoutBadge from '../components/CheckoutBadge.tsx';
+
+const stripeSecretKey = import.meta.env.STRIPE_SECRET_KEY; // read server-side — looks safe
+---
+<CheckoutBadge apiKey={stripeSecretKey} client:load />
+```
+
+การอ่าน secret ผ่าน `import.meta.env` ใน frontmatter เป็นฝั่ง server จริง ๆ และในตัวมันเองก็ไม่มีปัญหา — นี่ไม่ใช่จุดรั่ว จุดรั่วคือบรรทัดถัดไปเลย: การส่งค่าที่ resolve แล้วนั้นเป็น prop ไปยัง island แบบ `client:*` prop ของ island ทุกตัวถูก serialize ลงใน HTML ของหน้าเพจ เพื่อให้ script การ hydrate ของ browser อ่านกลับมาได้ — และการ serialize นั้นไม่มีแนวคิดเรื่อง "อันนี้เป็น secret" เลย
+
+**อาการ — HTML ที่ build จริง มองเห็นได้ผ่าน view-source โดยใครก็ตาม ไม่มี build error หรือ warning เลย:**
+
+```html
+<astro-island ... props="{&quot;apiKey&quot;:[0,&quot;sk_live_TOTALLY_SECRET_VALUE_12345&quot;]}" ssr client="load" ...>
+  <span data-key="sk_live_TOTALLY_SECRET_VALUE_12345">configured</span>
+</astro-island>
+```
+
+ค่า secret จริงอยู่ในข้อความธรรมดา สองครั้ง ใน response ที่ browser ของผู้เข้าชมทุกคนได้รับ การเปลี่ยนไปใช้ **`astro:env/server`** ที่ตรวจสอบด้วย schema (`access: 'secret'`) **ไม่ได้** แก้ปัญหานี้เอง — boundary นั้นหยุดแค่การ *import* module เข้าโค้ดฝั่ง client เท่านั้น (build error `ServerOnlyModule` จริง แยกต่างหาก พิสูจน์แล้วใน [SSR & Adapters](/astro/th/server-side/ssr-and-adapters/)) มันไม่ได้บอกอะไรเลยว่า server component ทำอะไรกับค่านั้น *หลังจาก* import มาถูกต้องแล้ว พิสูจน์แล้วโดยตรงกับ build จริง: การเพิ่ม `STRIPE_SECRET_KEY` เข้า `env.schema` ด้วย `context: 'server', access: 'secret'`, import จาก `astro:env/server` ใน frontmatter (การ import ที่ถูกต้องสมบูรณ์แบบ) แล้วส่งค่าที่ resolve แล้วนั้นเข้าบรรทัด `<CheckoutBadge apiKey={...} client:load />` เดียวกันเป๊ะ ก็ยังได้ attribute `props` ที่รั่วเหมือนเดิม — schema บังคับใช้ boundary ของการ *import* ไม่ใช่สิ่งที่ข้ามมันไปหลังจากนั้น
+
+**วิธีแก้:** อย่าให้ค่าที่ resolve แล้วของ secret ไปถึง prop ที่ client hydrate เลย ไม่ว่า API ไหนอ่านมันมา ตรวจสอบฝั่ง server แล้วส่งให้ client แค่ผลลัพธ์ที่ไม่ใช่ secret:
+
+```astro
+---
+// src/pages/checkout-fixed.astro
+import CheckoutBadge from '../components/CheckoutBadge.tsx';
+
+const configured = Boolean(import.meta.env.STRIPE_SECRET_KEY); // a boolean, not the secret itself
+---
+<CheckoutBadge apiKey={configured ? 'configured' : 'missing'} client:load />
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติสำหรับความผิดพลาดแบบส่ง prop ต่อ — error `ServerOnlyModule` ของ `astro:env` (พิสูจน์แล้วใน [SSR & Adapters](/astro/th/server-side/ssr-and-adapters/)) จับได้แค่การ *import* ตรงเข้าโค้ดฝั่ง client เท่านั้น ซึ่งเป็นความผิดพลาดคนละแบบ มีแค่การอ่าน HTML ที่ build จริง (หรือ response ที่ browser จริงได้รับ) เท่านั้นที่เห็นอันนี้
+
+### 15. `set:html` กับ input ของ user ที่ไม่ผ่านการกรอง
+
+```astro
+---
+// src/pages/comment.astro
+const { commentHtml } = Astro.props; // from a comment field a user submitted
+---
+<div class="comment" set:html={commentHtml} />
+```
+
+`set:html` ข้ามการ escape ค่าเริ่มต้นของ Astro — เหมือน `dangerouslySetInnerHTML` ใน React หรือ `v-html` ใน Vue เป๊ะ — และ type ของมันคือ `any` เพราะฉะนั้นไม่มีอะไรในระดับ type ที่แยก string ที่เชื่อถือได้จาก CMS ออกจาก input ดิบที่ผู้โจมตีควบคุมได้
+
+**อาการ — ผลลัพธ์จริง render ผ่าน Container API ด้วย string ที่มีรูปร่างเป็น XSS ที่ field comment จริงอาจมีได้:**
+
+```html
+<div class="comment"><img src="x" onerror="alert(document.cookie)"></div>
+```
+
+tag `<img onerror=...>` render ออกมาตรงตัว — payload XSS ที่รันได้จริง ทันทีที่ browser parse มัน ไม่มีอะไรใน build หรือ `astro check` ตี flag เรื่องนี้ — งานทั้งหมดของ `set:html` คือการข้าม escape
+
+**วิธีแก้:** ส่ง content ที่ไม่เชื่อถือผ่าน sanitizer HTML จริง ๆ ก่อนที่จะถึง `set:html` เสมอ (อย่าเขียน regex ตัดแท็กเอง):
+
+```astro
+---
+// src/pages/comment-fixed.astro
+// Stand-in for a real sanitizer (e.g. `sanitize-html`) — replace with your installed package.
+declare function sanitizeHtml(html: string): string;
+
+const { commentHtml } = Astro.props;
+const safeHtml = sanitizeHtml(commentHtml);
+---
+<div class="comment" set:html={safeHtml} />
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — type ของ `set:html` คือ `any` โดยตั้งใจ เพราะฉะนั้น `astro check` ไม่มีรูปร่างให้ปฏิเสธ มีแค่การ render จริง (พิสูจน์แล้วข้างต้นด้วย Container API) เท่านั้นที่เห็น payload ทำงาน ดู [Astro Syntax Deep Dive](/astro/th/components/astro-syntax-deep/) สำหรับการเปรียบเทียบ `set:html`/`set:text` แบบเต็ม
+
+<SpotTheBug code={`---
+const { commentHtml } = Astro.props;
+---
+<div class="comment" set:html={commentHtml} />`}>
+type ของ `set:html` คือ `any` เพราะฉะนั้นไม่มีอะไรทำให้ `astro check` ล้มเหลว บั๊กอยู่ที่ว่า `commentHtml` มาจากไหน ซึ่งไม่มี fence หรือ type signature ไหนบอกคุณได้ พิสูจน์ผ่าน Container API: ค่าที่มีรูปร่างแบบผู้โจมตีอย่าง `<img src="x" onerror="alert(document.cookie)">` render ออกมาตรงตัว ทำงานทันทีที่ browser parse มัน วิธีแก้คือส่งค่าใด ๆ ที่ย้อนกลับไปหา user input ผ่าน sanitizer จริง (`sanitize-html` หรือเทียบเท่า) ก่อนที่จะถึง `set:html` เสมอ — ไม่ใช่ regex ที่เขียนเอง และไม่ใช่ "คงไม่เป็นไรหรอก มันแค่ comment"
+</SpotTheBug>
+
+## Performance & cache
+
+### 16. `is:inline` บน script ที่ตั้งใจให้ใช้ร่วมกัน
+
+```astro
+---
+// src/components/Analytics.astro
+---
+<div class="analytics-widget">
+  <script is:inline>
+    console.log('tracking pageview');
+  </script>
+</div>
+```
+
+```astro
+---
+// src/pages/dashboard-analytics.astro
+import Analytics from '../components/Analytics.astro';
+---
+<Analytics />
+<Analytics />
+<Analytics />
+```
+
+`<script>` ธรรมดา (ไม่ใช่ `is:inline`) ใน component ของ Astro ถูก bundle แค่ครั้งเดียวต่อหน้า ไม่ว่า component จะถูกใช้กี่ครั้ง — `is:inline` ถอนตัวออกจากสิ่งนั้นทั้งหมด ปล่อย tag ออกมาตรงตัว ครั้งละหนึ่ง instance โค้ดที่ AI เขียนมักเลือก `is:inline` แบบสัญชาตญาณ (มักคัดลอก analytics snippet ดิบ ๆ มาตรงตัว) โดยไม่รู้ตัวว่ามันปิดการ deduplicate ที่ script ปกติได้ฟรีไปด้วย
+
+**อาการ — ผลลัพธ์ที่ build จริง สาม instance ของ component เดียวกัน:**
+
+```html
+<div class="analytics-widget"><script>console.log('tracking pageview');</script></div>
+<div class="analytics-widget"><script>console.log('tracking pageview');</script></div>
+<div class="analytics-widget"><script>console.log('tracking pageview');</script></div>
+```
+
+`<script>` เหมือนกันตรงตัวสามอัน — การเรียก tracking รันสามครั้งในการโหลดหน้าเดียว และหน้าเพจ ship โค้ดสามชุดที่ควรจะเป็นชุดเดียว
+
+**วิธีแก้:** ตัด `is:inline` ออก เว้นแต่ต้องการ tag ดิบที่ไม่ผ่านการประมวลผล ต่อ instance จริง ๆ — script ธรรมดา bundle และ deduplicate ให้อัตโนมัติ:
+
+```astro
+---
+// src/components/AnalyticsFixed.astro
+---
+<div class="analytics-widget">
+  <script>
+    console.log('tracking pageview');
+  </script>
+</div>
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — `is:inline` คือการถอนตัวที่ถูกต้อง ตั้งใจ เพราะฉะนั้นทั้ง `astro check` และ build ไม่ถือว่าเป็น error มีแค่การตรวจ HTML ที่ build จริง (พิสูจน์แล้วข้างต้น) เท่านั้นที่เห็นการซ้ำ ดู [Styles & Scripts](/astro/th/components/styles-and-scripts/) สำหรับการเปรียบเทียบ bundled กับ `is:inline` แบบเต็ม
+
+### 17. สมมติว่า `routeRules`/`cache` ตั้ง `Cache-Control` ของ browser
+
+```js
+// astro.config.mjs
+import { defineConfig, memoryCache } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  adapter: node({ mode: 'standalone' }),
+  cache: { provider: memoryCache() },
+  routeRules: {
+    // "cache this response at the browser/CDN for an hour"
+    '/blog/[slug]': { maxAge: 3600 },
+  },
+});
+```
+
+`routeRules`/`cache` คือ cache layer ภายในของ Astro *เอง* ไม่ใช่ทางลัดสำหรับตั้ง `Cache-Control` การอ่าน compiler ที่ติดตั้งตรง ๆ `maxAge` ของ route ที่ตรงกันถูกแปลงเป็น header `CDN-Cache-Control` ภายในที่ขั้นตอนถัดไปลบทิ้งก่อนที่ response จะถึง client
+
+**อาการ — request จริงกับ route ที่ build จากด้วย config ข้างบน render UUID สุ่มต่อการ render:**
+
+```text
+$ curl -s -D - http://127.0.0.1:4701/blog/hello-world/
+HTTP/1.1 200 OK
+content-type: text/html
+x-astro-cache: MISS
+<p>5e3bae66-70b5-4adf-9236-ffa79ff2f9ec</p>
+
+$ curl -s -D - http://127.0.0.1:4701/blog/hello-world/
+HTTP/1.1 200 OK
+content-type: text/html
+x-astro-cache: HIT
+<p>5e3bae66-70b5-4adf-9236-ffa79ff2f9ec</p>
+```
+
+Astro serve render เดิมซ้ำ (MISS → HIT) — แต่ทั้งสอง response ไม่มี header `Cache-Control` หรือ `CDN-Cache-Control` ที่ client มองเห็นเลย `routeRules` ตัดสินว่า *Astro เอง* จะ re-run หน้าเพจไหม มันไม่ได้บอกอะไร browser เลย
+
+**วิธีแก้:** ตั้ง header ที่ browser เห็นด้วยตัวเอง เป็นบรรทัดอิสระของตัวเอง คู่กับ `routeRules` ถ้าต้องการทั้งสอง layer:
+
+```astro
+---
+// src/pages/blog/[slug]-fixed.astro
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'public, max-age=0, s-maxage=3600, stale-while-revalidate=86400');
+---
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — config ทั้งสองถูกต้อง เพราะฉะนั้นทั้ง `astro check` และ build ไม่คัดค้าน มีแค่ curl จริงกับ server ที่ build แล้ว (พิสูจน์แล้วข้างต้น และใน [Caching & Edge](/astro/th/rendering-and-performance/caching-and-edge/)) เท่านั้นที่เห็นว่า header ที่ browser เห็นหายไป
+
+### 18. `transition:persist` ที่ไม่มี element ที่ตรงกันบนหน้าปลายทาง
+
+```astro
+---
+import { ClientRouter } from 'astro:transitions';
+import AudioPlayer from '../components/AudioPlayer.tsx';
+---
+<html>
+  <head><ClientRouter /></head>
+  <body>
+    {Astro.url.pathname === '/' && <AudioPlayer transition:persist client:load />}
+    <slot />
+  </body>
+</html>
+```
+
+ผู้เขียนต้องการให้ audio player เล่นต่อเนื่องข้ามการนำทาง เลยเพิ่ม `transition:persist` — แต่ครอบ island ไว้ในเงื่อนไขที่ render แค่บนหน้าแรกเท่านั้น client router ของ Astro จับคู่ element ที่ persist ระหว่างเอกสาร *เก่า* กับ *ใหม่* โดยไล่หาหน้าที่กำลังจะออกไปหา `[data-astro-transition-persist]` แล้วค้นหา id เดียวกันบนหน้าที่กำลังเข้ามา ถ้าหน้าที่เข้ามาไม่มี element ที่ตรงกันเลย (เพราะเงื่อนไขข้างบนก็ไม่ได้ render มันที่นั่นเหมือนกัน) ไม่มีอะไร error — การจับคู่ถูกข้ามไปเฉย ๆ
+
+**อาการ — พิสูจน์โดยตรงจากตรรกะการสลับของ compiler ที่ติดตั้ง (`astro/dist/transitions/swap-functions.js`) loop การจับคู่เป๊ะ ๆ ที่ตัดสินว่า element จะ persist หรือไม่:**
+
+```js
+for (const el of oldElement.querySelectorAll(`[${PERSIST_ATTR}]`)) {
+  const id = el.getAttribute(PERSIST_ATTR);
+  const newEl = newElement.querySelector(`[${PERSIST_ATTR}="${id}"]`);
+  if (!newEl) continue;
+  persistPairs.push({ old: el, newTarget: newEl });
+  // ...
+}
+```
+
+`if (!newEl) continue;` — ไม่มี error ไม่มี warning ไม่มีข้อความ console ใด ๆ เลย การนำทางออกจาก `/` แค่สลับ DOM ของหน้าใหม่ตามปกติ — element เสียง (และ state การเล่น) ถูกทิ้งเหมือน node ที่ไม่ persist ตัวอื่น บั๊กมองไม่เห็นใน source เลย: `transition:persist` สะกดถูกต้องและทำตามที่มันบอกเป๊ะ ๆ บนหน้าเดียวที่มัน render อยู่จริง
+
+**วิธีแก้:** render element ที่ persist แบบไม่มีเงื่อนไขใน layout ที่ใช้ร่วมกัน (หรือบนทุกหน้าที่มันต้องรอดข้ามไป) เพื่อให้ทั้งเอกสารที่ออกไปและเข้ามามี node ที่ตรงกันเสมอ:
+
+```astro
+---
+import { ClientRouter } from 'astro:transitions';
+import AudioPlayer from '../components/AudioPlayer.tsx';
+---
+<html>
+  <head><ClientRouter /></head>
+  <body>
+    <AudioPlayer transition:persist="player" client:load />
+    <slot />
+  </body>
+</html>
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — พิสูจน์แล้วข้างต้นโดยตรงจาก source ที่ติดตั้ง การไม่พบคู่ที่ตรงกันคือ `continue` แบบเงียบ ไม่ใช่เส้นทาง error ดู [View Transitions](/astro/th/rendering-and-performance/view-transitions/) สำหรับ markup ที่ build จริงของ `transition:persist` ตอนที่มันจับคู่ได้
+
+### 19. `<ViewTransitions />` — ชื่อ import เก่า
+
+```astro
+---
+// @expect-error ts(2305) — ViewTransitions is not exported by astro:transitions; see prose
+// src/layouts/Layout.astro
+import { ViewTransitions } from 'astro:transitions';
+---
+<html>
+  <head><ViewTransitions /></head>
+  <body><slot /></body>
+</html>
+```
+
+Astro รุ่นเก่า (และ tutorial จำนวนมากที่ยังอยู่ออนไลน์) เรียก component นี้ว่า `<ViewTransitions />` มันไม่ได้แค่ deprecate หรือ alias ใน 7.3.5 — มันไม่ถูก export เลย
+
+**อาการ — ผลลัพธ์จริง build จริง:**
+
+```text
+[ERROR] [vite] ✗ Build failed
+[MISSING_EXPORT] "ViewTransitions" is not exported by "\0astro:transitions".
+   ╭─[ src/layouts/Layout.astro:2:10 ]
+ 2 │ import { ViewTransitions } from "astro:transitions";
+   │          ───────┬───────
+   │                 ╰───────── Missing export
+```
+
+**วิธีแก้:** component ถูกเปลี่ยนชื่อ — module specifier เดิม ตำแหน่งเดิมใน `<head>` แค่ชื่อใหม่:
+
+```astro
+---
+// src/layouts/Layout-fixed.astro
+import { ClientRouter } from 'astro:transitions';
+---
+<html>
+  <head><ClientRouter /></head>
+  <body><slot /></body>
+</html>
+```
+
+**จับได้ด้วย:** `astro check` ทันที — ambient module declaration ของ `astro:transitions` ไม่มี `ViewTransitions` อยู่ในรายการแล้ว เพราะฉะนั้นนี่คือ `ts(2305)` จริงในปัจจุบัน มันยัง fail เหมือนกันเป๊ะเป็น build error หนักตอนที่ Vite พยายาม resolve module ดู [View Transitions](/astro/th/rendering-and-performance/view-transitions/) สำหรับการเปลี่ยนชื่อแบบเต็มและเหตุผลที่มันเป็น hard error ไม่ใช่การ deprecate แบบนุ่มนวล
+
+### 20. สมมติว่า `image.domains`/`remotePatterns` กันรูปภาพระยะไกลทุกรูป
+
+```astro
+---
+// src/pages/product/[slug].astro
+import { Image } from 'astro:assets';
+
+const { product } = Astro.props;
+// astro.config.mjs only lists "cdn.example.com" in image.domains
+---
+<Image src={product.imageUrl} width={600} height={400} alt={product.name} />
+```
+
+`product.imageUrl` ชี้ไปที่ host ที่ไม่อยู่ใน `image.domains`/`remotePatterns` — ผู้เขียนสมมติว่า allowlist ป้องกัน `<Image>` ระยะไกลทุกอัน แต่การตรวจสอบรันแค่บนเส้นทางที่ต้อง *fetch* ไฟล์ (การ optimize มัน หรืออ่านมิติจริงผ่าน `inferSize`) เพราะมี `width`/`height` ชัดเจนอยู่แล้ว Astro ไม่จำเป็นต้อง fetch อะไรเลย เพราะฉะนั้น allowlist ไม่ถูกตรวจสอบเลย
+
+**อาการ — ผลลัพธ์จริง สิ่งนี้ build และรัน on-demand ได้โดยไม่มี error เลย:**
+
+```html
+<img src="https://not-allowed.example.com/photo.jpg" alt="Widget" loading="lazy" decoding="async" width="600" height="400">
+```
+
+image service ในเครื่องของ Astro ข้าม optimization แบบเงียบ ๆ และปล่อย URL ดิบที่ไม่ได้รับอนุญาตออกมาโดยไม่แตะต้อง — ไม่มี build ล้มเหลว ไม่มี warning แค่ `<img>` ธรรมดาที่ดูเหมือนผ่าน `<Image>` แต่ไม่ได้ผ่านจริง
+
+**วิธีแก้:** เพิ่ม host จริงเข้า `image.domains`/`remotePatterns` (เพื่อให้ optimize จริง) หรือใช้ `<img>` ธรรมดาโดยตั้งใจเมื่อไม่ต้องการ optimize สำหรับ host นั้นจริง ๆ — อย่าพึ่ง `<Image>` บวก dimension ที่ hardcode ไว้เพื่อบังคับ allowlist เพราะมันไม่ทำ:
+
+```js
+// astro.config.mjs
+export default {
+  image: {
+    domains: ['cdn.example.com', 'not-allowed.example.com'],
+  },
+};
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — พิสูจน์แล้วข้างต้นและใน [Images & Assets](/astro/th/rendering-and-performance/images-and-assets/) นี่คือช่องว่างจริงในปัจจุบันระหว่างสิ่งที่ allowlist ถูกบันทึกไว้ว่าทำ กับเส้นทางเดียวที่มันถูกตรวจสอบจริง
+
+## Tooling & production
+
+### 21. `markdown.remarkPlugins` เป็น key ระดับบนสุด
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import remarkToc from 'remark-toc';
+
+export default defineConfig({
+  markdown: {
+    remarkPlugins: [remarkToc],
+  },
+});
+```
+
+Astro 7 render Markdown ด้วย native Sätteri pipeline โดยปริยาย `markdown.remarkPlugins`, `rehypePlugins`, `gfm`, และ `smartypants` ยังใช้งานได้ในฐานะ key ระดับบนสุด แต่ถูกแปะ `@deprecated` โดยตรงใน config schema ที่ติดตั้ง — แต่ละอันชี้ไปที่ทางแก้เดียวกัน: ส่งเข้า `markdown.processor` ที่ตั้งค่าไว้แทน
+
+**อาการ — ผลลัพธ์จริงของ `astro check` (deprecation warning จริงของ TypeScript ไม่ใช่ build ล้มเหลว — config นี้ยังทำงานได้วันนี้):**
+
+```text
+warning ts(6385): 'remarkPlugins' is deprecated.
+```
+
+เพราะนี่เป็น warning ไม่ใช่ error `--minimumFailingSeverity` ค่าเริ่มต้นของ `astro check` (`"error"`) ปล่อยให้มัน exit `0` — พลาดง่ายใน CI เว้นแต่จะตั้ง warning ให้เข้มขึ้นเอง
+
+**วิธีแก้:** ติดตั้ง `@astrojs/markdown-remark` และส่ง plugin เข้า `unified()` ที่กำหนดให้ `markdown.processor`:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import { createMarkdownProcessor } from '@astrojs/markdown-remark';
+import remarkToc from 'remark-toc';
+import { unified } from 'unified';
+
+export default defineConfig({
+  markdown: {
+    processor: unified({ remarkPlugins: [remarkToc] }),
+  },
+});
+```
+
+**จับได้ด้วย:** `astro check` เป็น warning (พิสูจน์แล้วข้างต้น ตรวจตรงกับ config schema ที่ติดตั้ง) แต่ไม่ใช่ error ที่บล็อก build เว้นแต่ `--minimumFailingSeverity` จะถูกตั้งให้เข้มขึ้น ดู [Markdown & MDX](/astro/th/components/markdown-and-mdx/) สำหรับรายการ key ที่เลิกใช้แล้วแบบเต็ม
+
+### 22. รัน `astro preview` เป็น production server
+
+```json
+{
+  "scripts": {
+    "build": "astro build",
+    "start": "npm run build && astro preview --host 0.0.0.0 --port 8080"
+  }
+}
+```
+
+`astro preview` เป็นการตรวจสอบในเครื่องที่มีประโยชน์จริง — มัน serve build output จริง และสำหรับ adapter ที่ต่อ `previewEntrypoint` ไว้ (adapter Node ของคอร์สนี้ทำ) มันถึงกับรัน SSR entry จริงด้วย ไม่ใช่แค่ไฟล์ static script deploy และ Dockerfile ที่ AI เขียนมักเลือกใช้มันเหมือนเป็นคำสั่ง production เพราะทั้งชื่อและพฤติกรรมในเครื่องที่ทำงานได้จริงต่างก็ชี้ไปทางนั้น
+
+**อาการ — เอกสาร CLI reference ทางการของ Astro เอง ตรงตัว:**
+
+```text
+Starts a local server to serve the contents of your static directory (dist/ by default)
+created by running `astro build`.
+
+It is not designed to be run in production. For help with production hosting, check out
+our guide on Deploying an Astro Website.
+```
+
+เอกสารของ Astro เองชัดเจนและไม่คลุมเครือ: `astro preview` คือการตรวจสอบก่อน deploy ในเครื่อง ไม่ใช่ process ที่ deployment จริงควรรันเลย
+
+**วิธีแก้:** รัน production entrypoint จริงของ adapter (สำหรับ adapter Node คือไฟล์ server ที่ build แล้วโดยตรง) แทนที่จะ script ให้ `astro preview` เป็น `start`:
+
+```json
+{
+  "scripts": {
+    "build": "astro build",
+    "start": "node ./dist/server/entry.mjs"
+  }
+}
+```
+
+**จับได้ด้วย:** ไม่มีอะไรอัตโนมัติ — script ทั้งสองรันโดยไม่มี error ในเครื่อง เพราะ `astro preview` serve build output จริง ๆ มีแค่เอกสารของ Astro เอง (ยกมาข้างต้น) และ production deployment จริง (ที่ขาด hardening เฉพาะแพลตฟอร์มที่ adapter/host จริงมีให้) เท่านั้นที่เผยความต่าง ดู [SSR & Adapters](/astro/th/server-side/ssr-and-adapters/) สำหรับหน้าตา production entrypoint จริงของ adapter Node ทั้งแบบ standalone และ middleware
+
+<Callout title="สรุปหนึ่งบรรทัด">
+18 จาก 22 pattern ข้างต้นผ่าน `astro check` สะอาด — มีแค่ function prop ที่ส่งเข้า island ที่ type เข้มงวด, การเรียก `Astro.glob()` ที่ถูกเอาออกไปแล้ว, method `entry.render()` เก่า, และ import `<ViewTransitions />` ที่เปลี่ยนชื่อแล้วเท่านั้นที่เป็น type error จริงในปัจจุบัน ที่เหลือทั้งหมดต้องมี build จริง, curl จริง, การอ่าน HTML ที่ build จริง, หรือการอ่าน source ที่ติดตั้งโดยตรงถึงจะเห็นได้ อ่านทุกอันตามลำดับที่ index ของโมดูลนี้วางไว้ — rendering mode กับ adapter, island, content, Astro ฝั่ง server, security, performance กับ cache แล้วจึงเป็น tooling — เพราะความล้มเหลวของแต่ละกลุ่มเงียบในแบบเดียวกันเป๊ะ และเพราะ "มันผ่าน `astro check`" ตอบคำถามที่ catalog นี้กำลังทดสอบได้แทบไม่ได้เลย
+</Callout>
+
+export const quizAiBugCatalog = [
+  {
+    q: "ทำไม entry 2 (route on-demand ที่ไม่มี adapter) ถึงไม่มี `astro check` error เลย?",
+    options: [
+      "เพราะ prerender = false เป็น TypeScript ที่ผิด",
+      "เพราะตัวหน้าเพจเองถูกต้องสมบูรณ์แบบ — prerender = false และการอ่าน Date ทั้งคู่ type-check ผ่าน NoAdapterInstalled คือการตรวจตอน build ที่รันเฉพาะตอน Astro พยายาม compile server entry จริง ๆ ซึ่ง astro check ไม่เคยทำ",
+      "เพราะ astro check ไม่มีอยู่จริงใน Astro 7",
+      "เพราะ adapter เป็นตัวเลือกในทุกกรณี",
+    ],
+    answer: 1,
+    explain: "พิสูจน์แล้วข้างต้น: ไฟล์เดียวกันเป๊ะผ่าน astro check โดยไม่มี error และล้มเหลวแค่ตอน astro build จริง ด้วย error ที่มีชื่อ NoAdapterInstalled — ผลลัพธ์ check-mode ที่สะอาดไม่ได้บอกอะไรเลยว่ามีการตั้งค่า adapter หรือไม่",
+  },
+  {
+    q: "```html\n<astro-island component-url=\"/_astro/Counter.CZh5qZhJ.js\" renderer-url=\"/_astro/client.CYoOuZrL.js\" ... client=\"load\">\n<astro-island component-url=\"/_astro/Counter.CZh5qZhJ.js\" renderer-url=\"/_astro/client.CYoOuZrL.js\" ... client=\"visible\">\n```\ncomponent เดียวกัน สอง client directive ต่างกัน การเปรียบเทียบ component-url/renderer-url ระหว่างสองอันนี้พิสูจน์อะไร?",
+    options: [
+      "client:load ส่ง JavaScript มากกว่า client:visible",
+      "JavaScript เหมือนกันตัวต่อตัวทั้งสองแบบ — มีแค่ loader script (attribute ไหนกระตุ้นการ hydrate และเมื่อไหร่) ที่ต่างกัน เพราะฉะนั้นต้นทุนจริงของ client:load คือ 'เมื่อไหร่' ที่มัน fetch/hydrate ไม่ใช่ปริมาณโค้ดที่มันส่ง",
+      "client:visible ไม่เคยโหลด component เลย",
+      "สอง directive สร้าง component ที่ต่างกันโดยสิ้นเชิง",
+    ],
+    answer: 1,
+    explain: "พิสูจน์โดยตรงกับ build จริง: component-url และ renderer-url เป็น string เดียวกันไม่ว่า directive ไหน ต้นทุนจริงของ client:load คือการแย่งชิง main thread ทันทีที่หน้าโหลด ไม่ใช่ bundle ที่ใหญ่กว่า",
+  },
+  {
+    q: "ทำไมการส่ง secret จาก `astro:env/server` ที่ import ถูกต้องแล้วเข้า prop ของ island ยังรั่วอยู่ ทั้งที่ astro:env บังคับใช้ boundary ของ context/access?",
+    options: [
+      "ไม่รั่ว — astro:env ป้องกันสิ่งนี้อัตโนมัติ",
+      "การตรวจ ServerOnlyModule ของ astro:env หยุดแค่การ IMPORT module เข้าโค้ดฝั่ง client เท่านั้น — มันไม่มีมุมมองเลยว่า server component ทำอะไรกับค่านั้นหลังจากนั้น รวมถึงการ serialize มันเข้า prop ที่ client hydrate",
+      "มีแค่ import.meta.env เท่านั้นที่รั่ว astro:env ไม่เคยรั่ว",
+      "การรั่วเกิดแค่กับ client:only เท่านั้น ไม่เคยเกิดกับ client:load",
+    ],
+    answer: 1,
+    explain: "พิสูจน์โดยตรง: การเปลี่ยนแหล่งที่มาของ secret จาก import.meta.env เป็น astro:env/server แล้วเก็บบรรทัด `<CheckoutBadge apiKey={...} client:load />` เดิมไว้ ก็ยังได้ attribute props ที่รั่วเหมือนกันเป๊ะใน HTML ที่ build จริง — boundary ของ schema กับ boundary ของการ serialize prop เป็นคนละเรื่องกัน",
+  },
+  {
+    q: "```js\nfor (const el of oldElement.querySelectorAll(`[${PERSIST_ATTR}]`)) {\n  const id = el.getAttribute(PERSIST_ATTR);\n  const newEl = newElement.querySelector(`[${PERSIST_ATTR}=\"${id}\"]`);\n  if (!newEl) continue;\n  // ...\n}\n```\nนี่คือตรรกะการจับคู่ transition:persist จริงของ compiler ที่ติดตั้ง จะเกิดอะไรขึ้นเมื่อ element ที่ persist render อยู่แค่บนหน้าที่กำลังจะออกไป ไม่ใช่บนหน้าที่เข้ามา?",
+    options: [
+      "การนำทางจะ throw error",
+      "`if (!newEl) continue` — การจับคู่ถูกข้ามไปแบบเงียบ ๆ และ element ถูกปฏิบัติเหมือน node ธรรมดาที่ไม่ persist สำหรับการนำทางนั้น โดยไม่มี error หรือ warning ใด ๆ เลย",
+      "Astro ถอยกลับไปโหลดหน้าใหม่ทั้งหมด",
+      "Element persist อยู่ดี โดยใช้ content เก่า",
+    ],
+    answer: 1,
+    explain: "พิสูจน์โดยตรงใน astro/dist/transitions/swap-functions.js: element ที่ persist ซึ่งไม่มี id ที่ตรงกันบนหน้าปลายทางถูกข้ามไปเฉย ๆ ใน loop persistPairs — transition:persist สะกดถูกต้องได้และยังคงไม่ทำอะไรแบบเงียบ ๆ ได้",
+  },
+  {
+    q: "เอกสาร CLI reference ของ Astro เองบอกว่า `astro preview` \"is not designed to be run in production\" ทำไมเรื่องนี้ถึงควรตรวจในโค้ด deploy script ที่ AI สร้าง ทั้งที่ `astro preview` ทำงานได้จริงเมื่อรันในเครื่อง?",
+    options: [
+      "ไม่ควรตรวจ — astro preview เหมือนกับ production server จริงทุกประการ",
+      "เพราะการทำงานได้ในเครื่องไม่ได้พิสูจน์อะไรเลยเรื่องความพร้อมสำหรับ production — Dockerfile หรือ start script ที่สร้างมาให้รัน astro preview เป็น production process กำลังทำสิ่งที่เอกสารของ Astro เองบอกตรง ๆ ว่าอย่าทำ แม้ว่าจะไม่มี error เลยตอนทดสอบ",
+      "astro preview ปฏิเสธที่จะเริ่มทำงานนอก development",
+      "astro preview serve แค่ไฟล์ static เท่านั้น เลยล้มเหลวเสมอสำหรับ route แบบ on-demand",
+    ],
+    answer: 1,
+    explain: "ยกมาโดยตรงจาก CLI reference ของ Astro เอง คำสั่งรันโดยไม่มี error ทั้งสองแบบ ซึ่งเป็นเหตุผลเป๊ะ ๆ ที่ทำให้นี่เป็นจุดที่ตรวจได้แค่ตอน review เท่านั้น — ไม่มีเครื่องมือไหนคัดค้าน มีแค่เอกสาร (และในที่สุด เหตุการณ์จริงบน production) เท่านั้นที่เผยความผิดพลาด",
+  },
+];
+
+<Quiz client:visible id="reading-astro/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-astro/ai-bug-catalog" />

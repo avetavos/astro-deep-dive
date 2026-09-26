@@ -1,0 +1,119 @@
+---
+title: Checklist สำหรับ review
+description: 'Checklist หน้าเดียว เจ็ดกลุ่ม สำหรับ review โค้ด Astro — แต่ละบรรทัดเป็นคำถามใช่/ไม่ใช่ ที่ลิงก์ไปยังบทเรียนที่อธิบายกฎเบื้องหลัง'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นี่คือ checklist ที่ควรไล่ดู — ด้วยสายตา บน diff ไหนก็ตาม ของคุณเองหรือของ AI — หลังจากเครื่องมือใน **[Verification Tools](/astro/th/reading-astro/verification-tools/)** รันแล้วผ่านสะอาด มันตั้งใจให้พอดีหนึ่งหน้ากระดาษพิมพ์: checklist ที่ไม่มีใครเปิดดูจริงตอน review นั้นไร้ค่า ทุกบรรทัดลิงก์ไปยังบทเรียนที่อธิบาย *ทำไม* เพื่อให้หน้านี้ยังเป็นแค่ list ไม่ใช่การรีรันคอร์สอีกครั้ง กลุ่มเรียงตามลำดับเดียวกับ **[วิธีอ่านโค้ด Astro ที่ไม่ได้เขียนเอง](/astro/th/reading-astro/)**
+
+<Mermaid title="อะไรจับแต่ละกลุ่มได้จริง ถ้ามี" code={checklistCoverageDiagram} />
+
+export const checklistCoverageDiagram = `flowchart LR
+  R["Rendering mode & adapter"] --> M["ต้อง review ด้วยคนเป็นหลัก<br/>(astro check ผ่าน 18/22 ของ catalog โมดูลนี้สะอาด)"]
+  I["Island & client directive"] --> P["เครื่องมือจับได้บางส่วน<br/>(Props type ที่เข้มงวดจับได้บางอัน ที่เหลือต้อง build จริง)"]
+  C["Content & data"] --> P
+  S["Astro ฝั่ง server"] --> M
+  Sec["Security"] --> M
+  Perf["Performance & cache"] --> M
+  T["Tooling & production"] --> P
+`;
+
+## Rendering mode & adapter
+
+- config เคยตั้ง `output: 'hybrid'` บ้างไหม? ถูกเอาออกใน Astro v5 — config validation error จริง แม้จะผ่าน type-check สะอาดใน harness ของคอร์สนี้เอง ดู **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** entry 1
+- ถ้า route ไหนตั้ง `export const prerender = false` (หรือโปรเจกต์ใช้ `output: 'server'`) มี adapter ตั้งค่าไว้จริงหรือไม่? ดู entry 2 และ **[SSR & Adapters](/astro/th/server-side/ssr-and-adapters/)**
+- หน้าเพจอ่าน `Astro.cookies`, `Astro.session`, หรือ `Astro.request.headers` ทั้งที่ route (หรือทั้งโปรเจกต์) ยัง prerender อยู่หรือไม่? ดู entry 3–4 และ **[Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/)** สำหรับ build warning จริงที่มันสร้าง
+- เคยทดสอบข้ออ้างเรื่อง rendering mode ด้วย `astro dev` อย่างเดียวหรือไม่? `routeRules`/`cache` (และพฤติกรรม adapter บางอย่าง) ต่างกันระหว่าง dev กับ build จริง ดู **[Caching & Edge](/astro/th/rendering-and-performance/caching-and-edge/)**
+
+## Island & client directive
+
+- component ที่โต้ตอบได้ทุกตัวเป็น `client:load` ไม่ว่าจะอยู่ตำแหน่งไหนของหน้าหรือไม่? ดู **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** entry 5 และ **[Client Directives](/astro/th/islands/client-directives/)** สำหรับข้อแลกเปลี่ยนของ directive ทั้งห้าแบบเต็ม
+- prop ทุกตัวที่ส่งเข้า island เป็น serializable — ไม่มี function หรือ class instance เปล่า ๆ — และ `Props` type ของ island เองซื่อสัตย์พอให้ TypeScript จับความผิดพลาดได้จริงหรือไม่? ดู entry 6
+- `client:only` เคยปรากฏโดยไม่ระบุ framework (`client:only="preact"`) บ้างไหม? ใช้ได้ปกติถ้ามี UI integration เดียว แต่ build ล้มเหลวจริงทันทีที่มีตัวที่สอง ดู entry 7
+- component จาก framework (`.tsx`/`.jsx`) ใช้ `<slot />` แบบของ Astro เอง โดยคาดหวังว่ามันจะ render children เหมือนตอนอยู่ใน `.astro` หรือไม่? ดู entry 8 — children ถูกทิ้งแบบเงียบ ๆ โดยไม่มี error
+- `<script is:inline>` ถูกมองว่าเป็น island หรือไม่? มันไม่เกี่ยวอะไรกับ hydration หรือ client directive เลย และไม่เคยสร้าง `<astro-island>` ดู **[Client Directives](/astro/th/islands/client-directives/)**
+
+## Content & data
+
+- ทุกการเรียก `defineCollection` ประกาศ `loader` หรือไม่? content ที่วางตรงลง `src/content/<name>/` โดยไม่มี loader คือ syntax ก่อน v5 ที่ Astro 7.3.5 ของคอร์สนี้ปฏิเสธ
+- โค้ดเรียก `entry.render()` แบบ method แทนที่จะ import `render` จาก `astro:content` หรือเปล่า? ดู **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** entry 12 — `ts(2551)` จริงในปัจจุบัน ไม่ใช่แค่เรื่องประหลาดใจตอน runtime
+- dynamic route แบบ static (`[slug].astro` ที่ไม่มี `prerender = false` ต่อ route) export `getStaticPaths()` จริงหรือไม่? ดู entry 10 — สิ่งนี้ type-check สะอาดและล้มเหลวแค่ตอน build จริงเท่านั้น
+- frontmatter ถูกตรวจสอบด้วย schema ที่ field ตรงกับสิ่งที่ content มีจริงหรือไม่? ดู entry 11 สำหรับรูปร่างจริงของ `InvalidContentEntryDataError`
+- มีที่ไหนยังเรียก `Astro.glob()` อยู่หรือไม่? type error จริงในปัจจุบันตั้งแต่ Astro 6 เอาออกไป ดู entry 9
+
+## Astro ฝั่ง server
+
+- handler ของทุก Action ตรวจ `context.locals.user` (หรือเทียบเท่า) เป็นบรรทัดแรกหรือไม่ หรือสมมติว่าผู้เรียกถูก authenticate แล้วเพราะ *form* render เฉพาะหลัง login? ดู **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** entry 13 พิสูจน์ด้วย `curl` จริงที่ได้ `200` โดยไม่มี session
+- ถ้า Action หรือ endpoint แก้ไขหรือลบแถวข้อมูล query กรองด้วย id ของผู้เรียกเองด้วยหรือไม่ ไม่ใช่แค่ id ของแถวเป้าหมาย? ดู **[Actions](/astro/th/server-side/actions/)**
+- middleware `onRequest` ถูกประกอบด้วย `sequence(...)` หรือไม่ และทุกเส้นทางในนั้นเรียก (และ return) `next()` จริงหรือไม่? middleware ที่ไม่เคย return `Response` หรือ `next()` เลยคือ build/runtime error จริงที่มีชื่อ ดู **[Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/)**
+- หลัง login แล้ว session เคยถูก regenerate (`session.regenerate()`) บ้างไหม หรือ session id ก่อน login กลายเป็นตัวที่ authenticated ไปเลย? ดู **[Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/)** สำหรับการพิสูจน์ session fixation
+
+## Security
+
+- `set:html` เคย render string ที่ย้อนกลับไปหา user input โดยไม่มี sanitizer จริงคั่นกลางหรือไม่? type ของมันคือ `any` — ไม่มีอะไรในระดับ type หยุดมันได้ ดู **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** entry 15 และ **[Astro Syntax Deep Dive](/astro/th/components/astro-syntax-deep/)** สำหรับ payload XSS จริงที่พิสูจน์ผ่าน Container API
+- ค่าที่อ่านจาก `import.meta.env`/`astro:env/server` เคยถูกส่งเป็น prop ให้ island แบบ `client:*` หรือไม่ — แม้ว่าตัว import เองจะถูกต้องสมบูรณ์แบบก็ตาม? ดู entry 14: การรั่วยังอยู่แม้เปลี่ยนไปใช้ `astro:env` เพราะ boundary นั้นกันแค่การ *import* ไม่ใช่สิ่งที่ component ทำกับค่านั้นหลังจากนั้น
+
+## Performance & cache
+
+- `routeRules`/`cache` เคยถูกมองว่าเป็นตัวตั้ง header `Cache-Control` ที่ browser เห็นโดยตรงหรือไม่? ดู **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** entry 17 และ **[Caching & Edge](/astro/th/rendering-and-performance/caching-and-edge/)** สำหรับความต่างจริงที่พิสูจน์แล้วระหว่าง `CDN-Cache-Control`/`Cache-Tag`
+- การเรียก cache-header (`Astro.response.headers.set`) ถูกวางไว้บน route ที่มี `export const prerender = true` ด้วยหรือไม่? พิสูจน์แล้วว่าเป็น no-op แบบเงียบ ดู **[Caching & Edge](/astro/th/rendering-and-performance/caching-and-edge/)**
+- `is:inline` ถูกใช้กับ script ที่ตั้งใจให้รันครั้งเดียว ใช้ร่วมกันต่อหน้าหรือไม่? พิสูจน์แล้วว่าซ้ำตรงตัวต่อ instance ดู entry 16
+- `transition:persist` ปรากฏบน element ที่ไม่มีคู่ตรงกันแน่นอนบนทุกหน้าปลายทางที่มันนำทางไปหรือไม่? การไม่พบคู่คือ `continue` แบบเงียบใน compiler ที่ติดตั้ง ไม่ใช่ error ดู entry 18
+- โค้ดยัง import `<ViewTransitions />` แทนที่จะเป็น `<ClientRouter />` อยู่หรือไม่? `MISSING_EXPORT`/`ts(2305)` จริงในปัจจุบัน ดู entry 19
+- `<Image>` ระยะไกลที่ hardcode `width`/`height` สมมติว่า `image.domains`/`remotePatterns` ป้องกันมันอยู่หรือไม่? พิสูจน์แล้วว่าข้ามการตรวจสอบแบบเงียบ ๆ และ ship URL ดิบที่ไม่ได้รับอนุญาต ดู entry 20
+
+## Tooling & production
+
+- `astro.config.mjs` ตั้ง `markdown.remarkPlugins`/`rehypePlugins`/`gfm`/`smartypants` เป็น top-level key ของ `markdown.*` อยู่หรือไม่? ถูกแปะ `@deprecated` ใน schema ที่ติดตั้ง — `astro check` warning จริง พลาดง่ายเว้นแต่ `--minimumFailingSeverity` จะถูกตั้งให้เข้มขึ้น ดู entry 21
+- `astro preview` เคยถูก script ให้เป็นคำสั่ง `start` ของ production หรือไม่? เอกสาร CLI reference ของ Astro เองบอกตรง ๆ ว่ามันไม่ได้ถูกออกแบบให้รันบน production ดู entry 22
+- CI config สมมติว่า `astro check` warning ไหนก็ตามทำให้ build ล้มเหลวหรือไม่? โดยปริยายมีแค่ diagnostic ระดับ `error` เท่านั้นที่ทำ (`--minimumFailingSeverity` ค่าเริ่มต้น `"error"`) ดู **[Verification Tools](/astro/th/reading-astro/verification-tools/)**
+
+<Callout title="Checklist ช่วยตีกรอบการค้นหา ไม่ได้แทนที่มัน">
+ทุกบรรทัดข้างบนตรงกับหนึ่งใน 22 pattern ใน **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** — 18 ในนั้นผ่าน `astro check` สะอาด รัน list นี้กับทุก diff ไม่ว่า `astro check` จะกลับมาสะอาดแค่ไหนก็ตาม
+</Callout>
+
+export const quizReviewChecklist = [
+  {
+    q: "ทำไม diagram ของกลุ่ม 'Rendering mode & adapter' ถึงบอกว่า 'astro check ผ่าน 18/22 ของ catalog โมดูลนี้สะอาด' แทนที่จะอ้างว่าเครื่องมือจับบั๊กเหล่านี้ได้?",
+    options: [
+      "เป็นความผิดพลาด — astro check จับบั๊กเรื่อง rendering mode ได้ทุกตัว",
+      "เพราะความล้มเหลวส่วนใหญ่เรื่อง rendering mode (adapter ที่ขาด, cookie ที่อ่านบนหน้า prerender) เกิดตอน build หรือ runtime เท่านั้น — astro check type-check source เท่านั้น ไม่เคยรันหน้าเพจหรือ build จริง เลยมองไม่เห็น",
+      "astro check ใช้ได้แค่กับ content collection เท่านั้น",
+      "diagram ไม่เกี่ยวกับกลุ่มนี้",
+    ],
+    answer: 1,
+    explain: "พิสูจน์แล้วตลอดทั้ง AI Bug Catalog: entry 1 ถึง 4 (config hybrid, ไม่มี adapter, cookie/header บนหน้า prerender) ทั้งหมด type-check ผ่านโดยไม่มี error — มีแค่การรัน astro dev/build/sync/preview จริง หรือ request จริงเท่านั้นที่เห็นสักอันหนึ่ง",
+  },
+  {
+    q: "```tsx\n<SelectableProductCard name=\"Mug\" price={12} onSelect={() => {}} client:visible />\n```\nกลุ่ม checklist ไหนครอบคลุมบรรทัดนี้ และการจับมันได้ขึ้นกับอะไรจริง ๆ?",
+    options: [
+      "Content & data — ขึ้นกับ schema ของ content collection ที่ถูกต้อง",
+      "Island & client directive — การจับได้ขึ้นกับว่า Props type ของ component เองซื่อสัตย์ (เข้มงวด) หรือไม่ ไม่ใช่ขึ้นกับ client:visible เอง",
+      "Tooling & production — ขึ้นกับการติดตั้ง eslint-plugin-astro",
+      "Astro ฝั่ง server — ขึ้นกับการตรวจ auth ของ Action",
+    ],
+    answer: 1,
+    explain: "พิสูจน์แล้วใน entry 6 ของ AI Bug Catalog: ถ้า Props type ซื่อสัตย์ นี่คือ ts(2322) จริงตอน check ถ้า prop type หลวม/any ไม่มีอะไรจับได้เลย — คำถามใน checklist มีอยู่เพราะ tool coverage มีเงื่อนไข ไม่ใช่รับประกัน",
+  },
+  {
+    q: "ทำไม checklist ถึงถามเจาะจงว่า query ของ Action กรองด้วย id ของ 'ผู้เรียกเอง' หรือไม่ แทนที่จะถามแค่ 'handler ตรวจ session หรือเปล่า'?",
+    options: [
+      "สองคำถามนี้เหมือนกันเป๊ะ",
+      "handler อาจปฏิเสธผู้เรียกนิรนามได้ถูกต้อง (ตรวจ context.locals.user) แต่ยังปล่อยให้ user ที่ signed-in คนไหนก็ได้แก้ไขแถวของคนอื่นได้ ถ้า query กรองแค่ id เป้าหมาย — พิสูจน์แล้วในตัวอย่าง deletePost ของบทเรียน Actions เอง",
+      "การตรวจ session ไม่จำเป็นเลยใน Astro",
+      "เรื่องนี้เกี่ยวกับ content collection เท่านั้น",
+    ],
+    answer: 1,
+    explain: "การตรวจสิทธิ์มีสองรูปแบบความล้มเหลวที่แยกกัน: ไม่มีการตรวจ session เลย (บั๊กของ entry 13) และการตรวจ session ที่ผ่านแต่ query ข้างใต้ไม่ได้จำกัดขอบเขต — ตรวจแค่อันแรกจะพลาดอันที่สอง ซึ่งเป็นบั๊กเรื่องข้อมูลรั่วไหลที่จริงพอ ๆ กัน",
+  },
+];
+
+<Quiz client:visible id="reading-astro/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-astro/review-checklist" />

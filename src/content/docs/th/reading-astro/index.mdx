@@ -1,0 +1,177 @@
+---
+title: วิธีอ่านโค้ด Astro ที่ไม่ได้เขียนเอง
+description: 'ลำดับการอ่านโค้ด Astro ที่ AI เขียน — เริ่มจาก rendering mode กับ adapter, ตามด้วย island กับ client directive, content กับ data, Astro ฝั่ง server, security, performance กับ cache, แล้วจึงเป็น tooling — เพราะจุดพังส่วนใหญ่ของ Astro นั้นเงียบ ไม่ใช่ compiler error.'
+sidebar:
+  order: 0
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ทุกโมดูลก่อนหน้านี้สอนให้คุณ *เขียน* Astro โมดูลนี้สอนอีกครึ่งหนึ่ง: การอ่านโค้ด Astro ที่คนอื่น — หรือ AI — เขียนไว้ แล้วตัดสินว่ามันถูกต้องหรือไม่ AI ผู้ช่วยส่งไฟล์ `.astro` ที่ compile ผ่าน ที่ `astro check` ยอมรับ และหน้าตาเหมือนตัวอย่างที่คุณเรียนมาทุกประการ แต่ทั้งหมดนั้นไม่ได้พิสูจน์ว่าโค้ดถูกต้อง — ความผิดของโค้ด Astro ที่ AI เขียนส่วนใหญ่ถูกออกแบบให้มองไม่เห็นจาก type checker อยู่แล้ว ปัญหา training data ของ Astro เองยิ่งทำให้แย่กว่า framework ส่วนใหญ่: โค้ด Astro สาธารณะที่ LLM เคยเห็นส่วนใหญ่มีรูปร่างแบบ Astro 2, 3 หรือ 4 — `output: 'hybrid'`, `<ViewTransitions />`, `Astro.glob()`, collection ที่ไม่มี `loader` — ทั้งหมดนี้ดูลื่นไหลน่าเชื่อถือ แต่ผิดทั้งหมดบน Astro 7.3.5 ที่คอร์สนี้บันทึกไว้ เจ็ดขั้นตอนด้านล่างคือลำดับที่เผยความผิดพลาดเหล่านี้จริง ๆ และบทเรียนถัดไปในโมดูลนี้แต่ละบทจะเจาะลึกทีละส่วน
+
+<Mermaid title="ลำดับการอ่านไฟล์ Astro ที่ไม่ได้เขียนเอง" code={readingOrderDiagram} />
+
+export const readingOrderDiagram = `flowchart TD
+  A["1. Rendering mode & adapter<br/>static vs on-demand, prerender, ติดตั้ง adapter หรือยัง"] --> B["2. Island & client directive<br/>ความเคยชิน client:load, prop ที่ต้อง serializable, client:only"]
+  B --> C["3. Content & data<br/>ต้องมี loader, render(entry), Astro.glob() หายไปแล้ว"]
+  C --> D["4. Astro ฝั่ง server<br/>ทุก action คือ endpoint สาธารณะ"]
+  D --> E["5. Security<br/>set:html, secret ที่หลุดข้าม island boundary"]
+  E --> F["6. Performance & cache<br/>routeRules กับ Cache-Control, is:inline, transition:persist"]
+  F --> G["7. Tooling & production<br/>config key ที่เลิกใช้, astro preview ไม่ใช่ server จริง"]
+`;
+
+## 1. Rendering mode & adapter
+
+ก่อนอื่นให้หาก่อนว่าโค้ด Astro ชิ้นนี้ *รันตอนไหน* — ตอน build ครั้งเดียว หรือทุกครั้งที่มี request บน server — เพราะทุกคำถามถัดไป (อ่าน cookie ได้ไหม ต้องมี adapter หรือเปล่า header จะทำงานจริงไหม) ขึ้นกับคำตอบนี้ทั้งหมด โค้ดที่ AI เขียนมักสมมติว่าหน้าเพจ render ต่อ request ทั้งที่จริง ๆ ถูก prerender ไว้ (หรือตรงข้ามกัน) และ training data ที่เก่ากว่า Astro v5 ยังใช้ระบบสามโหมดที่ Astro ไม่มีแล้ว
+
+- **สิ่งที่ต้องมองหา:** โปรเจกต์ (หรือ route นั้น ๆ) ตั้ง `export const prerender = false` ไว้จริงหรือไม่ หรือพึ่ง `output: 'server'` ระดับโปรเจกต์อยู่? config ยังตั้ง `output: 'hybrid'` — ค่าที่ Astro v5 เอาออกไปแล้ว — อยู่หรือเปล่า? มี adapter ตั้งค่าไว้หรือไม่ ถ้ามี route ใด (หรือ Action หรือ server island) ต้องการ on-demand rendering? มีหน้าที่อ่าน `Astro.cookies`, `Astro.session`, หรือ `Astro.request.headers` ทั้งที่รอบข้างยังบอกว่าเป็น static อยู่หรือไม่?
+- **คำถามที่ต้องถาม:** HTML ของไฟล์นี้ขึ้นกับว่าใครเป็นคนถามจริง ๆ หรือเหมือนกันทุกคน — และการประกาศ rendering mode ของโค้ดเองตรงกับคำตอบนั้นจริงหรือไม่?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Rendering & Output Modes](/astro/th/foundations/rendering-and-output-modes/)** สำหรับ static กับ on-demand และ build warning จริงที่พิสูจน์แล้วเมื่อหน้า prerender อ่าน request data; **[SSR & Adapters](/astro/th/server-side/ssr-and-adapters/)** สำหรับ adapter, `output`, และเหตุผลที่ `'hybrid'` เป็นคำเก่าไปแล้ว
+
+## 2. Island & client directive
+
+พอรู้แล้วว่าอะไร render ตอนไหน ต่อไปดูว่าอะไรถูกส่งไปที่ browser จริง ๆ component จาก framework ที่ import เข้า `.astro` จะเป็น static HTML จนกว่าจะมี client directive แปลงมันเป็น island — และ directive ที่ LLM มักเลือกโดยปริยายแทบไม่ใช่ตัวที่ถูกต้องเลย
+
+- **สิ่งที่ต้องมองหา:** component ที่โต้ตอบได้ทุกตัวเป็น `client:load` ไม่ว่าจะอยู่ตำแหน่งไหนของหน้าหรือไม่? `client:only` เคยปรากฏโดยไม่ระบุ framework บ้างไหม? prop ที่ส่งเข้า island เป็นค่าธรรมดา (serializable) หรือเป็น function/class instance ที่ wire format ส่งข้ามไปไม่ได้? component จาก framework (`.tsx`/`.jsx`) ใช้ `<slot />` แบบของ Astro เอง โดยคาดหวังว่ามันจะทำงานเหมือนตอนอยู่ใน `.astro` หรือไม่?
+- **คำถามที่ต้องถาม:** component นี้ต้องโต้ตอบได้ทันทีที่หน้าโหลดจริงหรือ หรือ trigger ที่ช้ากว่า (`client:visible`, `client:idle`) ก็เพียงพอโดยใช้ JavaScript ต้นทางน้อยกว่า — และ prop ทุกตัวที่ island นี้รับจะรอดจากการถูก serialize ลง HTML จริงหรือไม่?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Client Directives](/astro/th/islands/client-directives/)** สำหรับ directive ทั้งห้า, markup จริงของ `<astro-island>`, และ error `NoClientOnlyHint` ที่พิสูจน์แล้ว; **[Framework Integrations](/astro/th/islands/framework-integrations/)** สำหรับสิ่งที่เปลี่ยนไปเมื่อมี UI framework มากกว่าหนึ่งตัว; **[Sharing State](/astro/th/islands/sharing-state/)** สำหรับ state ที่ต้องข้าม island boundary อย่างถูกต้อง
+
+## 3. Content & data
+
+Content collection คือจุดที่ training data ก่อน v5 เก่าที่สุดเห็นได้ชัด — API ทั้งหมด (ต้องมี `loader`, `render(entry)` เป็น standalone function, `Astro.glob()` หายไป) เปลี่ยนรูปร่าง และโค้ดที่หน้าตาเก่าจะพังในแบบที่ระบุชื่อได้ ไม่ใช่แค่ "compile ไม่ผ่าน"
+
+- **สิ่งที่ต้องมองหา:** ทุกการเรียก `defineCollection` ประกาศ `loader` หรือไม่? โค้ดเรียก `entry.render()` แบบ method แทนที่จะ import `render` จาก `astro:content` หรือเปล่า? dynamic route ที่ควรเป็น static export `getStaticPaths()` จริงหรือไม่? frontmatter ถูกตรวจสอบด้วย schema ที่ตรงกับ field จริงหรือไม่? มีที่ไหนยังเรียก `Astro.glob()` อยู่หรือไม่?
+- **คำถามที่ต้องถาม:** นี่คือ Content Layer API ปัจจุบัน (มี `loader`, Zod `schema`, `render(entry)`) หรืออ่านแล้วเหมือน tutorial ที่เขียนก่อน Astro 5 — และ `astro check`/`astro sync` จะจับความต่างนี้ได้จริงไหม หรือต้อง build จริงเท่านั้นถึงจะเห็น?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Content Collections](/astro/th/content-and-data/content-collections/)** สำหรับรูปร่าง `loader`/`schema` และ runtime error จริงของ `entry.render()`; **[Dynamic Routes](/astro/th/content-and-data/dynamic-routes/)** สำหรับ `getStaticPaths()` และ build error ที่มีชื่อจริงของมัน; **[Data Fetching](/astro/th/content-and-data/data-fetching/)** สำหรับเหตุผลที่ `Astro.glob()` กลายเป็น type error ไม่ใช่แค่สไตล์การเขียน; **[Schemas & References](/astro/th/content-and-data/schemas-and-references/)** สำหรับ error การตรวจสอบ Zod จริงเมื่อ schema กับ frontmatter ไม่ตรงกัน
+
+## 4. Astro ฝั่ง server
+
+พื้นผิวฝั่ง server ของ Astro — Action, endpoint, middleware, session — หน้าตาเหมือนการเรียกฟังก์ชันธรรมดาจากในโค้ดเบส ซึ่งนั่นแหละที่ทำให้ลืมง่ายว่าส่วนใหญ่มันก็เป็น endpoint สาธารณะด้วย ทันทีที่เป็น on-demand
+
+- **สิ่งที่ต้องมองหา:** handler ของ Action ตรวจ `context.locals.user` (หรือเทียบเท่า) เป็นบรรทัดแรกหรือไม่ หรือสมมติว่าผู้เรียกถูก authenticate แล้วเพราะ *form* render เฉพาะหลัง login? middleware เรียก (และ return) `next()` ในทุกเส้นทางของฟังก์ชันเสมอหรือไม่? หลัง login แล้ว มีการ regenerate session บ้างไหม?
+- **คำถามที่ต้องถาม:** ถ้า `curl` endpoint นี้ตรง ๆ โดยไม่มี session cookie เลย จะเกิดอะไรขึ้น — และคำตอบนั้นตรงกับสิ่งที่ UI เองกันไว้หรือไม่?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Actions](/astro/th/server-side/actions/)** สำหรับ 401 จริงที่พิสูจน์แล้วเมื่อไม่มีการตรวจ auth; **[Middleware & Sessions](/astro/th/server-side/middleware-and-sessions/)** สำหรับลำดับของ `sequence()`, `context.locals`, และ session fixation; **[Endpoints & API Routes](/astro/th/server-side/endpoints-and-api-routes/)** สำหรับกฎการเข้าถึงสาธารณะแบบเดียวกันที่ใช้กับ endpoint ธรรมดา
+
+## 5. Security
+
+จุดพังด้าน security เฉพาะของ Astro ที่พบซ้ำ ๆ ในโค้ดที่ AI เขียนมีสองแบบ และไม่มีแบบไหนเป็น compiler error เลย: การฉีด HTML ดิบ กับ secret ที่หลุดจากโค้ดฝั่ง server ไปยังสิ่งที่ browser ได้รับจริง
+
+- **สิ่งที่ต้องมองหา:** `set:html` เคย render string ที่ย้อนกลับไปหา input ของ user โดยไม่มี sanitizer จริงคั่นกลางหรือไม่? ค่าที่อ่านจาก `import.meta.env`/`astro:env/server` เคยถูกส่งเป็น prop ให้ island ที่ client hydrate หรือไม่ — แม้ module ต้นทางจะเป็น server-only จริง ๆ ก็ตาม?
+- **คำถามที่ต้องถาม:** ถ้าค่านี้ไปโผล่ใน source ของหน้า (view-source ไม่ใช่แค่ log ฝั่ง server) ยอมรับได้ไหม — และมีอะไรใน code path นี้ที่หยุดสิ่งนั้นจริง ๆ หรือแค่ดูเหมือนหยุดเฉย ๆ?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Astro Syntax Deep Dive](/astro/th/components/astro-syntax-deep/)** สำหรับ payload XSS จริงที่ `set:html` รันออกมา พิสูจน์ด้วย Container API; **[SSR & Adapters](/astro/th/server-side/ssr-and-adapters/)** สำหรับสิ่งที่ boundary `context`/`access` ของ `astro:env` บังคับใช้จริง — และสำคัญพอ ๆ กัน สิ่งที่มันไม่ได้บังคับ
+
+## 6. Performance & cache
+
+Astro มีคันโยกหลายอันที่ *ฟังดู* เหมือนเป็นอันเดียวกัน — cache header, config route cache, การ optimize รูป, script ที่ใช้ร่วมกันกับที่ซ้ำ, DOM ที่ persist ข้ามการนำทาง — และโค้ดที่ AI เขียนมักสมมติว่าคันโยกหนึ่งทำหน้าที่ของอีกอันหนึ่ง
+
+- **สิ่งที่ต้องมองหา:** `routeRules`/`cache` ถูกมองว่าเป็นตัวตั้ง header `Cache-Control` ที่ browser เห็นหรือไม่? `is:inline` ถูกใช้กับ script ที่ตั้งใจให้รันครั้งเดียว ใช้ร่วมกันต่อหน้าหรือไม่? `<Image>` ระยะไกลที่ hardcode `width`/`height` สมมติว่า `image.domains` ป้องกันมันอยู่หรือไม่? `transition:persist` ปรากฏบน element ที่ไม่มีคู่ตรงกันแน่นอนบนหน้าปลายทางหรือไม่?
+- **คำถามที่ต้องถาม:** ตาม header, script tag, หรือ node ที่ persist นี้ไปจนถึงสิ่งที่ browser จริงได้รับ — มันเป็นกลไกที่โค้ดสมมติไว้จริงหรือเป็นอีกกลไกหนึ่งที่ชื่อคล้ายกัน?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Caching & Edge](/astro/th/rendering-and-performance/caching-and-edge/)** สำหรับความต่างจริงที่พิสูจน์แล้วระหว่าง `Astro.response.headers` กับ `routeRules`/`cache`; **[Images & Assets](/astro/th/rendering-and-performance/images-and-assets/)** สำหรับจุดที่ `image.domains` บังคับใช้จริง (และไม่บังคับใช้); **[View Transitions](/astro/th/rendering-and-performance/view-transitions/)** สำหรับการจับคู่ของ `transition:persist` และ `<ClientRouter />` ที่เปลี่ยนชื่อ
+
+## 7. Tooling & production
+
+สุดท้าย ตรวจว่าการตั้งค่าโปรเจกต์รอบข้าง — config key, คำสั่งที่ใช้ "ทดสอบ" build production — เป็นปัจจุบันหรือไม่ เพราะโค้ดที่ AI เขียนอาจถูกต้องเฉพาะจุด แต่ยังอยู่ใน setup ที่เก่าหรือทำให้เข้าใจผิด
+
+- **สิ่งที่ต้องมองหา:** `astro.config.mjs` ยังตั้ง `markdown.remarkPlugins`/`rehypePlugins`/`gfm` เป็น top-level key ของ `markdown.*` อยู่หรือไม่? `astro preview` เคยถูกใช้ (หรือ script ให้รัน) เป็น production server จริงหรือไม่?
+- **คำถามที่ต้องถาม:** schema config ของ Astro เวอร์ชันที่ *ติดตั้งจริง* ยังรับ key นี้ตามที่โค้ดสมมติไว้หรือไม่ — และคำสั่งที่ใช้ "พิสูจน์ว่าใช้งานได้จริงบน production" เป็นคำสั่งที่เอกสารของ Astro เองบอกว่าใช้แบบนั้นได้อย่างปลอดภัยจริงหรือไม่?
+- **บทเรียนที่อธิบายเรื่องนี้:** **[Config & Integrations](/astro/th/tooling-and-production/config-and-integrations/)** สำหรับ Markdown key ระดับบนสุดที่เลิกใช้แล้ว; **[Testing & Tooling](/astro/th/tooling-and-production/testing-and-tooling/)** สำหรับ exit code ของ `astro check` และตำแหน่งของ `eslint-plugin-astro`
+
+## สิ่งที่โมดูลนี้จะสอนต่อไป
+
+- **[AI Bug Catalog](/astro/th/reading-astro/ai-bug-catalog/)** — 22 pattern เฉพาะ แต่ละอันมีโค้ดที่ AI มักเขียน, error/warning/พฤติกรรมจริงที่มันสร้าง, และวิธีแก้
+- **[Review Checklist](/astro/th/reading-astro/review-checklist/)** — 22 pattern เดียวกัน ในรูป checklist หน้าเดียว เจ็ดกลุ่ม
+- **[Verification Tools](/astro/th/reading-astro/verification-tools/)** — สิ่งที่ `astro check`, `astro build`, Container API, `eslint-plugin-astro`, และ harness ของคอร์สนี้เองพิสูจน์ได้จริง
+- worked review สามชิ้น — **[Worked Review 1](/astro/th/reading-astro/worked-review-1/)**, **[Worked Review 2](/astro/th/reading-astro/worked-review-2/)**, **[Worked Review 3](/astro/th/reading-astro/worked-review-3/)** — ใช้ลำดับการอ่านนี้กับไฟล์ที่ AI เขียนเต็มไฟล์
+
+## Mental Model
+
+```text
+ลำดับการอ่านไฟล์ Astro ที่ไม่ได้เขียนเอง:
+
+1. Rendering mode & adapter → รันตอนไหนจริง ๆ และ config ตรงกันหรือไม่?
+2. Island & client directive → อะไรถูกส่งไป browser และ prop ทุกตัวรอดการเดินทางไหม?
+3. Content & data           → นี่คือ Content Layer API ปัจจุบัน หรือหน้าตาก่อน v5?
+4. Astro ฝั่ง server         → ถ้า curl ตรง ๆ โดยไม่มี session จะเกิดอะไร?
+5. Security                 → HTML ดิบหรือ secret เคยข้าม trust boundary ไหม?
+6. Performance & cache      → คันโยกนี้คือที่โค้ดสมมติไว้ หรืออีกอันที่ชื่อคล้ายกัน?
+7. Tooling & production     → config เป็นปัจจุบันไหม และ "preview" ถูกใช้แทน "production" หรือเปล่า?
+
+การกระโดดไปถาม "astro check ผ่านไหม" ตอบคำถามข้างต้นแทบไม่ได้เลย — ส่วนใหญ่ของ
+catalog ในโมดูลนี้ผ่าน astro check โดยไม่มี error หรือ warning เลยสักตัว
+```
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ถ้า `astro check` ผ่าน แปลว่าโค้ดถูกต้อง"** entry ส่วนใหญ่ใน catalog ของโมดูลนี้ผ่าน `astro check` สะอาด — มันแค่ type-check `.astro`/`.ts`/`.tsx` ไม่ได้รันหน้าเพจ ไม่ได้ build จริง ไม่ได้ยิง request ไปที่ endpoint
+- **"โค้ด Astro ที่ AI เขียนแค่ต้องการ prompt ใหม่กว่านี้"** ปัญหาไม่ใช่แค่ความเก่า — `output: 'hybrid'`, `Astro.glob()`, และ `<ViewTransitions />` คือ Astro ที่ *ดูลื่นไหลน่าเชื่อถือ* syntax ถูกต้องทุกอย่าง แต่บังเอิญเล็งไปที่เวอร์ชันที่ 7.3.5 ที่ติดตั้งในคอร์สนี้ไม่มีแล้ว
+- **"ความล้มเหลวแบบเงียบเกิดน้อยกว่า build error เลยสำคัญน้อยกว่า"** ใน catalog นี้ตรงข้ามเลย: secret ที่หลุดใน prop ที่ serialize ของ island หรือ `transition:persist` ที่หยุด persist แบบเงียบ ๆ ขึ้น production ได้โดยไม่มี error ไม่มี warning ไม่มีสัญญาณอะไรเลยว่ามีอะไรผิด
+- **"โมเดล rendering ของ Astro เรียบง่าย เลยมีอะไรให้ review น้อยกว่า framework ฝั่ง client"** Astro เพิ่มแกนที่ framework ฝั่ง client ไม่มีเลย — *เวลาที่* โค้ดชิ้นหนึ่งรัน (ตอน build หรือตอน request) เปลี่ยนสิ่งที่ API ทุกตัวใน catalog นี้ได้รับอนุญาตให้ทำ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+อ่านไฟล์ Astro ตามลำดับนี้ — rendering mode กับ adapter, island กับ client directive, content กับ data, Astro ฝั่ง server, security, performance กับ cache, แล้วจึงเป็น tooling กับ production — เพราะแต่ละขั้นเปลี่ยนความหมายของขั้นถัดไป และเพราะ `astro check` ผ่านบอกแค่ว่าโค้ด compile ได้ ไม่เคยบอกว่ามันถูกต้อง
+</Callout>
+
+export const quizReadingAstroIndex = [
+  {
+    q: "ทำไมโมดูลนี้ถึงตรวจ rendering mode กับ adapter ก่อนตรวจเรื่อง island หรือ content?",
+    options: [
+      "เพราะ rendering mode เป็นสิ่งที่อ่านสั้นที่สุดเสมอ",
+      "เพราะว่า route รันตอน build ครั้งเดียวหรือรันต่อ request เปลี่ยนความหมายของทุกคำถามถัดไป (อ่าน cookie ได้ไหม ต้องมี adapter ไหม header จะทำงานจริงไหม)",
+      "เพราะ island เกี่ยวข้องเฉพาะโปรเจกต์ on-demand เท่านั้น",
+      "ลำดับไม่สำคัญ",
+    ],
+    answer: 1,
+    explain: "ทุกขั้นถัดไปในลำดับนี้ — ความสดของ content, การตรวจ auth ฝั่ง server, การ cache — ขึ้นกับการรู้ก่อนว่าโค้ดรอบข้างรันครั้งเดียวตอน build หรือรันทุก request การเข้าใจผิดตรงนี้ก่อนทำให้ทุกการอ่านถัดไปเริ่มจากสมมติฐานที่ผิด",
+  },
+  {
+    q: "```js\n// astro.config.mjs\nimport { defineConfig } from 'astro/config';\nexport default defineConfig({ output: 'hybrid' });\n```\nการอ่าน config นี้ก่อนเผยอะไร?",
+    options: [
+      "ไม่มีอะไร — hybrid ยังเป็น output mode ที่ใช้งานได้จริงในปัจจุบัน",
+      "โค้ดนี้มีรูปร่างจาก training data ก่อน v5 — 'hybrid' ถูกรวมเข้ากับ 'static' ตั้งแต่ Astro v5 และเป็น config validation error จริงบน 7.3.5 ที่ติดตั้งอยู่",
+      "แปลว่าโปรเจกต์นี้ไม่มี adapter",
+      "มันมีผลแค่กับการ render Markdown เท่านั้น",
+    ],
+    answer: 1,
+    explain: "พิสูจน์แล้วในบทเรียน SSR & Adapters และ catalog ของโมดูลนี้เอง: output: 'hybrid' ทำให้ config validation ล้มเหลวบน Astro 7.3.5 ด้วย error จริงที่มีชื่อ — ไม่ใช่ alias ที่เลิกใช้แบบนุ่มนวล",
+  },
+  {
+    q: "ทำไม 'astro check ผ่านไหม' ถึงตอบคำถามส่วนใหญ่ในลำดับการอ่านเจ็ดขั้นของโมดูลนี้ไม่ได้?",
+    options: [
+      "astro check ไม่มีอยู่จริงใน Astro 7",
+      "astro check type-check ไฟล์ source เท่านั้น — ไม่เคยรันหน้าเพจ ไม่ build จริง ไม่ส่ง request เลยมองไม่เห็น secret ที่หลุด, transition:persist ที่ไม่ตรงกันแบบเงียบ, หรือ header Cache-Control ที่ตั้งผิด",
+      "astro check ใช้ได้แค่กับไฟล์ .md เท่านั้น",
+      "astro check พังกับโค้ดที่ AI เขียนเสมอ",
+    ],
+    answer: 1,
+    explain: "การ type-check พิสูจน์แค่ว่ารูปร่างถูกต้อง ไม่ใช่ว่าพฤติกรรมตอน runtime ถูกต้อง — pattern ส่วนใหญ่ใน catalog นี้ผ่าน type-check สะอาด และต้องการ build จริง, request จริง, หรือ browser จริงถึงจะเห็นปัญหา",
+  },
+  {
+    q: "ขั้นไหนในลำดับการอ่านนี้ที่ถามตรง ๆ ว่า 'ถ้า curl endpoint นี้ตรง ๆ โดยไม่มี session จะเกิดอะไรขึ้น'?",
+    options: [
+      "Island & client directive",
+      "Astro ฝั่ง server",
+      "Content & data",
+      "Tooling & production",
+    ],
+    answer: 1,
+    explain: "ขั้น server-side มีอยู่เพราะ Action หรือ endpoint เข้าถึงได้ด้วย request ตรง ๆ ไม่ว่า UI จะกันไว้อย่างไร การทดสอบด้วย curl คือวิธีตรวจสิ่งนั้นโดยตรง พิสูจน์แล้วด้วย 401 จริงในบทเรียน Actions",
+  },
+  {
+    q: "ทำไมโมดูลนี้จึงจัด 'secret ที่ส่งเข้า prop ของ island' ไว้ในกลุ่ม Security แทนที่จะเป็นกลุ่ม Island ทั้งที่เกี่ยวกับ client directive?",
+    options: [
+      "ไม่สำคัญว่าอยู่กลุ่มไหน",
+      "ลำดับการอ่านจัดกลุ่มตามสิ่งที่ข้าม trust boundary จริง ๆ — secret ที่หลุดคือความล้มเหลวด้าน security ที่บังเอิญปรากฏผ่านกลไก island ไม่ใช่ปัญหาของตัว directive เอง",
+      "island ไม่มีทางทำข้อมูลหลุดได้",
+      "security เกี่ยวข้องกับ Action เท่านั้น",
+    ],
+    answer: 1,
+    explain: "กลไกการ serialize เดียวกันที่ทำให้ island ทำงานได้ (เข้ารหัส prop ลงใน HTML) คือสิ่งเดียวกับที่ทำให้ค่า secret กลายเป็นค่าที่ client มองเห็นทันทีที่ถูกส่งเป็น prop — พิสูจน์แล้วใน catalog ของโมดูลนี้ด้วยการตรวจ HTML ที่ build จริง",
+  },
+];
+
+<Quiz client:visible id="reading-astro/index" questions={quizReadingAstroIndex} />
+
+<ProgressTracker client:visible id="reading-astro/index" />

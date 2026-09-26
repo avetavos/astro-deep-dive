@@ -1,0 +1,119 @@
+---
+title: Review checklist
+description: 'A one-page, seven-group checklist for reviewing Astro code — each line a yes/no question linking to the lesson that explains the underlying rule.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+This is the checklist to run down — by eye, on any diff, yours or an AI's — after the tools in **[Verification Tools](/astro/en/reading-astro/verification-tools/)** have run and come back clean. It fits on one printed page on purpose: a checklist nobody actually opens during a review is worthless. Every line links to the lesson that explains *why*, so this page stays a list, not a re-run of the course. The groups follow the same order as **[How to read Astro you did not write](/astro/en/reading-astro/)**.
+
+<Mermaid title="What actually catches each group, if anything" code={checklistCoverageDiagram} />
+
+export const checklistCoverageDiagram = `flowchart LR
+  R["Rendering mode & adapter"] --> M["Mostly human review<br/>(astro check passes 18/22 of this module's catalog clean)"]
+  I["Islands & client directives"] --> P["Partial tool coverage<br/>(a strict Props type catches some; the rest need a real build)"]
+  C["Content & data"] --> P
+  S["Server-side Astro"] --> M
+  Sec["Security"] --> M
+  Perf["Performance & caching"] --> M
+  T["Tooling & production"] --> P
+`;
+
+## Rendering mode & adapter
+
+- Does the config ever set `output: 'hybrid'`? Removed in Astro v5 — a real config validation error, even though it type-checks clean under this course's own harness. See the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**, entry 1.
+- If any route sets `export const prerender = false` (or the project uses `output: 'server'`), is an adapter actually configured? See entry 2, and **[SSR & Adapters](/astro/en/server-side/ssr-and-adapters/)**.
+- Does a page read `Astro.cookies`, `Astro.session`, or `Astro.request.headers` while the route (or the whole project) is still prerendered? See entries 3–4, and **[Rendering & Output Modes](/astro/en/foundations/rendering-and-output-modes/)** for the real build warning this produces.
+- Is a rendering-mode claim ever tested against `astro dev` alone? `routeRules`/`cache` (and some adapter behavior) differ between dev and a real build — see **[Caching & Edge](/astro/en/rendering-and-performance/caching-and-edge/)**.
+
+## Islands & client directives
+
+- Is every interactive component `client:load`, regardless of where it sits on the page? See the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**, entry 5, and **[Client Directives](/astro/en/islands/client-directives/)** for the full five-directive trade-off.
+- Does every prop passed to an island stay serializable — no bare function or class instance — and does the island's own `Props` type stay honest enough for TypeScript to actually catch a mistake? See entry 6.
+- Does `client:only` ever appear without naming a framework (`client:only="preact"`)? Fine with one UI integration installed, a real build failure the moment a second one exists. See entry 7.
+- Does a framework component (`.tsx`/`.jsx`) use Astro's own `<slot />`, expecting it to render children the way it does inside a `.astro` file? See entry 8 — the children are silently dropped, with no error.
+- Is an `is:inline` `<script>` being treated as if it were an island? It has nothing to do with hydration or client directives, and never produces an `<astro-island>`. See **[Client Directives](/astro/en/islands/client-directives/)**.
+
+## Content & data
+
+- Does every `defineCollection` call declare a `loader`? Content dropped straight into `src/content/<name>/` with no loader is pre-v5 syntax this course's Astro 7.3.5 rejects.
+- Does the code call `entry.render()` as a method, instead of importing `render` from `astro:content`? See the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**, entry 12 — a real, current `ts(2551)`, not just a runtime surprise.
+- Does a static dynamic route (`[slug].astro` with no per-route `prerender = false`) actually export `getStaticPaths()`? See entry 10 — this type-checks clean and only fails a real build.
+- Does frontmatter get validated by a schema whose fields genuinely match what the content actually has? See entry 11 for the real `InvalidContentEntryDataError` shape.
+- Does anything still call `Astro.glob()`? A real, current type error since Astro 6 removed it. See entry 9.
+
+## Server-side Astro
+
+- Does every Action's handler check `context.locals.user` (or an equivalent) as its first line, or does it assume the caller is authenticated because the *form* only renders behind a login? See the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**, entry 13, proven with a real `curl` and a `200` with no session.
+- If an Action or endpoint mutates or deletes a row, does the query scope by the caller's own id, not just the target row's id? See **[Actions](/astro/en/server-side/actions/)**.
+- Is `onRequest` middleware composed with `sequence(...)`, and does every path through it actually call (and return) `next()`? A middleware that never returns a `Response` or `next()` is a real, named build/runtime error. See **[Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/)**.
+- After a login, is the session ever regenerated (`session.regenerate()`), or does a pre-login session id simply become the authenticated one? See **[Middleware & Sessions](/astro/en/server-side/middleware-and-sessions/)** for the session-fixation proof.
+
+## Security
+
+- Does `set:html` ever render a string that traces back to user input, without a real sanitizer in between? Its type is `any` — nothing at the type level will stop it. See the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**, entry 15, and **[Astro Syntax Deep Dive](/astro/en/components/astro-syntax-deep/)** for the real XSS payload proven through the Container API.
+- Does a value read from `import.meta.env`/`astro:env/server` ever get forwarded as a prop to a `client:*` island — even when the import itself is completely legitimate? See entry 14: the leak survives switching to `astro:env`, since that boundary only guards the *import*, not what a component does with the value afterward.
+
+## Performance & caching
+
+- Is `routeRules`/`cache` ever treated as if it sets the browser-facing `Cache-Control` header directly? See the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)**, entry 17, and **[Caching & Edge](/astro/en/rendering-and-performance/caching-and-edge/)** for the proven `CDN-Cache-Control`/`Cache-Tag` split.
+- Is a cache-header call (`Astro.response.headers.set`) placed on a route that also carries `export const prerender = true`? Proven to be a silent no-op — see **[Caching & Edge](/astro/en/rendering-and-performance/caching-and-edge/)**.
+- Is `is:inline` used on a script meant to run once, shared, per page? Proven to duplicate verbatim per component instance. See entry 16.
+- Does `transition:persist` appear on an element with no guaranteed matching counterpart on every destination page it navigates to? A missing match is a silent `continue` in the installed compiler, not an error. See entry 18.
+- Does a snippet still import `<ViewTransitions />` instead of `<ClientRouter />`? A real, current `MISSING_EXPORT`/`ts(2305)`. See entry 19.
+- Does a remote `<Image>` with hardcoded `width`/`height` assume `image.domains`/`remotePatterns` is protecting it? Proven to silently skip the check and ship the raw, disallowed URL. See entry 20.
+
+## Tooling & production
+
+- Does `astro.config.mjs` set `markdown.remarkPlugins`/`rehypePlugins`/`gfm`/`smartypants` as top-level `markdown.*` keys? Marked `@deprecated` in the installed schema — a real `astro check` warning, easy to miss unless `--minimumFailingSeverity` is tightened. See entry 21.
+- Is `astro preview` ever scripted as the production `start` command? Astro's own CLI reference says explicitly it is not designed to be run in production. See entry 22.
+- Does a CI config assume any `astro check` warning fails the build? By default only `error`-severity diagnostics do (`--minimumFailingSeverity`, default `"error"`). See **[Verification Tools](/astro/en/reading-astro/verification-tools/)**.
+
+<Callout title="A checklist narrows the search, it does not replace it">
+Every line above maps to one of the 22 patterns in the **[AI Bug Catalog](/astro/en/reading-astro/ai-bug-catalog/)** — 18 of which pass `astro check` cleanly. Run this list on every diff regardless of how clean `astro check` came back.
+</Callout>
+
+export const quizReviewChecklist = [
+  {
+    q: "Why does the 'Rendering mode & adapter' group's coverage diagram say 'astro check passes 18/22 of this module's catalog clean' rather than claiming the tool catches these bugs?",
+    options: [
+      "It's a mistake — astro check catches all rendering-mode bugs",
+      "Because most rendering-mode failures (a missing adapter, cookies read on a prerendered page) are build-time or runtime-only — astro check type-checks source, it never executes a page or runs a real build, so it cannot see them",
+      "astro check only works on content collections",
+      "The diagram is unrelated to this group",
+    ],
+    answer: 1,
+    explain: "Proven throughout the AI Bug Catalog: entries 1 through 4 (hybrid config, no adapter, cookies/headers on a prerendered page) all type-check with 0 errors — only a real astro dev/build/sync/preview run, or a real request, surfaces any of them.",
+  },
+  {
+    q: "```tsx\n<SelectableProductCard name=\"Mug\" price={12} onSelect={() => {}} client:visible />\n```\nWhich checklist group covers this line, and what does it actually depend on to catch it?",
+    options: [
+      "Content & data — it depends on a valid content collection schema",
+      "Islands & client directives — catching it depends on the component's own Props type being honest (strict), not on `client:visible` itself",
+      "Tooling & production — it depends on eslint-plugin-astro being installed",
+      "Server-side Astro — it depends on an Action's auth check",
+    ],
+    answer: 1,
+    explain: "Proven in the AI Bug Catalog's entry 6: with an honest Props type, this is a real ts(2322) at check time. With a loose/any prop type, nothing catches it at all — the checklist question exists precisely because the tool coverage is conditional, not guaranteed.",
+  },
+  {
+    q: "Why does the checklist ask specifically whether an Action query scopes by the CALLER's own id, rather than just 'does the handler check for a session'?",
+    options: [
+      "Those two questions are exactly the same thing",
+      "A handler can correctly reject anonymous callers (checking `context.locals.user`) and still let any SIGNED-IN user act on someone else's row if the query only filters by the target id — proven in the Actions lesson's own deletePost example",
+      "Session checks are never necessary in Astro",
+      "This only matters for content collections",
+    ],
+    answer: 1,
+    explain: "Authorization has two separate failure modes: no session check at all (entry 13's bug), and a session check that passes but an unscoped query underneath it — checking only the first misses the second, which is just as real a data-exposure bug.",
+  },
+];
+
+<Quiz client:visible id="reading-astro/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-astro/review-checklist" />
